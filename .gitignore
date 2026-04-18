@@ -10,6 +10,7 @@ __pycache__/
 .Python
 build/
 .build_venv/
+oMLX.app/
 develop-eggs/
 dist/
 downloads/

@@ -69,6 +69,15 @@ DMG_FILE=$(ls dist/oMLX-${VERSION}.dmg 2>/dev/null | head -n 1)
 if [[ -f "$DMG_FILE" ]]; then
     echo -e "${GREEN}Success!${NC}"
     echo -e "DMG created at: ${BLUE}$(pwd)/$DMG_FILE${NC}"
+    
+    # Copy app to project root
+    echo -e "${GREEN}Copying oMLX.app to project root...${NC}"
+    if [[ -d "dist/oMLX.app" ]]; then
+        rm -rf ../oMLX.app
+        cp -R dist/oMLX.app ../oMLX.app
+        echo -e "  ✓ oMLX.app copied to $(cd .. && pwd)/oMLX.app"
+    fi
+    
     echo ""
     echo -e "${BLUE}Note: The build environment is located in .build_venv and can be removed after installation.${NC}"
 else

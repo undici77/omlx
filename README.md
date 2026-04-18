@@ -42,6 +42,25 @@
 
 ---
 
+## 🛠️ macOS DMG Build & Security (Isolated Build)
+
+oMLX includes a dedicated build script for **macOS Tahoe (26.x)** that ensures a clean, isolated, and secure build environment.
+
+### Features
+- **Isolated Build:** Creates a temporary `.build_venv` virtual environment to prevent host Python pollution.
+- **Security Audit:** Automatically runs `pip-audit` to scan all dependencies for known vulnerabilities before building.
+- **Reproducible & Secure:** Uses `venvstacks` with `exclude-newer` date-locking to protect against supply chain attacks.
+
+### Build Instructions
+1. **Requirements:** macOS 15.0+ (Sequoia/Tahoe), Apple Silicon (M1+), and Python 3.11 (recommended).
+2. **Run the Build:**
+   ```bash
+   ./build_tahoe.sh
+   ```
+3. **Output:** The final production-ready DMG will be located in `packaging/dist/`.
+
+---
+
 <p align="center">
   <img src="docs/images/omlx_dashboard.png" alt="oMLX Admin Dashboard" width="800">
 </p>

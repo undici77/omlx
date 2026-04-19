@@ -983,6 +983,9 @@ class OMLXAppDelegate(NSObject):
 
     def _check_for_updates(self):
         """Check GitHub Releases for new version (cached for 24 hours)."""
+        if not self.config.check_updates:
+            return
+
         now = time.time()
         if now - self._last_update_check < 86400:  # 24 hours
             return  # Use cached result

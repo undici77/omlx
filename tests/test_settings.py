@@ -43,6 +43,7 @@ class TestServerSettings:
         assert settings.port == 8000
         assert settings.log_level == "info"
         assert settings.cors_origins == ["*"]
+        assert settings.check_updates is False
 
     def test_custom_values(self):
         """Test custom values."""
@@ -51,15 +52,19 @@ class TestServerSettings:
             port=9000,
             log_level="debug",
             cors_origins=["https://example.com"],
+            check_updates=True,
         )
         assert settings.host == "0.0.0.0"
         assert settings.port == 9000
         assert settings.log_level == "debug"
         assert settings.cors_origins == ["https://example.com"]
+        assert settings.check_updates is True
 
     def test_to_dict(self):
         """Test conversion to dictionary."""
-        settings = ServerSettings(host="127.0.0.1", port=8000, log_level="info")
+        settings = ServerSettings(
+            host="127.0.0.1", port=8000, log_level="info", check_updates=True
+        )
         result = settings.to_dict()
         assert result == {
             "host": "127.0.0.1",
@@ -67,16 +72,23 @@ class TestServerSettings:
             "log_level": "info",
             "cors_origins": ["*"],
             "server_aliases": [],
+            "check_updates": True,
         }
 
     def test_from_dict(self):
         """Test creation from dictionary."""
-        data = {"host": "0.0.0.0", "port": 9000, "log_level": "debug"}
+        data = {
+            "host": "0.0.0.0",
+            "port": 9000,
+            "log_level": "debug",
+            "check_updates": True,
+        }
         settings = ServerSettings.from_dict(data)
         assert settings.host == "0.0.0.0"
         assert settings.port == 9000
         assert settings.log_level == "debug"
         assert settings.cors_origins == ["*"]  # default
+        assert settings.check_updates is True
 
     def test_from_dict_with_cors_origins(self):
         """Test creation from dictionary with cors_origins."""
@@ -1016,6 +1028,7 @@ class TestGlobalSettings:
                     "OMLX_HOST": "0.0.0.0",
                     "OMLX_PORT": "9999",
                     "OMLX_LOG_LEVEL": "debug",
+                    "OMLX_CHECK_UPDATES": "true",
                 },
                 clear=False,
             ):
@@ -1023,6 +1036,7 @@ class TestGlobalSettings:
                 assert settings.server.host == "0.0.0.0"
                 assert settings.server.port == 9999
                 assert settings.server.log_level == "debug"
+                assert settings.server.check_updates is True
 
     def test_env_override_model(self):
         """Test environment variable override for model settings."""
@@ -1181,6 +1195,7 @@ class TestGlobalSettings:
                 port=8888,
                 host="0.0.0.0",
                 log_level="warning",
+                check_updates=True,
                 model_dir="/cli/models",
                 max_model_memory="32GB",
                 api_key="cli-key",
@@ -1189,6 +1204,7 @@ class TestGlobalSettings:
             assert settings.server.port == 8888
             assert settings.server.host == "0.0.0.0"
             assert settings.server.log_level == "warning"
+            assert settings.server.check_updates is True
             assert settings.model.model_dir == "/cli/models"
             assert settings.model.max_model_memory == "32GB"
             assert settings.auth.api_key == "cli-key"

@@ -43,6 +43,7 @@ class ServerConfig:
     model_dir: str = ""  # Empty string means use default: {base_path}/models
     launch_at_login: bool = False
     start_server_on_launch: bool = False
+    check_updates: bool = False
 
     def get_effective_model_dir(self) -> str:
         """Get the model directory, using base_path/models if not specified."""
@@ -228,4 +229,8 @@ class ServerConfig:
             "--base-path", base,
             "--port", str(self.port),
         ]
+        if self.check_updates:
+            args.append("--check-updates")
+        else:
+            args.append("--no-check-updates")
         return args

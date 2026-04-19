@@ -48,7 +48,7 @@ pip install --quiet venvstacks setuptools pip-audit
 # 4. Security Audit
 echo -e "${GREEN}[4/6] Auditing packages for known vulnerabilities...${NC}"
 # Scan the root project dependencies for security flaws
-if pip-audit --desc on --project ..; then
+if pip-audit --desc on .; then
     echo -e "  ✓ No known vulnerabilities found."
 else
     echo -e "  ${YELLOW}Warning: Security vulnerabilities detected. Check the report above.${NC}"

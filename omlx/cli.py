@@ -37,6 +37,8 @@ def _has_cli_overrides(args) -> bool:
         return True
     if hasattr(args, "log_level") and args.log_level is not None:
         return True
+    if hasattr(args, "check_updates") and args.check_updates is not None:
+        return True
     if hasattr(args, "mcp_config") and args.mcp_config is not None:
         return True
     if hasattr(args, "hf_endpoint") and args.hf_endpoint is not None:
@@ -552,6 +554,18 @@ Example directory structure:
         choices=["trace", "debug", "info", "warning", "error"],
         default=None,
         help="Log level (default: info). trace includes full message content",
+    )
+    serve_parser.add_argument(
+        "--check-updates",
+        action="store_true",
+        default=None,
+        help="Check for oMLX updates on startup",
+    )
+    serve_parser.add_argument(
+        "--no-check-updates",
+        action="store_false",
+        dest="check_updates",
+        help="Disable checking for oMLX updates on startup (default)",
     )
 
     # Scheduler options (for BatchedEngine)

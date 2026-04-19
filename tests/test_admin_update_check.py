@@ -123,32 +123,28 @@ class TestCheckUpdate:
 
     @pytest.mark.asyncio
     async def test_cache_expires(self):
-        """Should call GitHub API again after TTL expires."""
-        fake_resp = _FakeResponse(200, {
-            "tag_name": "v99.0.0",
-            "html_url": "https://github.com/jundot/omlx/releases/tag/v99.0.0",
-        })
-
-        call_count = 0
-
-        async def counting_to_thread(*args, **kwargs):
-            nonlocal call_count
-            call_count += 1
-            return fake_resp
-
-        with patch("omlx.admin.routes.asyncio") as mock_asyncio:
-            mock_asyncio.to_thread = counting_to_thread
-
-            # First call
-            await admin_routes.check_update(is_admin=True)
-            assert call_count == 1
-
-            # Expire cache
-            admin_routes._update_cache_time = time.time() - 90000
-
+...
             # Second call - should hit API again
             await admin_routes.check_update(is_admin=True)
             assert call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_update_check_disabled(self):
+        """Should return update_available=False immediately if disabled in settings."""
+        from omlx.settings import GlobalSettings, ServerSettings
+
+        # Mock settings to have check_updates=False
+        mock_settings = MagicMock(spec=GlobalSettings)
+        mock_settings.server = ServerSettings(check_updates=False)
+
+        with patch("omlx.admin.routes.get_settings", return_value=mock_settings):
+            with patch("omlx.admin.routes.asyncio") as mock_asyncio:
+                # Should NOT call asyncio.to_thread
+                result = await admin_routes.check_update(is_admin=True)
+                assert mock_asyncio.to_thread.called is False
+
+        assert result["update_available"] is False
+        assert result["latest_version"] is None
 
 
 def _make_async_return(value):

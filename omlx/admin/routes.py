@@ -4028,6 +4028,19 @@ async def check_update(
     """Check GitHub Releases for newer oMLX version (cached 24h)."""
     global _update_cache, _update_cache_time
 
+    from omlx.settings import get_settings
+
+    try:
+        settings = get_settings()
+        if not settings.server.check_updates:
+            return {
+                "update_available": False,
+                "latest_version": None,
+                "release_url": None,
+            }
+    except Exception:
+        pass
+
     now = time.time()
     if _update_cache is not None and now - _update_cache_time < _UPDATE_CACHE_TTL:
         return _update_cache

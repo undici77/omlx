@@ -23,7 +23,8 @@ oMLX is a **local-first** inference server. Its primary security model relies on
 | **Model Weights** | Loaded into Unified Memory | `~/.omlx/models` |
 | **API Keys** | Plaintext in config | `~/.omlx/settings.json` |
 | **Telemetry** | **Disabled/None** | N/A |
-| **Update Checks** | Anonymous GET to GitHub | N/A |
+| **Update Checks** | **Disabled by default** (Anonymous GET to GitHub if enabled) | N/A |
+| **Update Actions** | User-initiated only | N/A |
 
 ---
 
@@ -35,6 +36,7 @@ Use this checklist during future audits to verify the security posture of an oML
 - [ ] **CORS:** Verify `cors_origins` in `settings.json` is not `["*"]` if the server is internet-exposed.
 - [ ] **TLS:** If accessed over a network, verify a reverse proxy (Nginx/Caddy) provides HTTPS.
 - [ ] **MCP:** Verify `mcp.example.json` does not contain hardcoded secrets or overly permissive tool access.
+- [ ] **Auto-Update:** Verify `server.check_updates` is `false` (default) to prevent unintended external requests on startup.
 
 ### 3.2 Authentication & Authorization
 - [ ] **Bypass Check:** Verify `auth.skip_api_key_verification` is set to `false`.

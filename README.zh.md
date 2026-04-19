@@ -49,36 +49,22 @@
 
 ## 安装
 
-### macOS 应用
+### macOS 应用 (从源码构建)
 
-从 [Releases](https://github.com/jundot/omlx/releases) 下载 `.dmg`，拖到 Applications 即可。应用支持自动更新，后续升级只需一键完成。macOS 应用不包含 `omlx` CLI 命令。如需在终端使用，请通过 Homebrew 或从源码安装。
+为了确保您的安全和对构建链的完全控制，**本仓库不提供预构建的二进制文件或 DMG 文件**。这并非是对社区的“不信任”，而是一种深思熟虑的“双重检查（Double Check）”，旨在尊重并保护每一位用户。
 
-### Homebrew
+- **隐私验证**: oMLX 从底层设计上就致力于尊重您的隐私。通过要求从源码构建，我们为您提供了一种透明的方式来验证软件的运行完全符合文档说明——您的数据绝不会离开您的机器。
+- **完全控制**: 您可以完全掌控构建链路。您清楚地知道正在编译和执行的代码内容，从而消除了受损二进制文件带来的风险，并鼓励使用我们经过审计的安全构建脚本。
 
-```bash
-brew tap jundot/omlx https://github.com/jundot/omlx
-brew install omlx
+要创建 macOS 应用：
+1. 克隆此仓库。
+2. 运行安全构建脚本：
+   ```bash
+   ./build_tahoe.sh
+   ```
+3. 最终生产就绪的 DMG 将位于 `packaging/dist/` 中。将生成的 `oMLX.app` 拖到您的 Applications 文件夹中。
 
-# 升级到最新版本
-brew update && brew upgrade omlx
-
-# 作为后台服务运行（崩溃时自动重启）
-brew services start omlx
-
-# 可选：MCP（Model Context Protocol）支持
-/opt/homebrew/opt/omlx/libexec/bin/pip install mcp
-```
-
-### 从源码安装
-
-```bash
-git clone https://github.com/jundot/omlx.git
-cd omlx
-pip install -e .          # 仅核心
-pip install -e ".[mcp]"   # 含 MCP（Model Context Protocol）支持
-```
-
-需要 macOS 15.0+ (Sequoia), Python 3.10+ 和 Apple Silicon（M1/M2/M3/M4）。
+需要 macOS 15.0+ (Sequoia), Python 3.11+ (建议) 和 Apple Silicon (M1/M2/M3/M4)。
 
 ## 快速开始
 
@@ -93,28 +79,12 @@ pip install -e ".[mcp]"   # 含 MCP（Model Context Protocol）支持
 
 ### CLI
 
-```bash
-omlx serve --model-dir ~/models
-```
-
-服务器会自动从子目录中发现 LLM、VLM、嵌入模型和重排序模型。任何 OpenAI 兼容客户端都可以连接到 `http://localhost:8000/v1`。内置聊天 UI 也可在 `http://localhost:8000/admin/chat` 使用。
-
-### Homebrew 服务
-
-如果通过 Homebrew 安装，可以将 oMLX 作为托管后台服务运行：
+如果您想使用 CLI，`omlx` 命令可以在应用程序包内部找到，或者在构建后从仓库运行。
 
 ```bash
-brew services start omlx    # 启动（崩溃时自动重启）
-brew services stop omlx     # 停止
-brew services restart omlx  # 重启
-brew services info omlx     # 查看状态
+# 构建后从源码目录运行的示例
+./.build_venv/bin/omlx serve --model-dir ~/models
 ```
-
-服务使用默认配置运行 `omlx serve`（`~/.omlx/models`，端口 8000）。要自定义，可以设置环境变量（`OMLX_MODEL_DIR`、`OMLX_PORT` 等），或运行一次 `omlx serve --model-dir /your/path` 将设置保存到 `~/.omlx/settings.json`。
-
-日志写入两个位置：
-- **服务日志**: `$(brew --prefix)/var/log/omlx.log`（stdout/stderr）
-- **服务器日志**: `~/.omlx/logs/server.log`（结构化应用日志）
 
 ## 功能
 
@@ -354,6 +324,7 @@ python build.py --dmg-only
 
 ## 贡献
 
+
 欢迎贡献！详情请参阅[贡献指南](docs/CONTRIBUTING.md)。
 
 - Bug 修复和改进
@@ -368,6 +339,5 @@ python build.py --dmg-only
 
 - [MLX](https://github.com/ml-explore/mlx) 和 [mlx-lm](https://github.com/ml-explore/mlx-lm) by Apple
 - [mlx-vlm](https://github.com/Blaizzy/mlx-vlm) - Apple Silicon 上的视觉语言模型推理
-- [vllm-mlx](https://github.com/waybarrios/vllm-mlx) - oMLX 从 vllm-mlx v0.1.0 起步，经过大幅演进，增加了多模型服务、分层 KV 缓存、完整分页缓存支持的 VLM、管理后台和 macOS 菜单栏应用
 - [venvstacks](https://venvstacks.lmstudio.ai) - macOS 应用包的便携 Python 环境分层
 - [mlx-embeddings](https://github.com/Blaizzy/mlx-embeddings) - Apple Silicon 嵌入模型支持

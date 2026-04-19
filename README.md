@@ -42,18 +42,28 @@
 
 ---
 
-## 🛠️ macOS DMG Build & Security (Isolated Build)
+## 🛡️ Privacy & Secure macOS Build (Isolated Build)
 
-oMLX includes a dedicated build script for **macOS Tahoe (26.x)** that ensures a clean, isolated, and secure build environment.
+This version of oMLX is built with a **Privacy-First** philosophy. We believe that a local LLM server should be exactly that: local and private. To ensure the highest standards of security for the developer community and all users, we have implemented several critical safeguards against supply-chain attacks and unauthorized data flow.
 
-### Features
-- **Isolated Build:** Creates a temporary `.build_venv` virtual environment to prevent host Python pollution.
-- **Security Audit:** Automatically runs `pip-audit` to scan all dependencies for known vulnerabilities before building.
-- **Reproducible & Secure:** Uses `venvstacks` with `exclude-newer` date-locking to protect against supply chain attacks.
+### Privacy First
+- **Zero Phoning Home:** All auto-update features are **disabled by default**. We believe you should have total control over when and how your software changes.
+- **No Analytics:** No telemetry, no tracking, and no external pings. Your data never leaves your machine.
+- **Respect for the User:** My intentions are to provide a tool that respects your digital sovereignty. This version is a commitment to the community that your privacy is not a "feature"—it is the foundation.
+
+### No "Pre-chewed" Binaries
+- **Double Check for the Community:** We do not provide pre-compiled DMG or binary files in this repository. This is not a "trust issue" vs the community, but rather a deliberate "double check" to ensure we respect and protect every user.
+- **Verified Privacy:** oMLX is built from the ground up to respect your privacy. By requiring a build from source, we provide a transparent way for you to verify that the software behaves exactly as documented—your data never leaves your machine.
+- **User Control:** You have complete control over the build chain. You know exactly what code is being compiled and executed on your machine, eliminating the risk of compromised upstream binaries and encouraging the use of our secure, audited build scripts.
+
+### Security Features
+- **Isolated Build (`build_tahoe.sh`):** Includes a dedicated build script for **macOS Tahoe (26.x)** that creates a temporary `.build_venv` virtual environment. This prevents host Python pollution and ensures a deterministic build.
+- **Supply Chain Protection:** Automatically runs `pip-audit` to scan all dependencies for known vulnerabilities. This protects against compromised Python packages (PyPI) before they ever reach your binary.
+- **Reproducible & Secure:** Uses `venvstacks` with `exclude-newer` date-locking to freeze the dependency tree at a known-good state, shielding the project from malicious upstream updates.
 
 ### Build Instructions
 1. **Requirements:** macOS 15.0+ (Sequoia/Tahoe), Apple Silicon (M1+), and Python 3.11 (recommended).
-2. **Run the Build:**
+2. **Run the Secure Build:**
    ```bash
    ./build_tahoe.sh
    ```
@@ -71,36 +81,19 @@ oMLX includes a dedicated build script for **macOS Tahoe (26.x)** that ensures a
 
 ## Install
 
-### macOS App
+### macOS App (Build from Source)
 
-Download the `.dmg` from [Releases](https://github.com/jundot/omlx/releases), drag to Applications, done. The app includes in-app auto-update, so future upgrades are just one click. Note that the macOS app does not install the `omlx` CLI command. For terminal usage, install via Homebrew or from source.
+For your security and total control over the build chain, **no pre-built binaries or DMG files are provided**. This ensures that you are running code you have audited and built yourself on your own hardware, protecting you from potential "pre-chewed" binary compromises.
 
-### Homebrew
+To create the macOS app:
+1.  Clone this repository.
+2.  Run the secure build script:
+    ```bash
+    ./build_tahoe.sh
+    ```
+3.  The final production-ready DMG will be located in `packaging/dist/`. Drag the generated `oMLX.app` to your Applications folder.
 
-```bash
-brew tap jundot/omlx https://github.com/jundot/omlx
-brew install omlx
-
-# Upgrade to the latest version
-brew update && brew upgrade omlx
-
-# Run as a background service (auto-restarts on crash)
-brew services start omlx
-
-# Optional: MCP (Model Context Protocol) support
-/opt/homebrew/opt/omlx/libexec/bin/pip install mcp
-```
-
-### From Source
-
-```bash
-git clone https://github.com/jundot/omlx.git
-cd omlx
-pip install -e .          # Core only
-pip install -e ".[mcp]"   # With MCP (Model Context Protocol) support
-```
-
-Requires macOS 15.0+ (Sequoia), Python 3.10+, and Apple Silicon (M1/M2/M3/M4).
+Requires macOS 15.0+ (Sequoia), Python 3.11+ (recommended), and Apple Silicon (M1/M2/M3/M4).
 
 ## Quickstart
 
@@ -115,28 +108,12 @@ Launch oMLX from your Applications folder. The Welcome screen guides you through
 
 ### CLI
 
-```bash
-omlx serve --model-dir ~/models
-```
-
-The server discovers LLMs, VLMs, embedding models, and rerankers from subdirectories automatically. Any OpenAI-compatible client can connect to `http://localhost:8000/v1`. A built-in chat UI is also available at `http://localhost:8000/admin/chat`.
-
-### Homebrew Service
-
-If you installed via Homebrew, you can run oMLX as a managed background service:
+If you want to use the CLI, the `omlx` command is available inside the application bundle or can be run from the repository after building.
 
 ```bash
-brew services start omlx    # Start (auto-restarts on crash)
-brew services stop omlx     # Stop
-brew services restart omlx  # Restart
-brew services info omlx     # Check status
+# Example if running from source directory after build_tahoe.sh
+./.build_venv/bin/omlx serve --model-dir ~/models
 ```
-
-The service runs `omlx serve` with zero-config defaults (`~/.omlx/models`, port 8000). To customize, either set environment variables (`OMLX_MODEL_DIR`, `OMLX_PORT`, etc.) or run `omlx serve --model-dir /your/path` once to persist settings to `~/.omlx/settings.json`.
-
-Logs are written to two locations:
-- **Service log**: `$(brew --prefix)/var/log/omlx.log` (stdout/stderr)
-- **Server log**: `~/.omlx/logs/server.log` (structured application log)
 
 ## Features
 
@@ -229,7 +206,7 @@ One-click benchmarking from the admin panel. Measures prefill (PP) and text gene
 
 ### macOS Menubar App
 
-Native PyObjC menubar app (not Electron). Start, stop, and monitor the server without opening a terminal. Includes persistent serving stats (survives restarts), auto-restart on crash, and in-app auto-update.
+Native PyObjC menubar app (not Electron). Start, stop, and monitor the server without opening a terminal. Includes persistent serving stats (survives restarts), auto-restart on crash, and a privacy-respecting **optional** in-app update check (disabled by default).
 
 <p align="center">
   <img src="docs/images/Screenshot 2026-02-10 at 00.51.54.png" alt="oMLX Menubar Stats" width="400">
@@ -390,7 +367,6 @@ Contributions are welcome! See [Contributing Guide](docs/CONTRIBUTING.md) for de
 
 - [MLX](https://github.com/ml-explore/mlx) and [mlx-lm](https://github.com/ml-explore/mlx-lm) by Apple
 - [mlx-vlm](https://github.com/Blaizzy/mlx-vlm) - Vision-language model inference on Apple Silicon
-- [vllm-mlx](https://github.com/waybarrios/vllm-mlx) - oMLX started from vllm-mlx v0.1.0 and evolved significantly with multi-model serving, tiered KV caching, VLM with full paged cache support, an admin panel, and a macOS menu bar app
 - [venvstacks](https://venvstacks.lmstudio.ai) - Portable Python environment layering for the macOS app bundle
 - [mlx-embeddings](https://github.com/Blaizzy/mlx-embeddings) - Embedding model support for Apple Silicon
 - [dflash-mlx](https://github.com/bstnxbt/dflash-mlx) - Block diffusion speculative decoding on Apple Silicon

@@ -49,36 +49,22 @@
 
 ## インストール
 
-### macOSアプリ
+### macOS アプリ (ソースからビルド)
 
-[Releases](https://github.com/jundot/omlx/releases)から`.dmg`をダウンロードし、Applicationsにドラッグするだけです。アプリ内自動アップデートに対応しているので、以降のアップグレードはワンクリックで完了します。macOSアプリには`omlx` CLIコマンドは含まれていません。ターミナルで使用するにはHomebrewまたはソースからインストールしてください。
+セキュリティとビルドチェーンの完全な制御を確保するため、**このリポジトリではビルド済みのバイナリや DMG ファイルは提供されていません**。これはコミュニティに対する「不信」ではなく、すべてのユーザーを尊重し保護するための、意図的な「ダブルチェック（Double Check）」です。
 
-### Homebrew
+- **プライバシーの検証**: oMLX は、設計の初期段階からプライバシーを尊重するように構築されています。ソースからのビルドを必須にすることで、ソフトウェアがドキュメント通りに正確に動作し、データがユーザーの環境から出ないことを透明な方法で検証できます。
+- **ユーザーによる制御**: ビルドプロセスを完全に制御できます。自身のマシンでどのようなコードがコンパイルされ実行されているかを正確に把握できるため、改ざんされたバイナリのリスクを排除し、安全で監査済みのビルドスクリプトの使用を推奨しています。
 
-```bash
-brew tap jundot/omlx https://github.com/jundot/omlx
-brew install omlx
+macOS アプリを作成するには：
+1. このリポジトリをクローンします。
+2. セキュア・ビルド・スクリプトを実行します：
+   ```bash
+   ./build_tahoe.sh
+   ```
+3. 最終的な DMG ファイルは `packaging/dist/` に生成されます。生成された `oMLX.app` を「アプリケーション」フォルダにドラッグしてください。
 
-# 最新バージョンへアップグレード
-brew update && brew upgrade omlx
-
-# バックグラウンドサービスとして実行（クラッシュ時に自動再起動）
-brew services start omlx
-
-# オプション: MCP（Model Context Protocol）サポート
-/opt/homebrew/opt/omlx/libexec/bin/pip install mcp
-```
-
-### ソースからインストール
-
-```bash
-git clone https://github.com/jundot/omlx.git
-cd omlx
-pip install -e .          # コアのみ
-pip install -e ".[mcp]"   # MCP（Model Context Protocol）サポート付き
-```
-
-Python 3.10+とApple Silicon（M1/M2/M3/M4）が必要です。
+macOS 15.0+ (Sequoia), Python 3.11+ (推奨) および Apple Silicon (M1/M2/M3/M4) が必要です。
 
 ## クイックスタート
 
@@ -93,28 +79,12 @@ ApplicationsフォルダからoMLXを起動します。ウェルカム画面が3
 
 ### CLI
 
-```bash
-omlx serve --model-dir ~/models
-```
-
-サーバーがサブディレクトリからLLM、VLM、エンベディングモデル、リランカーを自動的に検出します。OpenAI互換クライアントから`http://localhost:8000/v1`に接続できます。内蔵チャットUIも`http://localhost:8000/admin/chat`で利用可能です。
-
-### Homebrewサービス
-
-Homebrewでインストールした場合、oMLXをマネージドバックグラウンドサービスとして実行できます：
+CLIを使用する場合、`omlx`コマンドはアプリケーションバンドルの内部にあるか、ビルド後にリポジトリから実行できます。
 
 ```bash
-brew services start omlx    # 起動（クラッシュ時に自動再起動）
-brew services stop omlx     # 停止
-brew services restart omlx  # 再起動
-brew services info omlx     # ステータス確認
+# ビルド後にソースディレクトリから実行する例
+./.build_venv/bin/omlx serve --model-dir ~/models
 ```
-
-サービスはデフォルト設定で`omlx serve`を実行します（`~/.omlx/models`、ポート8000）。カスタマイズするには、環境変数（`OMLX_MODEL_DIR`、`OMLX_PORT`など）を設定するか、`omlx serve --model-dir /your/path`を一度実行して`~/.omlx/settings.json`に設定を保存してください。
-
-ログは2か所に記録されます：
-- **サービスログ**: `$(brew --prefix)/var/log/omlx.log`（stdout/stderr）
-- **サーバーログ**: `~/.omlx/logs/server.log`（構造化アプリケーションログ）
 
 ## 機能
 
@@ -357,6 +327,5 @@ python build.py --dmg-only
 
 - [MLX](https://github.com/ml-explore/mlx)と[mlx-lm](https://github.com/ml-explore/mlx-lm) by Apple
 - [mlx-vlm](https://github.com/Blaizzy/mlx-vlm) - Apple Siliconでのビジョン言語モデル推論
-- [vllm-mlx](https://github.com/waybarrios/vllm-mlx) - oMLXはvllm-mlx v0.1.0からスタートし、マルチモデルサービング、階層型KVキャッシュ、完全なページドキャッシュ対応のVLM、管理画面、macOSメニューバーアプリへと大きく進化しました
 - [venvstacks](https://venvstacks.lmstudio.ai) - macOSアプリバンドルのためのポータブルPython環境レイヤリング
 - [mlx-embeddings](https://github.com/Blaizzy/mlx-embeddings) - Apple Silicon向けエンベディングモデルサポート

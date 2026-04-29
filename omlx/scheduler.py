@@ -29,7 +29,9 @@ from mlx_lm.generate import (
     generation_stream,
 )
 from mlx_lm.models.cache import make_prompt_cache
-from mlx_lm.sample_utils import make_sampler, make_logits_processors
+from mlx_lm.sample_utils import make_logits_processors
+
+from .utils.sampling import make_sampler as omlx_make_sampler
 
 from pathlib import Path
 
@@ -48,9 +50,16 @@ def _sync_and_clear_cache():
     'completeMemory() prepare count underflow' kernel panic on M4 hardware
     (and SIGSEGV/SIGABRT on M3).
 
-    See: https://github.com/jundot/omlx/issues/300
+    See: https://github.com/jundot/omlx/issues/300, #888
     """
-    mx.synchronize(generation_stream)
+    # Generation_stream may not have in-flight work on the current thread
+    # (e.g. external prefill submits to the default stream). On some MLX
+    # builds mx.synchronize raises "There is no Stream(gpu, 0) in current
+    # thread" in that case; swallow it since there is nothing to drain.
+    try:
+        mx.synchronize(generation_stream)
+    except RuntimeError:
+        pass
     mx.synchronize()  # default stream
     mx.clear_cache()
 
@@ -167,9 +176,9 @@ except ImportError:
 # ---------------------------------------------------------------------------
 # Monkey-patch PromptProcessingBatch.prompt to set mRoPE deltas before the
 # prompt processing loop.  Without this, batched VLM prompt processing
-# (e.g. the 1-token final prompt after external prefill) falls into the
-# _wrap_caches fallback which collapses per-request offsets to a scalar,
-# corrupting attention masks for concurrent VLM requests.
+# (e.g. the 1-token final prompt after external prefill) would use
+# per-request offsets without rope_deltas, corrupting attention masks
+# for concurrent VLM requests.
 # ---------------------------------------------------------------------------
 _original_ppb_prompt = PromptProcessingBatch.prompt
 
@@ -316,6 +325,7 @@ class SchedulerConfig:
     # When paged_ssd_cache_dir is set, oMLX stores KV cache on paged SSD for prefix reuse.
     # When None, no oMLX caching (mlx-lm BatchGenerator manages KV internally).
     paged_ssd_cache_dir: Optional[str] = None  # Path for paged SSD cache storage (None = disabled)
+    hot_cache_only: bool = False
     paged_ssd_cache_max_size: int = 100 * 1024 * 1024 * 1024  # 100GB default
     hot_cache_max_size: int = 0  # In-memory hot cache size in bytes (0 = disabled)
 
@@ -948,7 +958,7 @@ class Scheduler:
 
     def _create_batch_generator(self, sampling_params: SamplingParams) -> BatchGenerator:
         """Create a BatchGenerator with the given sampling parameters."""
-        sampler = make_sampler(
+        sampler = omlx_make_sampler(
             temp=sampling_params.temperature,
             top_p=sampling_params.top_p,
             min_p=sampling_params.min_p,
@@ -1178,7 +1188,7 @@ class Scheduler:
         # derived from block_table.num_tokens and therefore trustworthy.
         if boundary_enabled and hasattr(request, "cached_tokens") and request.cached_tokens > 0:
             if base_size != request.cached_tokens:
-                logger.warning(
+                logger.debug(
                     "Cache base_size mismatch: computed %d, expected %d "
                     "(cached_tokens). Using cached_tokens for boundary "
                     "alignment.",
@@ -1201,10 +1211,14 @@ class Scheduler:
             # Setting _rope_deltas=None makes the language model use
             # _position_ids (set by get_input_embeddings) instead.
             # Saved and restored after prefill for decode rope_deltas capture.
+            # Only applies to mRoPE VLMs (Qwen2-VL, Qwen2.5-VL, GLM-4V, etc.);
+            # non-mRoPE VLMs like Gemma 4 have no _rope_deltas attribute.
             _saved_rope_deltas = None
-            if start_offset > 0 and hasattr(self.model, "_language_model"):
-                _saved_rope_deltas = self.model._language_model._rope_deltas
-                self.model._language_model._rope_deltas = None
+            if start_offset > 0:
+                lm = getattr(self.model, "_language_model", None)
+                if lm is not None and hasattr(lm, "_rope_deltas"):
+                    _saved_rope_deltas = lm._rope_deltas
+                    lm._rope_deltas = None
 
         # Prefill tokens[0:N-1] (leave last token for insert())
         prefill_tokens = tokens[:-1]
@@ -1375,7 +1389,13 @@ class Scheduler:
         self, sampling_params: SamplingParams, request: Any = None
     ) -> Tuple[Callable[[mx.array], mx.array], List[Callable]]:
         """Build per-request sampler and logits processors."""
-        sampler = make_sampler(
+        # Use omlx.utils.sampling.make_sampler instead of mlx_lm.sample_utils.
+        # The mlx-lm version decorates categorical_sampling and apply_* with
+        # @partial(mx.compile, inputs=mx.random.state, outputs=mx.random.state),
+        # which fails to advance the RNG state after the first call in this
+        # server environment. Identical prompts then produce identical output
+        # even at temperature > 1.
+        sampler = omlx_make_sampler(
             temp=sampling_params.temperature,
             top_p=sampling_params.top_p,
             min_p=sampling_params.min_p,
@@ -2067,13 +2087,13 @@ class Scheduler:
                 pass
 
         normalized_len = int(normalized_keys.shape[2]) if len(normalized_keys.shape) >= 3 else 0
-        effective_offset = max(0, offset)
-        if max_size > 0 and effective_offset >= max_size:
-            normalized_idx = min(normalized_len, max_size)
-        elif effective_offset > 0:
-            normalized_idx = min(normalized_len, effective_offset)
-        else:
-            normalized_idx = min(normalized_len, max(0, idx))
+        # Force case 1 of _temporal_order: _idx == keys.shape[2] means the
+        # buffer is already in temporal order (which is exactly what the
+        # oversized trim above produces — the contiguous tail of the most
+        # recent tokens). Anything else lets _temporal_order re-slice the
+        # buffer in the rotated branch (case 2), which is wasted work and
+        # obscures the merge contract. See cache.py:431-447 for the branches.
+        normalized_idx = normalized_len
 
         normalized_meta = (
             str(keep),
@@ -3193,12 +3213,24 @@ class Scheduler:
 
             # Insert into BatchGenerator with pre-filled cache + last token.
             # BatchGenerator only handles decode from here.
+            #
+            # IMPORTANT: ``logits_processors`` MUST be passed as a per-row
+            # list (possibly empty), never None.  mlx-lm's
+            # GenerationBatch._step does ``for p in self.logits_processors[e]``
+            # in any branch where ``any(self.logits_processors)`` is True
+            # (e.g., heterogeneous merge with another row that has a
+            # processor).  A None slot crashes that loop with
+            # ``TypeError: 'NoneType' object is not iterable``, which then
+            # bubbles into the engine retry loop and presents as a hang.
+            # See vllm-mlx-patched commit 8d4052b for the same root cause
+            # in a sibling project, and #934 for the user-visible symptom.
+            per_row_lps = list(logits_processors) if logits_processors else []
             uids = self.batch_generator.insert(
                 [tokens_to_process],
                 max_tokens=[request.sampling_params.max_tokens],
                 caches=[cache_to_use] if cache_to_use else None,
                 samplers=[sampler],
-                logits_processors=[logits_processors],
+                logits_processors=[per_row_lps],
                 state_machines=[sm],
             )
 
@@ -4055,11 +4087,14 @@ class Scheduler:
             return
 
         try:
+            cache_dir = Path(self.config.paged_ssd_cache_dir) if self.config.paged_ssd_cache_dir else None
+
             # Initialize paged SSD cache manager for SSD storage
             self.paged_ssd_cache_manager = PagedSSDCacheManager(
-                cache_dir=Path(self.config.paged_ssd_cache_dir),
+                cache_dir=cache_dir,
                 max_size_bytes=self.config.paged_ssd_cache_max_size,
                 hot_cache_max_bytes=self.config.hot_cache_max_size,
+                hot_cache_only=self.config.hot_cache_only,
             )
 
             # Connect paged SSD cache manager to PagedCacheManager
@@ -4072,7 +4107,8 @@ class Scheduler:
 
             # Initialize boundary snapshot SSD store for offloading
             # non-sliceable cache snapshots during prefill.
-            if BoundarySnapshotSSDStore is not None:
+            # Skip in hot_cache_only mode since snapshots would never be written.
+            if BoundarySnapshotSSDStore is not None and not self.config.hot_cache_only:
                 try:
                     self._boundary_snapshot_store = BoundarySnapshotSSDStore(
                         base_dir=Path(self.config.paged_ssd_cache_dir)

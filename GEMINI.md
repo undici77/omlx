@@ -54,6 +54,8 @@ omlx serve --model-dir ~/models
 --max-model-memory 32GB
 --paged-ssd-cache-dir ~/.omlx/cache
 --mcp-config mcp.json
+--check-updates         # Check for oMLX updates (default: disabled)
+--check-statuskit      # Check menubar icon visibility (Tahoe, default: disabled)
 ```
 
 ### Testing

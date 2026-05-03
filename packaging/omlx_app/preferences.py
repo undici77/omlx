@@ -47,7 +47,7 @@ LAUNCH_AGENT_DIR = Path.home() / "Library" / "LaunchAgents"
 LAUNCH_AGENT_PLIST = LAUNCH_AGENT_DIR / f"{LAUNCH_AGENT_LABEL}.plist"
 
 WINDOW_WIDTH = 520
-WINDOW_HEIGHT = 670
+WINDOW_HEIGHT = 712
 
 
 class PreferencesWindowController(NSObject):
@@ -67,6 +67,7 @@ class PreferencesWindowController(NSObject):
         self.launch_at_login_checkbox = None
         self.auto_start_checkbox = None
         self.check_updates_checkbox = None
+        self.check_statuskit_checkbox = None
         self.base_path_label = None
         self.model_dir_label = None
         self.port_field = None
@@ -284,15 +285,15 @@ class PreferencesWindowController(NSObject):
 
         # === Behavior Card ===
         behavior_card = self._create_card()
-        behavior_card.setFrame_(NSMakeRect(24, y - 150, WINDOW_WIDTH - 48, 150))
+        behavior_card.setFrame_(NSMakeRect(24, y - 192, WINDOW_WIDTH - 48, 192))
         container.addSubview_(behavior_card)
 
         behavior_content = NSView.alloc().initWithFrame_(
-            NSMakeRect(0, 0, WINDOW_WIDTH - 48, 150)
+            NSMakeRect(0, 0, WINDOW_WIDTH - 48, 192)
         )
         behavior_card.setContentView_(behavior_content)
 
-        cy = 150 - 16
+        cy = 192 - 16
 
         # Header
         cy -= 20
@@ -359,7 +360,28 @@ class PreferencesWindowController(NSObject):
         )
         behavior_content.addSubview_(self.check_updates_checkbox)
 
-        y -= 166
+        # Separator
+        cy -= 12
+        sep_statuskit = self._create_separator()
+        sep_statuskit.setFrame_(NSMakeRect(16, cy, WINDOW_WIDTH - 96, 1))
+        behavior_content.addSubview_(sep_statuskit)
+
+        # Check for StatusKit
+        cy -= 26
+        self.check_statuskit_checkbox = NSButton.alloc().initWithFrame_(
+            NSMakeRect(16, cy, WINDOW_WIDTH - 96, 20)
+        )
+        self.check_statuskit_checkbox.setButtonType_(NSButtonTypeSwitch)
+        self.check_statuskit_checkbox.setTitle_("Check for StatusKit approval on macOS")
+        self.check_statuskit_checkbox.setFont_(NSFont.systemFontOfSize_(12))
+        self.check_statuskit_checkbox.setState_(
+            NSControlStateValueOn
+            if self.config.check_statuskit
+            else NSControlStateValueOff
+        )
+        behavior_content.addSubview_(self.check_statuskit_checkbox)
+
+        y -= 208
 
         # === Actions Card ===
         actions_card = self._create_card()
@@ -529,6 +551,7 @@ class PreferencesWindowController(NSObject):
         self.config.launch_at_login = bool(self.launch_at_login_checkbox.state())
         self.config.start_server_on_launch = bool(self.auto_start_checkbox.state())
         self.config.check_updates = bool(self.check_updates_checkbox.state())
+        self.config.check_statuskit = bool(self.check_statuskit_checkbox.state())
         self.config.save()
 
         # Save API key
@@ -657,6 +680,7 @@ class PreferencesWindowController(NSObject):
             self.launch_at_login_checkbox.setState_(NSControlStateValueOff)
             self.auto_start_checkbox.setState_(NSControlStateValueOff)
             self.check_updates_checkbox.setState_(NSControlStateValueOff)
+            self.check_statuskit_checkbox.setState_(NSControlStateValueOff)
             self._original_base_path = defaults.base_path
 
             if self.on_save:

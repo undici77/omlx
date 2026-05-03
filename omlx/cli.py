@@ -567,6 +567,18 @@ Example directory structure:
         dest="check_updates",
         help="Disable checking for oMLX updates on startup (default)",
     )
+    serve_parser.add_argument(
+        "--check-statuskit",
+        action="store_true",
+        default=None,
+        help="Check for StatusKit approval on macOS (menubar app only)",
+    )
+    serve_parser.add_argument(
+        "--no-check-statuskit",
+        action="store_false",
+        dest="check_statuskit",
+        help="Disable checking for StatusKit approval on macOS (default)",
+    )
 
     # Scheduler options (for BatchedEngine)
     serve_parser.add_argument(

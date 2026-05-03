@@ -116,6 +116,7 @@ class ServerSettings:
     cors_origins: list[str] = field(default_factory=lambda: ["*"])
     server_aliases: list[str] = field(default_factory=list)
     check_updates: bool = False
+    check_statuskit: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
@@ -131,6 +132,7 @@ class ServerSettings:
             cors_origins=data.get("cors_origins", ["*"]),
             server_aliases=data.get("server_aliases", []),
             check_updates=data.get("check_updates", False),
+            check_statuskit=data.get("check_statuskit", False),
         )
 
 
@@ -811,6 +813,8 @@ class GlobalSettings:
             self.server.log_level = log_level
         if check_updates := os.getenv("OMLX_CHECK_UPDATES"):
             self.server.check_updates = check_updates.lower() in ("true", "1", "yes")
+        if check_statuskit := os.getenv("OMLX_CHECK_STATUSKIT"):
+            self.server.check_statuskit = check_statuskit.lower() in ("true", "1", "yes")
 
         # Model settings
         if model_dir := os.getenv("OMLX_MODEL_DIR"):
@@ -904,6 +908,8 @@ class GlobalSettings:
             self.server.log_level = args.log_level
         if hasattr(args, "check_updates") and args.check_updates is not None:
             self.server.check_updates = args.check_updates
+        if hasattr(args, "check_statuskit") and args.check_statuskit is not None:
+            self.server.check_statuskit = args.check_statuskit
 
         # Model settings
         if hasattr(args, "model_dir") and args.model_dir is not None:

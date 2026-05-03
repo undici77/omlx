@@ -48,6 +48,7 @@ This version of oMLX is built with a **Privacy-First** philosophy. We believe th
 
 ### Privacy First
 - **Zero Phoning Home:** All auto-update features are **disabled by default**. We believe you should have total control over when and how your software changes.
+- **Diagnostic Transparency:** System-level diagnostic checks (like the StatusKit check for hidden menubar icons on macOS Tahoe) are **disabled by default**. oMLX will not probe or attempt to fix system settings without your explicit opt-in.
 - **No Analytics:** No telemetry, no tracking, and no external pings. Your data never leaves your machine.
 - **Respect for the User:** My intentions are to provide a tool that respects your digital sovereignty. This version is a commitment to the community that your privacy is not a "feature"—it is the foundation.
 
@@ -292,6 +293,10 @@ omlx serve --model-dir ~/models --hf-endpoint https://hf-mirror.com
 # API key authentication
 omlx serve --model-dir ~/models --api-key your-secret-key
 # Localhost-only: skip verification via admin panel global settings
+
+# Behavioral & Privacy Checks (Disabled by default)
+omlx serve --check-updates
+omlx serve --check-statuskit
 ```
 
 All settings can also be configured from the web admin panel at `/admin`. Settings are persisted to `~/.omlx/settings.json`, and CLI flags take precedence.

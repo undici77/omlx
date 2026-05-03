@@ -44,6 +44,7 @@ class ServerConfig:
     launch_at_login: bool = False
     start_server_on_launch: bool = False
     check_updates: bool = False
+    check_statuskit: bool = False
 
     def get_effective_model_dir(self) -> str:
         """Get the model directory, using base_path/models if not specified."""
@@ -233,4 +234,8 @@ class ServerConfig:
             args.append("--check-updates")
         else:
             args.append("--no-check-updates")
+        if self.check_statuskit:
+            args.append("--check-statuskit")
+        else:
+            args.append("--no-check-statuskit")
         return args

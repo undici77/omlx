@@ -240,11 +240,12 @@ class OMLXAppDelegate(NSObject):
         # Delayed check: warn user if ControlCenter blocked the status item.
         # 3s delay gives ControlCenter time to settle its visibility decision.
         # Retain the timer reference to prevent early dealloc under PyObjC.
-        self._visibility_check_timer = (
-            NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
-                3.0, self, "checkStatusItemVisibility:", None, False
+        if self.config.check_statuskit:
+            self._visibility_check_timer = (
+                NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
+                    3.0, self, "checkStatusItemVisibility:", None, False
+                )
             )
-        )
 
     def _create_status_item(self):
         """Create the NSStatusItem and set accessibility metadata.

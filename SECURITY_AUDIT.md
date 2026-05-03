@@ -37,6 +37,7 @@ Use this checklist during future audits to verify the security posture of an oML
 - [ ] **TLS:** If accessed over a network, verify a reverse proxy (Nginx/Caddy) provides HTTPS.
 - [ ] **MCP:** Verify `mcp.example.json` does not contain hardcoded secrets or overly permissive tool access.
 - [ ] **Auto-Update:** Verify `server.check_updates` is `false` (default) to prevent unintended external requests on startup.
+- [ ] **StatusKit Check:** Verify `server.check_statuskit` is `false` (default) to ensure no system setting probes/writes occur without consent.
 
 ### 3.2 Authentication & Authorization
 - [ ] **Bypass Check:** Verify `auth.skip_api_key_verification` is set to `false`.

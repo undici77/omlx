@@ -123,7 +123,24 @@ class TestCheckUpdate:
 
     @pytest.mark.asyncio
     async def test_cache_expires(self):
-...
+        """Should hit API again if cache is manually cleared (simulating expiration)."""
+        call_count = 0
+
+        def counting_to_thread(func, *args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            return {"update_available": True, "latest_version": "1.0.1"}
+
+        with patch("omlx.admin.routes.asyncio") as mock_asyncio:
+            mock_asyncio.to_thread = counting_to_thread
+
+            # First call
+            await admin_routes.check_update(is_admin=True)
+            assert call_count == 1
+
+            # Manually clear cache
+            _reset_cache()
+
             # Second call - should hit API again
             await admin_routes.check_update(is_admin=True)
             assert call_count == 2

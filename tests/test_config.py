@@ -86,7 +86,7 @@ class TestServerConfig:
     def test_default_values(self):
         """Test default configuration values."""
         config = ServerConfig()
-        assert config.host == "0.0.0.0"
+        assert config.host == "127.0.0.1"
         assert config.port == 8000
         assert config.log_level == "info"
         assert config.cors_origins == ["*"]
@@ -252,7 +252,7 @@ class TestOMLXConfig:
         """Test from_env with no environment variables."""
         with patch.dict(os.environ, {}, clear=True):
             config = OMLXConfig.from_env()
-            assert config.server.host == "0.0.0.0"
+            assert config.server.host == "127.0.0.1"
             assert config.server.port == 8000
             # Issue #926: env default must be False to keep RCE surface closed.
             assert config.model.trust_remote_code is False
@@ -363,7 +363,7 @@ class TestOMLXConfig:
         assert "mcp" in result
         assert "continuous_batching" in result
 
-        assert result["server"]["host"] == "0.0.0.0"
+        assert result["server"]["host"] == "127.0.0.1"
         assert result["server"]["port"] == 8000
 
     def test_to_dict_with_paged_ssd_cache_dir(self):

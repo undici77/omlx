@@ -128,6 +128,12 @@ class ServerMetrics:
             tmp_path = self._stats_path.with_suffix(".json.tmp")
             with open(tmp_path, "w") as f:
                 json.dump(data, f, indent=2)
+            # Ensure safe permissions (0600)
+            try:
+                import os as _os
+                _os.chmod(tmp_path, 0o600)
+            except (OSError, ImportError):
+                pass
             tmp_path.replace(self._stats_path)
         except OSError as e:
             logger.warning("Failed to save all-time stats to %s: %s", self._stats_path, e)

@@ -14,7 +14,7 @@ class _FakeResponse:
 
     def __init__(self, status_code, data=None):
         self.status_code = status_code
-        self._data = data or {}
+        self._data = data or []
 
     def json(self):
         return self._data
@@ -38,10 +38,12 @@ class TestCheckUpdate:
     @pytest.mark.asyncio
     async def test_update_available(self):
         """Should return update_available=True when newer version exists."""
-        fake_resp = _FakeResponse(200, {
+        fake_resp = _FakeResponse(200, [{
             "tag_name": "v99.0.0",
             "html_url": "https://github.com/jundot/omlx/releases/tag/v99.0.0",
-        })
+            "draft": False,
+            "prerelease": False,
+        }])
 
         with patch("omlx.admin.routes.asyncio") as mock_asyncio:
             mock_asyncio.to_thread = _make_async_return(fake_resp)
@@ -55,10 +57,13 @@ class TestCheckUpdate:
     @pytest.mark.asyncio
     async def test_no_update(self):
         """Should return update_available=False when current version is latest."""
-        fake_resp = _FakeResponse(200, {
-            "tag_name": "v0.0.1",
-            "html_url": "https://github.com/jundot/omlx/releases/tag/v0.0.1",
-        })
+        from omlx._version import __version__
+        fake_resp = _FakeResponse(200, [{
+            "tag_name": f"v{__version__}",
+            "html_url": "https://github.com/jundot/omlx/releases/tag/v" + __version__,
+            "draft": False,
+            "prerelease": False,
+        }])
 
         with patch("omlx.admin.routes.asyncio") as mock_asyncio:
             mock_asyncio.to_thread = _make_async_return(fake_resp)
@@ -97,10 +102,12 @@ class TestCheckUpdate:
     @pytest.mark.asyncio
     async def test_cache_is_used(self):
         """Should not call GitHub API again within TTL window."""
-        fake_resp = _FakeResponse(200, {
+        fake_resp = _FakeResponse(200, [{
             "tag_name": "v99.0.0",
             "html_url": "https://github.com/jundot/omlx/releases/tag/v99.0.0",
-        })
+            "draft": False,
+            "prerelease": False,
+        }])
 
         call_count = 0
 
@@ -124,12 +131,18 @@ class TestCheckUpdate:
     @pytest.mark.asyncio
     async def test_cache_expires(self):
         """Should hit API again if cache is manually cleared (simulating expiration)."""
+        fake_resp = _FakeResponse(200, [{
+            "tag_name": "v99.0.0",
+            "html_url": "https://github.com/...",
+            "draft": False,
+            "prerelease": False,
+        }])
         call_count = 0
 
-        def counting_to_thread(func, *args, **kwargs):
+        async def counting_to_thread(func, *args, **kwargs):
             nonlocal call_count
             call_count += 1
-            return {"update_available": True, "latest_version": "1.0.1"}
+            return fake_resp
 
         with patch("omlx.admin.routes.asyncio") as mock_asyncio:
             mock_asyncio.to_thread = counting_to_thread
@@ -154,7 +167,7 @@ class TestCheckUpdate:
         mock_settings = MagicMock(spec=GlobalSettings)
         mock_settings.server = ServerSettings(check_updates=False)
 
-        with patch("omlx.admin.routes.get_settings", return_value=mock_settings):
+        with patch("omlx.settings.get_settings", return_value=mock_settings):
             with patch("omlx.admin.routes.asyncio") as mock_asyncio:
                 # Should NOT call asyncio.to_thread
                 result = await admin_routes.check_update(is_admin=True)

@@ -117,6 +117,7 @@ class ServerSettings:
     server_aliases: list[str] = field(default_factory=list)
     check_updates: bool = False
     check_statuskit: bool = False
+    sse_keepalive_mode: str = "chunk"
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
@@ -133,6 +134,7 @@ class ServerSettings:
             server_aliases=data.get("server_aliases", []),
             check_updates=data.get("check_updates", False),
             check_statuskit=data.get("check_statuskit", False),
+            sse_keepalive_mode=data.get("sse_keepalive_mode", "chunk"),
         )
 
 
@@ -910,6 +912,8 @@ class GlobalSettings:
             self.server.check_updates = args.check_updates
         if hasattr(args, "check_statuskit") and args.check_statuskit is not None:
             self.server.check_statuskit = args.check_statuskit
+        if hasattr(args, "sse_keepalive_mode") and args.sse_keepalive_mode is not None:
+            self.server.sse_keepalive_mode = args.sse_keepalive_mode
 
         # Model settings
         if hasattr(args, "model_dir") and args.model_dir is not None:
@@ -1000,6 +1004,11 @@ class GlobalSettings:
         try:
             with open(settings_file, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2)
+            # Ensure safe permissions (0600)
+            try:
+                os.chmod(settings_file, 0o600)
+            except OSError:
+                pass  # Ignore errors on systems that don't support chmod (e.g. Windows)
             logger.info(f"Saved settings to {settings_file}")
         except OSError as e:
             logger.error(f"Failed to save settings to {settings_file}: {e}")
@@ -1062,6 +1071,13 @@ class GlobalSettings:
             errors.append(
                 f"Invalid log_level: {self.server.log_level} "
                 f"(must be one of {valid_log_levels})"
+            )
+
+        valid_keepalive_modes = {"chunk", "comment", "off"}
+        if self.server.sse_keepalive_mode not in valid_keepalive_modes:
+            errors.append(
+                f"Invalid sse_keepalive_mode: {self.server.sse_keepalive_mode} "
+                f"(must be one of {valid_keepalive_modes})"
             )
 
         # Model validation

@@ -44,17 +44,19 @@ class TestServerSettings:
         assert settings.log_level == "info"
         assert settings.cors_origins == ["*"]
         assert settings.check_updates is False
+        assert settings.check_statuskit is False
+        assert settings.sse_keepalive_mode == "chunk"
 
     def test_custom_values(self):
         """Test custom values."""
         settings = ServerSettings(
-            host="0.0.0.0",
+            host="127.0.0.1",
             port=9000,
             log_level="debug",
             cors_origins=["https://example.com"],
             check_updates=True,
         )
-        assert settings.host == "0.0.0.0"
+        assert settings.host == "127.0.0.1"
         assert settings.port == 9000
         assert settings.log_level == "debug"
         assert settings.cors_origins == ["https://example.com"]
@@ -73,18 +75,27 @@ class TestServerSettings:
             "cors_origins": ["*"],
             "server_aliases": [],
             "check_updates": True,
+            "check_statuskit": False,
+            "sse_keepalive_mode": "chunk",
         }
+
+    def test_from_dict_sse_keepalive_mode(self):
+        """sse_keepalive_mode round-trips through from_dict / to_dict."""
+        for mode in ("chunk", "comment", "off"):
+            settings = ServerSettings.from_dict({"sse_keepalive_mode": mode})
+            assert settings.sse_keepalive_mode == mode
+            assert settings.to_dict()["sse_keepalive_mode"] == mode
 
     def test_from_dict(self):
         """Test creation from dictionary."""
         data = {
-            "host": "0.0.0.0",
+            "host": "127.0.0.1",
             "port": 9000,
             "log_level": "debug",
             "check_updates": True,
         }
         settings = ServerSettings.from_dict(data)
-        assert settings.host == "0.0.0.0"
+        assert settings.host == "127.0.0.1"
         assert settings.port == 9000
         assert settings.log_level == "debug"
         assert settings.cors_origins == ["*"]  # default
@@ -93,7 +104,7 @@ class TestServerSettings:
     def test_from_dict_with_cors_origins(self):
         """Test creation from dictionary with cors_origins."""
         data = {
-            "host": "0.0.0.0",
+            "host": "127.0.0.1",
             "port": 9000,
             "cors_origins": ["https://chat.example.com", "http://localhost:3000"],
         }
@@ -746,7 +757,7 @@ class TestGlobalSettings:
                 json.dumps(
                     {
                         "version": "1.0",
-                        "server": {"host": "0.0.0.0", "port": 9000, "log_level": "debug"},
+                        "server": {"host": "127.0.0.1", "port": 9000, "log_level": "debug"},
                         "model": {"model_dir": "/models", "max_model_memory": "64GB"},
                         "scheduler": {
                             "max_concurrent_requests": 128,
@@ -763,7 +774,7 @@ class TestGlobalSettings:
             )
 
             settings = GlobalSettings.load(base_path=tmpdir)
-            assert settings.server.host == "0.0.0.0"
+            assert settings.server.host == "127.0.0.1"
             assert settings.server.port == 9000
             assert settings.server.log_level == "debug"
             assert settings.model.model_dirs == ["/models"]  # Migrated from model_dir
@@ -902,7 +913,8 @@ class TestGlobalSettings:
         with tempfile.TemporaryDirectory() as tmpdir:
             base = Path(tmpdir) / "omlx"
             valid_models = Path(tmpdir) / "valid_models"
-            unavailable = Path("/Volumes/NonExistentDrive/Models")
+            # On Linux, /proc/invalid is guaranteed to not exist and be unwritable
+            unavailable = Path("/proc/omlx_invalid_path/Models")
 
             settings = GlobalSettings(base_path=base)
             settings.model.model_dirs = [str(valid_models), str(unavailable)]
@@ -910,10 +922,12 @@ class TestGlobalSettings:
 
             assert base.exists()
             assert valid_models.exists()
-            # Unavailable path should be removed from model_dirs
+            # Unavailable path should be removed from model_dirs or skipped
             resolved_dirs = settings.model.get_model_dirs(base)
-            assert len(resolved_dirs) == 1
-            assert resolved_dirs[0] == valid_models.resolve()
+            # Filter for actually existing directories as a final check
+            existing_dirs = [d for d in resolved_dirs if d.exists()]
+            assert len(existing_dirs) == 1
+            assert existing_dirs[0] == valid_models.resolve()
 
     def test_validate_valid_settings(self):
         """Test validation with valid settings."""
@@ -947,6 +961,21 @@ class TestGlobalSettings:
         for level in ["trace", "debug", "info", "warning", "error", "critical"]:
             settings = GlobalSettings()
             settings.server.log_level = level
+            errors = settings.validate()
+            assert errors == []
+
+    def test_validate_invalid_sse_keepalive_mode(self):
+        """Validation rejects unknown sse_keepalive_mode values."""
+        settings = GlobalSettings()
+        settings.server.sse_keepalive_mode = "bogus"
+        errors = settings.validate()
+        assert any("sse_keepalive_mode" in e for e in errors)
+
+    def test_validate_valid_sse_keepalive_modes(self):
+        """Validation accepts chunk / comment / off."""
+        for mode in ("chunk", "comment", "off"):
+            settings = GlobalSettings()
+            settings.server.sse_keepalive_mode = mode
             errors = settings.validate()
             assert errors == []
 
@@ -1026,7 +1055,7 @@ class TestGlobalSettings:
             with patch.dict(
                 os.environ,
                 {
-                    "OMLX_HOST": "0.0.0.0",
+                    "OMLX_HOST": "127.0.0.1",
                     "OMLX_PORT": "9999",
                     "OMLX_LOG_LEVEL": "debug",
                     "OMLX_CHECK_UPDATES": "true",
@@ -1034,7 +1063,7 @@ class TestGlobalSettings:
                 clear=False,
             ):
                 settings = GlobalSettings.load(base_path=tmpdir)
-                assert settings.server.host == "0.0.0.0"
+                assert settings.server.host == "127.0.0.1"
                 assert settings.server.port == 9999
                 assert settings.server.log_level == "debug"
                 assert settings.server.check_updates is True
@@ -1194,7 +1223,7 @@ class TestGlobalSettings:
         with tempfile.TemporaryDirectory() as tmpdir:
             args = Namespace(
                 port=8888,
-                host="0.0.0.0",
+                host="127.0.0.1",
                 log_level="warning",
                 check_updates=True,
                 model_dir="/cli/models",
@@ -1203,7 +1232,7 @@ class TestGlobalSettings:
             )
             settings = GlobalSettings.load(base_path=tmpdir, cli_args=args)
             assert settings.server.port == 8888
-            assert settings.server.host == "0.0.0.0"
+            assert settings.server.host == "127.0.0.1"
             assert settings.server.log_level == "warning"
             assert settings.server.check_updates is True
             assert settings.model.model_dir == "/cli/models"

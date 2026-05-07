@@ -63,6 +63,10 @@ class ModelSettings:
         dflash_enabled: Enable DFlash speculative decoding.
         dflash_draft_model: Path/repo for DFlash draft checkpoint.
         dflash_draft_quant_bits: Draft model quantization bits.
+        dflash_max_ctx: Token threshold to fall back to BatchedEngine (None = unlimited).
+        dflash_in_memory_cache: Enable DFlash L1 (RAM) prefix cache.
+        dflash_in_memory_cache_max_bytes: L1 cache byte budget.
+        dflash_ssd_cache: Enable DFlash L2 (SSD) prefix cache spill (uses omlx SSD cache dir).
         is_pinned: Keep model loaded in memory.
         is_default: Use this model when no model is specified.
         display_name: Human-readable name for UI display.
@@ -108,6 +112,12 @@ class ModelSettings:
     dflash_enabled: bool = False
     dflash_draft_model: Optional[str] = None  # Path/repo for DFlash draft checkpoint
     dflash_draft_quant_bits: Optional[int] = None  # Draft model quantization (None=bf16, 4)
+    dflash_max_ctx: Optional[int] = None  # None = unlimited; trigger BatchedEngine fallback when prompt_len >= this
+    # DFlash prefix cache (private to dflash; separate from omlx tiered cache because
+    # snapshots include draft model GDN state and target hidden chunks omlx never tracks)
+    dflash_in_memory_cache: bool = True
+    dflash_in_memory_cache_max_bytes: int = 8 * 1024 * 1024 * 1024  # 8 GiB (balanced profile default)
+    dflash_ssd_cache: bool = False  # Requires in-memory cache and an omlx paged SSD cache dir
 
     # Model management flags
     is_pinned: bool = False
@@ -250,6 +260,13 @@ class ModelSettingsManager:
             with open(temp_file, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2, ensure_ascii=False)
 
+            # Ensure safe permissions (0600)
+            try:
+                import os as _os
+                _os.chmod(temp_file, 0o600)
+            except (OSError, ImportError):
+                pass
+
             temp_file.replace(self.settings_file)
             logger.debug(f"Saved settings for {len(self._settings)} models")
 
@@ -370,6 +387,14 @@ class ModelSettingsManager:
         try:
             with open(temp_file, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2, ensure_ascii=False, default=str)
+
+            # Ensure safe permissions (0600)
+            try:
+                import os as _os
+                _os.chmod(temp_file, 0o600)
+            except (OSError, ImportError):
+                pass
+
             temp_file.replace(self.profiles_file)
         except Exception as e:
             logger.error(f"Failed to save profiles file: {e}")
@@ -564,6 +589,14 @@ class ModelSettingsManager:
             temp_file = self.templates_file.with_suffix(".tmp")
             with open(temp_file, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2, ensure_ascii=False, default=str)
+
+            # Ensure safe permissions (0600)
+            try:
+                import os as _os
+                _os.chmod(temp_file, 0o600)
+            except (OSError, ImportError):
+                pass
+
             temp_file.replace(self.templates_file)
         except Exception as e:
             logger.error(f"Failed to save templates file: {e}")

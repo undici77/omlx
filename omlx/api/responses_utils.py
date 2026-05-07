@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional, Union
 
 from .responses_models import (
     InputItem,
+    InputTokensDetails,
     OutputContent,
     OutputItem,
     ResponsesTool,
@@ -303,13 +304,14 @@ def build_function_call_output_item(
 
 
 def build_response_usage(
-    input_tokens: int, output_tokens: int
+    input_tokens: int, output_tokens: int, cached_tokens: int = 0
 ) -> ResponseUsage:
     """Build ResponseUsage from token counts."""
     return ResponseUsage(
         input_tokens=input_tokens,
         output_tokens=output_tokens,
         total_tokens=input_tokens + output_tokens,
+        input_tokens_details=InputTokensDetails(cached_tokens=cached_tokens),
     )
 
 
@@ -405,6 +407,12 @@ class ResponseStore:
         tmp_path = path.with_suffix(".tmp")
         with tmp_path.open("w", encoding="utf-8") as f:
             json.dump(record, f, ensure_ascii=False)
+        # Ensure safe permissions (0600)
+        try:
+            import os as _os
+            _os.chmod(tmp_path, 0o600)
+        except (OSError, ImportError):
+            pass
         tmp_path.replace(path)
 
     def _remove_persisted_record(self, response_id: str) -> None:

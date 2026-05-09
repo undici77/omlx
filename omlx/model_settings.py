@@ -158,6 +158,11 @@ class ModelSettings:
                 "mtp_enabled and turboquant_kv_enabled cannot both be True; "
                 "TurboQuant patches the attention path that MTP relies on"
             )
+        if self.dflash_enabled and self.turboquant_kv_enabled:
+            raise ValueError(
+                "dflash_enabled and turboquant_kv_enabled cannot both be True; "
+                "DFlash and TurboQuant both patch the attention/KV path and are incompatible"
+            )
 
     def to_dict(self) -> dict:
         """Convert to dictionary, excluding None values.

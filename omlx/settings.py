@@ -113,7 +113,7 @@ class ServerSettings:
     host: str = "127.0.0.1"
     port: int = 8000
     log_level: str = "info"
-    cors_origins: list[str] = field(default_factory=lambda: ["*"])
+    cors_origins: list[str] = field(default_factory=lambda: ["http://localhost", "http://127.0.0.1"])
     server_aliases: list[str] = field(default_factory=list)
     check_updates: bool = False
     check_statuskit: bool = False
@@ -130,7 +130,7 @@ class ServerSettings:
             host=data.get("host", "127.0.0.1"),
             port=data.get("port", 8000),
             log_level=data.get("log_level", "info"),
-            cors_origins=data.get("cors_origins", ["*"]),
+            cors_origins=data.get("cors_origins", ["http://localhost", "http://127.0.0.1"]),
             server_aliases=data.get("server_aliases", []),
             check_updates=data.get("check_updates", False),
             check_statuskit=data.get("check_statuskit", False),

@@ -68,7 +68,8 @@ class TestServerConfig:
         assert result["model_dir"] == "/models"
         expected_keys = {
             "base_path", "port", "model_dir",
-            "launch_at_login", "start_server_on_launch"
+            "launch_at_login", "start_server_on_launch",
+            "check_updates", "check_statuskit"
         }
         assert set(result.keys()) == expected_keys
 
@@ -80,6 +81,8 @@ class TestServerConfig:
             "model_dir": "/custom/models",
             "launch_at_login": True,
             "start_server_on_launch": False,
+            "check_updates": True,
+            "check_statuskit": True,
         }
         config = ServerConfig.from_dict(data)
 
@@ -88,6 +91,8 @@ class TestServerConfig:
         assert config.model_dir == "/custom/models"
         assert config.launch_at_login is True
         assert config.start_server_on_launch is False
+        assert config.check_updates is True
+        assert config.check_statuskit is True
 
     def test_from_dict_ignores_unknown_keys(self):
         """Test that from_dict ignores unknown keys."""
@@ -169,7 +174,13 @@ class TestServerConfig:
         args = config.build_serve_args()
 
         base = str(Path("/test/base").expanduser())
-        assert args == ["serve", "--base-path", base, "--port", "8000"]
+        assert args == [
+            "serve",
+            "--base-path", base,
+            "--port", "8000",
+            "--no-check-updates",
+            "--no-check-statuskit",
+        ]
 
     def test_build_serve_args_with_model_dir(self):
         """Test build_serve_args does not include model_dir (server reads settings.json)."""
@@ -185,6 +196,8 @@ class TestServerConfig:
             "serve",
             "--base-path", base,
             "--port", "9000",
+            "--no-check-updates",
+            "--no-check-statuskit",
         ]
 
     def test_build_serve_args_preserves_order(self):

@@ -5,11 +5,76 @@ Pytest configuration and fixtures for oMLX tests.
 This module provides common fixtures used across test files.
 """
 
+import sys
+import types
+import importlib.machinery
+import importlib.abc
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from unittest.mock import MagicMock
 
 import pytest
+
+# Try to import mlx, if it fails, mock it
+try:
+    import mlx.core as mx
+except ImportError:
+    # Robust MetaPathFinder for mlx
+    class MockMLXFinder(importlib.abc.MetaPathFinder):
+        def find_spec(self, fullname, path, target=None):
+            if fullname == "mlx" or fullname.startswith("mlx."):
+                return importlib.machinery.ModuleSpec(fullname, MockMLXLoader())
+            return None
+
+    class MockMLXLoader(importlib.abc.Loader):
+        def create_module(self, spec):
+            if spec.name in sys.modules:
+                return sys.modules[spec.name]
+            
+            # Create a mock module that is also callable
+            class MockModule(types.ModuleType):
+                def __init__(self, name):
+                    super().__init__(name)
+                    self.__mock_items = {}
+                    # Ensure it has a spec so transformers/importlib doesn't complain
+                    self.__spec__ = importlib.machinery.ModuleSpec(name, None)
+
+                def __getattr__(self, name):
+                    if name in ("__path__", "__file__"):
+                        return None
+                    if name == "__all__":
+                        return []
+                    
+                    if name not in self.__mock_items:
+                        # Return a MagicMock for any attribute
+                        self.__mock_items[name] = MagicMock()
+                    return self.__mock_items[name]
+
+                def __call__(self, *args, **kwargs):
+                    return MagicMock()(*args, **kwargs)
+
+            m = MockModule(spec.name)
+            sys.modules[spec.name] = m
+            return m
+
+        def exec_module(self, module):
+            # Special case for core attributes
+            if module.__name__ == "mlx.core":
+                module.float32 = "float32"
+                module.float16 = "float16"
+                module.bfloat16 = "bfloat16"
+                module.int32 = "int32"
+                module.int64 = "int64"
+                module.bool_ = "bool"
+                module.array = lambda x, dtype=None: x
+                module.metal.is_available = MagicMock(return_value=False)
+                module.get_active_memory = MagicMock(return_value=0)
+                module.get_peak_memory = MagicMock(return_value=0)
+            elif module.__name__ == "mlx.nn":
+                module.Module = MagicMock
+
+    sys.meta_path.insert(0, MockMLXFinder())
+    import mlx.core as mx
 
 from omlx.request import Request, SamplingParams
 
@@ -23,25 +88,12 @@ class MockTokenizer:
         self.pad_token_id = 0
         self.bos_token_id = 1
 
-    def encode(self, text: str, add_special_tokens: bool = True) -> List[int]:
-        """Encode text to token ids (simple simulation)."""
-        # Simple simulation: each word becomes a token
-        tokens = []
-        if add_special_tokens:
-            tokens.append(self.bos_token_id)
-        # Simulate tokenization by splitting on spaces
-        for i, word in enumerate(text.split()):
-            # Use hash to get a consistent token id for each word
-            token_id = (hash(word) % (self.vocab_size - 10)) + 10
-            tokens.append(token_id)
-        return tokens
+    def encode(self, text: str, **kwargs: Any) -> List[int]:
+        """Mock encoding: convert length to fake token IDs."""
+        return [1] + [100] * len(text.split()) + [2]
 
-    def decode(
-        self,
-        token_ids: List[int],
-        skip_special_tokens: bool = True,
-    ) -> str:
-        """Decode token ids to text (simple simulation)."""
+    def decode(self, token_ids: List[int], skip_special_tokens: bool = False, **kwargs: Any) -> str:
+        """Mock decoding: return fake text (simple simulation)."""
         if skip_special_tokens:
             token_ids = [
                 t
@@ -99,74 +151,30 @@ class MockModel:
 
 
 @pytest.fixture
-def mock_tokenizer() -> MockTokenizer:
-    """Provide a mock tokenizer for tests."""
+def mock_tokenizer():
+    """Fixture for a mock tokenizer."""
     return MockTokenizer()
 
 
 @pytest.fixture
-def mock_model() -> MockModel:
-    """Provide a mock model for tests."""
+def mock_model():
+    """Fixture for a mock model."""
     return MockModel()
 
 
 @pytest.fixture
-def mock_model_config() -> MockModelConfig:
-    """Provide a mock model configuration for tests."""
-    return MockModelConfig()
+def temp_settings_dir(tmp_path):
+    """Fixture for a temporary settings directory."""
+    settings_dir = tmp_path / ".omlx"
+    settings_dir.mkdir()
+    return settings_dir
 
 
 @pytest.fixture
-def tmp_cache_dir(tmp_path: Path) -> Path:
-    """Provide a temporary cache directory for tests."""
-    cache_dir = tmp_path / "cache"
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    return cache_dir
-
-
-@pytest.fixture
-def sample_request() -> Request:
-    """Factory fixture for creating sample Request objects."""
+def mock_request():
+    """Fixture for a mock inference request."""
     return Request(
-        request_id="test-request-001",
-        prompt="Hello, world!",
-        sampling_params=SamplingParams(
-            max_tokens=100,
-            temperature=0.7,
-            top_p=0.9,
-        ),
+        request_id="test-req-123",
+        prompt="Hello world",
+        sampling_params=SamplingParams(temperature=0.7, max_tokens=20),
     )
-
-
-@pytest.fixture
-def sample_request_factory():
-    """Factory fixture for creating multiple Request objects."""
-
-    def _create_request(
-        request_id: str = "test-request-001",
-        prompt: str = "Hello, world!",
-        max_tokens: int = 100,
-        temperature: float = 0.7,
-        top_p: float = 0.9,
-    ) -> Request:
-        return Request(
-            request_id=request_id,
-            prompt=prompt,
-            sampling_params=SamplingParams(
-                max_tokens=max_tokens,
-                temperature=temperature,
-                top_p=top_p,
-            ),
-        )
-
-    return _create_request
-
-
-@pytest.fixture
-def real_model_dir() -> Path:
-    """Return the path to real models directory.
-
-    Note: Tests using this fixture may require actual model files
-    and should be marked with @pytest.mark.slow.
-    """
-    return Path.home() / "Workspace" / "models"

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Integration registry for external coding tools."""
 
 from omlx.integrations.base import Integration

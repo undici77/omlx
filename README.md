@@ -25,10 +25,10 @@
 
 <p align="center">
   <a href="#install">Install</a> ·
-  <a href="#quickstart">Quickstart</a> ·
+  <a href="#getting-started">Getting Started</a> ·
   <a href="#features">Features</a> ·
   <a href="#models">Models</a> ·
-  <a href="#cli-configuration">CLI Configuration</a> ·
+  <a href="#cli-reference">CLI Reference</a> ·
   <a href="https://omlx.ai/benchmarks">Benchmarks</a> ·
   <a href="https://omlx.ai">oMLX.ai</a>
 </p>
@@ -96,11 +96,11 @@ To create the macOS app:
 
 Requires macOS 15.0+ (Sequoia), Python 3.11+ (recommended), and Apple Silicon (M1/M2/M3/M4).
 
-## Quickstart
+## Getting Started
 
 ### macOS App
 
-Launch oMLX from your Applications folder. The Welcome screen guides you through three steps - model directory, server start, and first model download. That's it. To connect OpenClaw, OpenCode, or Codex, see [Integrations](#integrations).
+Launch oMLX from your Applications folder. The Welcome screen guides you through three steps - model directory, server start, and first model download. That's it. To connect OpenClaw, OpenCode, or Codex, see [Local Integration](#local-integration).
 
 <p align="center">
   <img src="docs/images/Screenshot 2026-02-10 at 00.36.32.png" alt="oMLX Welcome Screen" width="360">
@@ -189,7 +189,7 @@ Search and download MLX models from HuggingFace directly in the admin dashboard.
   <img src="docs/images/downloader_omlx.png" alt="oMLX Model Downloader" width="720">
 </p>
 
-### Integrations
+### Local Integration
 
 Set up OpenClaw, OpenCode, Codex, and Pi directly from the admin dashboard with a single click. No manual config editing required.
 
@@ -197,7 +197,7 @@ Set up OpenClaw, OpenCode, Codex, and Pi directly from the admin dashboard with 
   <img src="docs/images/omlx_integrations.png" alt="oMLX Integrations" width="720">
 </p>
 
-### Performance Benchmark
+### Internal Benchmarking
 
 One-click benchmarking from the admin panel. Measures prefill (PP) and text generation (TG) tokens per second, with partial prefix cache hit testing for realistic performance numbers.
 
@@ -266,7 +266,7 @@ Models are auto-detected by type. You can also download models directly from the
 | Embedding | BERT, BGE-M3, ModernBERT |
 | Reranker | ModernBERT, XLM-RoBERTa |
 
-## CLI Configuration
+## CLI Reference
 
 ```bash
 # Memory limit for loaded models

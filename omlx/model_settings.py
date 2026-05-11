@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Per-model settings management for oMLX.
 
 This module provides dataclasses and a manager for storing and retrieving

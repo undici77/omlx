@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """GitHub release selection helpers used by the menubar app's update check.
 
 Kept separate from app.py so the logic is unit-testable without pulling in

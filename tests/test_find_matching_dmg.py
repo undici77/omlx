@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Tests for _find_matching_dmg() logic.
 
 Since omlx_app.app imports PyObjC (AppKit) which is not available in the

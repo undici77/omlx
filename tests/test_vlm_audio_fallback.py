@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Tests for the audio_tower fallback in VLM loading.
 
 Background: oQ-quantized multimodal Gemma 4 checkpoints sometimes ship with

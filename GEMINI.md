@@ -84,7 +84,37 @@ pytest -m slow
 - **Documentation:** Maintain `README.md` and document new features in the `docs/` directory.
 - **Pull Requests:** Ensure all tests pass (`pytest -m "not slow"`) and formatting is correct before submission.
 
-## Key File Locations
+## Known Platform Limitations
+
+- **Non-macOS Environments:** Since oMLX is optimized for Apple Silicon, `mlx` is unavailable on Linux/Windows. Use the provided `tests/mlx_mock.py` for local testing.
+- **Dependency Conflicts:** The `[audio]` extra (specifically `mlx-audio`) may have version conflicts with `mlx-lm > 0.31.2`. On non-macOS environments or when using newer `mlx-lm` versions, it is recommended to install without the audio extra:
+  ```bash
+  pip install -e ".[dev,mcp,grammar]"
+  ```
+
+## AI Agent Optimization & Audit Guide
+
+To minimize token usage and turns during audits or verification, use these optimized workflows:
+
+### 1. Environment Setup (Linux/CI)
+When running in a non-macOS environment, always install without the `audio` extra and ensure `PYTHONPATH` includes the repository root to enable the MLX mock:
+```bash
+# Efficient install
+pip install -e ".[dev,mcp,grammar]"
+
+# Run tests with the robust MLX mock (tests/mlx_mock.py)
+PYTHONPATH=. pytest -m "not slow"
+```
+
+### 2. Programmatic Compliance Audit
+Instead of manually reading files to verify security policies, run the compliance linter. It checks `settings.py` defaults, `README.md` structure, and license headers in one turn:
+```bash
+python scripts/compliance_check.py
+```
+*If this script fails, fix the reported issues before proceeding to manual verification.*
+
+### 3. MLX Mock Usage
+The mock is centralized in `tests/mlx_mock.py`. If you need to add new tests that depend on MLX features not yet mocked, update `tests/mlx_mock.py` instead of adding inline mocks to `conftest.py`. This keeps the test environment consistent and deterministic.
 
 - `omlx/cli.py`: CLI entry point.
 - `omlx/server.py`: FastAPI server setup and routes.

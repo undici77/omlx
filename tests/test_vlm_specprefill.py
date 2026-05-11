@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Regression tests for SpecPrefill parameter forwarding in VLM engine."""
 
 from concurrent.futures import ThreadPoolExecutor

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 import time
 
 from omlx.prefill_progress import PrefillProgressTracker

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Tests for VLM (Vision-Language Model) engine logic.
 
 Tests cover:

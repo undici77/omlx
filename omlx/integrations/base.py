@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Base class for external tool integrations."""
 
 from __future__ import annotations

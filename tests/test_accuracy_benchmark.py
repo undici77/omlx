@@ -58,7 +58,7 @@ class TestAccuracyBenchmarkRequest:
             model_id="test-model",
             benchmarks={b: 100 for b in VALID_BENCHMARKS},
         )
-        assert len(req.benchmarks) == 12
+        assert len(req.benchmarks) == 16
 
     def test_enable_thinking_default_false(self):
         req = AccuracyBenchmarkRequest(

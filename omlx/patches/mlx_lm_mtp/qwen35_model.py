@@ -681,7 +681,7 @@ def _patch_qwen3_5_moe() -> None:
         for l in range(self.language_model.args.num_hidden_layers):
             _unfuse_experts(new_weights, f"language_model.model.layers.{l}.mlp")
 
-        # MTP layers: fused (Qwen3.6) or per-expert (Qwen3.5). Detect once.
+        # MTP layers: fused (Qwen3.6), per-expert (Qwen3.5), or dense (MTPLX).
         mtp_num = int(
             getattr(self.language_model.args, "mtp_num_hidden_layers", 0) or 0
         )
@@ -708,6 +708,18 @@ def _patch_qwen3_5_moe() -> None:
                     # experts before quantization). Skip the load-time
                     # unfuse/stack in that case.
                     if f"{prefix}.switch_mlp.gate_proj.weight" in new_weights:
+                        continue
+                    # MTPLX (lightning-mlx convert) layout: MTP layer is dense
+                    # — no per-expert tensors to stack/unfuse. The router/gate
+                    # and shared_expert weights are passed through unchanged.
+                    # Probe by layout sentinel (O(1)) rather than scanning all
+                    # weight keys — matters on multi-thousand-tensor checkpoints.
+                    sentinel = (
+                        f"{prefix}.experts.gate_up_proj"
+                        if mtp_is_fused
+                        else f"{prefix}.experts.0.gate_proj.weight"
+                    )
+                    if sentinel not in new_weights:
                         continue
                     if mtp_is_fused:
                         _unfuse_experts(new_weights, prefix)

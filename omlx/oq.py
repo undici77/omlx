@@ -2174,6 +2174,27 @@ def quantize_oq_streaming(
         config = json.load(f)
     config["_oq_use_budget_plan"] = oq_level in _OQ_BPW_TARGETS
 
+    # TEMP: DeepSeek V4 sensitivity measurement is unsupported.
+    # - Raw self-sensitivity load_weights fails on missing mtp.0.{e,h}_proj.biases
+    #   because mlx-lm's deepseek_v4 patch attaches MTP projections in
+    #   quantized form while raw checkpoints ship .weight + .scale only.
+    # - Proxy sensitivity (sensitivity_model_path=<8bit>) fails because
+    #   ``_forward_layer`` does not recognize ``DeepseekV4Block.__call__``'s
+    #   (x, mask, cache, input_ids) signature.
+    # Fixing both requires changes outside the oq.py / VLM-MTP scope of
+    # this fix, so abort early with a clear message until that follow-up
+    # lands. Remove this guard once the deepseek_v4 patch + _forward_layer
+    # support land.
+    if config.get("model_type") == "deepseek_v4":
+        raise RuntimeError(
+            "oQ quantization for deepseek_v4 (DeepSeek-V4-Flash) is not "
+            "supported yet: sensitivity measurement fails on both raw load "
+            "(missing mtp.0.{e,h}_proj.biases — model class expects quantized "
+            "form) and proxy load (_forward_layer can't match DeepseekV4Block "
+            "signature). Pending follow-up in mlx-lm deepseek_v4 patch + "
+            "oq.py _forward_layer."
+        )
+
     cb("loading", 5.0)
 
     weight_files = sorted(source.glob("*.safetensors"))
@@ -2310,6 +2331,17 @@ def quantize_oq_streaming(
             k: v for k, v in named_shapes.items()
             if not _is_vision_tensor(k) and not _is_audio_tensor(k)
         }
+    if not preserve_mtp:
+        # Match the eager path (_should_skip_tensor): when MTP heads are
+        # not being preserved, drop ``mtp.*`` tensors from the plan so the
+        # quantizer doesn't reserve bits for them and the output shards
+        # don't include them. Otherwise the output would carry the source
+        # mtp.* weights while the config's mtp_num_hidden_layers gets
+        # zeroed by _normalize_mtp_in_config — a config/weights mismatch
+        # that breaks VLM load with "Received N parameters not in model".
+        named_shapes = {
+            k: v for k, v in named_shapes.items() if not _is_mtp_tensor(k)
+        }
     _level_targets = _bpw_targets_for_level(oq_level)
     if _level_targets is not None:
         _t = target_bpw if target_bpw is not None else _level_targets[0]
@@ -2352,6 +2384,14 @@ def quantize_oq_streaming(
         if text_only and (
             _is_vision_tensor(tensor_name) or _is_audio_tensor(tensor_name)
         ):
+            del w_mx
+            processed_bytes += tensor_bytes
+            continue
+
+        if not preserve_mtp and _is_mtp_tensor(tensor_name):
+            # Strip MTP tensors when the caller asked not to preserve them.
+            # _normalize_mtp_in_config will zero mtp_num_hidden_layers in
+            # the output config so the result stays self-consistent.
             del w_mx
             processed_bytes += tensor_bytes
             continue

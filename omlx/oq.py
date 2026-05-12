@@ -1566,6 +1566,20 @@ def _build_model_sanitizer(config: dict, text_only: bool = False):
             except Exception as patch_err:
                 logger.debug(f"mlx-vlm MTP patch not applied: {patch_err}")
 
+            # Remap language_model.model.visual.* -> vision_tower.* for
+            # Qwen3.6-35B-A3B's nested ViT layout. Wraps whichever
+            # Model.sanitize is current; no-op when already installed or
+            # when upstream mlx-vlm grows the rule itself.
+            try:
+                from omlx.patches.qwen3_6_nested_visual import (
+                    apply_qwen3_6_nested_visual_patch,
+                )
+                apply_qwen3_6_nested_visual_patch()
+            except Exception as patch_err:
+                logger.debug(
+                    f"qwen3_6 nested-visual patch not applied: {patch_err}"
+                )
+
             model_module, _ = get_model_and_args(config)
             model_config_cls = model_module.ModelConfig
             model_config = model_config_cls.from_dict(config)
@@ -3103,23 +3117,43 @@ def _build_proxy_for_sensitivity(
 
     The caller is responsible for deleting the returned directory.
     """
-    from mlx_lm import convert
+    try:
+        from omlx.patches.mlx_lm_mtp import (
+            apply_mlx_lm_mtp_patch,
+            is_mtp_active,
+            set_mtp_active,
+        )
+        _have_lm_patch = apply_mlx_lm_mtp_patch()
+    except Exception:
+        _have_lm_patch = False
+        is_mtp_active = None
+        set_mtp_active = None
 
-    # mlx-lm's convert() refuses to write into a pre-existing directory,
-    # so reserve a unique temp name and let convert() create it.
-    proxy_dir = Path(tempfile.mkdtemp(prefix="omlx_oq_proxy_", dir=working_dir))
-    shutil.rmtree(proxy_dir)
-    convert(
-        hf_path=model_path,
-        mlx_path=str(proxy_dir),
-        quantize=True,
-        q_bits=_PROXY_QUANT_BITS,
-        q_group_size=_PROXY_QUANT_GROUP_SIZE,
-        q_mode="affine",
-        dtype=dtype,
-        trust_remote_code=trust_remote_code,
-    )
-    return proxy_dir
+    prev_active = is_mtp_active() if _have_lm_patch else False
+    try:
+        if _have_lm_patch:
+            set_mtp_active(True)
+
+        from mlx_lm import convert
+
+        # mlx-lm's convert() refuses to write into a pre-existing directory,
+        # so reserve a unique temp name and let convert() create it.
+        proxy_dir = Path(tempfile.mkdtemp(prefix="omlx_oq_proxy_", dir=working_dir))
+        shutil.rmtree(proxy_dir)
+        convert(
+            hf_path=model_path,
+            mlx_path=str(proxy_dir),
+            quantize=True,
+            q_bits=_PROXY_QUANT_BITS,
+            q_group_size=_PROXY_QUANT_GROUP_SIZE,
+            q_mode="affine",
+            dtype=dtype,
+            trust_remote_code=trust_remote_code,
+        )
+        return proxy_dir
+    finally:
+        if _have_lm_patch:
+            set_mtp_active(prev_active)
 
 
 def _measure_sensitivity_from_quantized_model(

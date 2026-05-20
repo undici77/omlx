@@ -115,3 +115,6 @@ omlx/admin/tailwindcss-*
 
 # Git worktrees
 .worktrees/
+
+# UV lockfile
+uv.lock

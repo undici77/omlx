@@ -16,6 +16,7 @@ import os
 import re
 import secrets
 import shutil
+import signal
 import sys
 import time
 from collections import deque
@@ -129,7 +130,10 @@ class ModelSettingsRequest(BaseModel):
     # DFlash (block diffusion speculative decoding)
     dflash_enabled: Optional[bool] = None
     dflash_draft_model: Optional[str] = None
-    dflash_draft_quant_bits: Optional[int] = None
+    dflash_draft_quant_enabled: Optional[bool] = None
+    dflash_draft_quant_weight_bits: Optional[int] = None
+    dflash_draft_quant_activation_bits: Optional[int] = None
+    dflash_draft_quant_group_size: Optional[int] = None
     dflash_max_ctx: Optional[int] = None
     dflash_in_memory_cache: Optional[bool] = None
     dflash_in_memory_cache_max_entries: Optional[int] = None
@@ -247,6 +251,7 @@ class GlobalSettingsRequest(BaseModel):
     claude_code_haiku_model: Optional[str] = None
 
     # Other integrations settings
+    integrations_copilot_model: Optional[str] = None
     integrations_codex_model: Optional[str] = None
     integrations_opencode_model: Optional[str] = None
     integrations_openclaw_model: Optional[str] = None
@@ -335,12 +340,48 @@ def _format_cache_size(size_bytes: int) -> str:
     return f"{mb:.0f}MB"
 
 
+_PAROQUANT_REASON = (
+    "Not supported on paroquant models yet (compatibility not verified)"
+)
+
+
+def _paroquant_compat_for_model(model_info: dict) -> tuple[bool, str]:
+    """Detect whether a model is paroquant-quantized.
+
+    Returns ``(is_paroquant, reason)``. ``is_paroquant`` is True iff
+    ``config.json`` declares ``quantization_config.quant_method == "paroquant"``.
+    Reason is the user-facing string surfaced as a tooltip/banner on the
+    admin model settings modal when paroquant gates an experimental toggle.
+    """
+    import json
+    from pathlib import Path
+
+    model_path = model_info.get("model_path") or ""
+    if not model_path:
+        return False, ""
+    cfg_path = Path(model_path) / "config.json"
+    if not cfg_path.exists():
+        return False, ""
+    try:
+        cfg = json.loads(cfg_path.read_text())
+    except Exception:
+        return False, ""
+    qcfg = cfg.get("quantization_config") or {}
+    method = (qcfg.get("quant_method") or "").lower()
+    if method == "paroquant":
+        return True, _PAROQUANT_REASON
+    return False, ""
+
+
 def _dflash_compat_for_model(model_info: dict) -> tuple[bool, str]:
     """Resolve dflash compatibility for an engine_pool model dict.
 
     Returns ``(False, "")`` when dflash-mlx is not installed so the UI hides
     the compat hint instead of pointing the user at an unrelated reason.
     """
+    is_paro, paro_reason = _paroquant_compat_for_model(model_info)
+    if is_paro:
+        return False, paro_reason
     try:
         from ..engine.dflash import is_dflash_compatible
     except ImportError:
@@ -366,6 +407,10 @@ def _mtp_compat_for_model(model_info: dict) -> tuple[bool, str]:
     from pathlib import Path
 
     from ..utils.model_loading import _has_mtp_heads, _is_mtp_compatible
+
+    is_paro, paro_reason = _paroquant_compat_for_model(model_info)
+    if is_paro:
+        return False, paro_reason
 
     model_path = model_info.get("model_path") or ""
     if not model_path:
@@ -1553,6 +1598,7 @@ async def list_models(is_admin: bool = Depends(require_admin)):
         model_id = model_info["id"]
         settings = all_settings.get(model_id)
 
+        is_paroquant, paroquant_reason = _paroquant_compat_for_model(model_info)
         compat_ok, compat_reason = _dflash_compat_for_model(model_info)
         mtp_compat_ok, mtp_compat_reason = _mtp_compat_for_model(model_info)
 
@@ -1576,6 +1622,8 @@ async def list_models(is_admin: bool = Depends(require_admin)):
             "dflash_ssd_cache_available": dflash_ssd_cache_available,
             "mtp_compatible": mtp_compat_ok,
             "mtp_compatibility_reason": mtp_compat_reason,
+            "is_paroquant": is_paroquant,
+            "paroquant_reason": paroquant_reason,
         }
 
         # Add settings if available
@@ -1610,7 +1658,10 @@ async def list_models(is_admin: bool = Depends(require_admin)):
                 "specprefill_threshold": settings.specprefill_threshold,
                 "dflash_enabled": settings.dflash_enabled,
                 "dflash_draft_model": settings.dflash_draft_model,
-                "dflash_draft_quant_bits": settings.dflash_draft_quant_bits,
+                "dflash_draft_quant_enabled": settings.dflash_draft_quant_enabled,
+                "dflash_draft_quant_weight_bits": settings.dflash_draft_quant_weight_bits,
+                "dflash_draft_quant_activation_bits": settings.dflash_draft_quant_activation_bits,
+                "dflash_draft_quant_group_size": settings.dflash_draft_quant_group_size,
                 "dflash_max_ctx": settings.dflash_max_ctx,
                 "dflash_in_memory_cache": settings.dflash_in_memory_cache,
                 "dflash_in_memory_cache_max_entries": settings.dflash_in_memory_cache_max_entries,
@@ -1885,8 +1936,14 @@ async def update_model_settings(
         current_settings.dflash_enabled = new_dflash_enabled
     if "dflash_draft_model" in sent:
         current_settings.dflash_draft_model = request.dflash_draft_model or None
-    if "dflash_draft_quant_bits" in sent:
-        current_settings.dflash_draft_quant_bits = request.dflash_draft_quant_bits or None
+    if "dflash_draft_quant_enabled" in sent:
+        current_settings.dflash_draft_quant_enabled = bool(request.dflash_draft_quant_enabled) if request.dflash_draft_quant_enabled is not None else None
+    if "dflash_draft_quant_weight_bits" in sent:
+        current_settings.dflash_draft_quant_weight_bits = int(request.dflash_draft_quant_weight_bits) if request.dflash_draft_quant_weight_bits is not None else None
+    if "dflash_draft_quant_activation_bits" in sent:
+        current_settings.dflash_draft_quant_activation_bits = int(request.dflash_draft_quant_activation_bits) if request.dflash_draft_quant_activation_bits is not None else None
+    if "dflash_draft_quant_group_size" in sent:
+        current_settings.dflash_draft_quant_group_size = int(request.dflash_draft_quant_group_size) if request.dflash_draft_quant_group_size is not None else None
     if "dflash_max_ctx" in sent:
         # 0/None means "unlimited" — the engine treats None as no fallback threshold
         value = request.dflash_max_ctx
@@ -2003,7 +2060,7 @@ async def update_model_settings(
                 )
         current_settings.mtp_enabled = new_mtp_enabled
 
-    # VLM MTP (mlx-vlm 191d7c8+, gemma4_assistant drafter)
+    # VLM MTP (mlx-vlm f96138e+, gemma4_assistant drafter)
     if "vlm_mtp_enabled" in sent:
         new_vlm_mtp = bool(request.vlm_mtp_enabled)
         if new_vlm_mtp:
@@ -2117,7 +2174,10 @@ async def update_model_settings(
             or "index_cache_freq" in sent
             or "dflash_enabled" in sent
             or "dflash_draft_model" in sent
-            or "dflash_draft_quant_bits" in sent
+            or "dflash_draft_quant_enabled" in sent
+            or "dflash_draft_quant_weight_bits" in sent
+            or "dflash_draft_quant_activation_bits" in sent
+            or "dflash_draft_quant_group_size" in sent
             or "dflash_max_ctx" in sent
             or "dflash_in_memory_cache" in sent
             or "dflash_in_memory_cache_max_entries" in sent
@@ -2543,6 +2603,66 @@ async def get_server_info(is_admin: bool = Depends(require_admin)):
     }
 
 
+def _schedule_self_terminate(delay: float = 0.5) -> None:
+    """Schedule ``os.kill(getpid(), SIGTERM)`` on the running loop.
+
+    Extracted from the restart handler so tests can patch this seam
+    instead of mocking ``asyncio.get_running_loop`` globally (which
+    interferes with FastAPI's TestClient portal).
+    """
+    pid = os.getpid()
+
+    def _kill() -> None:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            # Already exited (e.g. concurrent SIGTERM) — nothing to do.
+            pass
+        except Exception:  # pragma: no cover — best-effort signal.
+            logger.exception("Failed to self-terminate for restart")
+
+    asyncio.get_running_loop().call_later(delay, _kill)
+
+
+@router.post("/api/server/restart")
+async def restart_server(is_admin: bool = Depends(require_admin)):
+    """Trigger a server restart via the menubar supervisor.
+
+    The handler does not perform the restart itself — it returns 202 and
+    schedules ``os.kill(os.getpid(), SIGTERM)`` 500ms after the response
+    is queued. The menubar app's ``ServerManager._health_check_loop``
+    detects the process exit and respawns the server with a short
+    backoff (~5s).
+
+    Gated by the ``OMLX_SUPERVISED`` environment variable so plain
+    ``omlx serve`` (no supervisor) returns 503 rather than killing the
+    server with no respawn path.
+    """
+    supervisor = os.environ.get("OMLX_SUPERVISED")
+    if not supervisor:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Server is not running under a supervisor that can "
+                "respawn it. Restart unavailable — use the menu bar "
+                "app's Restart, or restart from your shell."
+            ),
+        )
+
+    _schedule_self_terminate(0.5)
+    logger.warning("Server restart requested (supervisor=%s)", supervisor)
+
+    # 5s backoff in ServerManager + ~1-2s startup = ~7s downtime budget.
+    return JSONResponse(
+        status_code=202,
+        content={
+            "status": "restarting",
+            "supervisor": supervisor,
+            "expected_downtime_seconds": 7,
+        },
+    )
+
+
 @router.get("/api/global-settings")
 async def get_global_settings(is_admin: bool = Depends(require_admin)):
     """
@@ -2648,6 +2768,7 @@ async def get_global_settings(is_admin: bool = Depends(require_admin)):
             "opencode_model": global_settings.integrations.opencode_model,
             "openclaw_model": global_settings.integrations.openclaw_model,
             "pi_model": global_settings.integrations.pi_model,
+            "copilot_model": global_settings.integrations.copilot_model,
             "openclaw_tools_profile": global_settings.integrations.openclaw_tools_profile,
         },
         "system": {
@@ -3012,6 +3133,9 @@ async def update_global_settings(
 
     # Apply integrations settings (Live - immediately applied)
     integrations_changed = False
+    if "integrations_copilot_model" in request.model_fields_set:
+        global_settings.integrations.copilot_model = request.integrations_copilot_model
+        integrations_changed = True
     if "integrations_codex_model" in request.model_fields_set:
         global_settings.integrations.codex_model = request.integrations_codex_model
         integrations_changed = True
@@ -3038,6 +3162,7 @@ async def update_global_settings(
         runtime_applied.append("integrations")
         logger.info(
             f"Integration settings updated: "
+            f"copilot={global_settings.integrations.copilot_model}, "
             f"codex={global_settings.integrations.codex_model}, "
             f"opencode={global_settings.integrations.opencode_model}, "
             f"openclaw={global_settings.integrations.openclaw_model}, "
@@ -4332,6 +4457,20 @@ async def delete_hf_model(
         logger.error(f"Failed to delete model directory {model_path}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to delete model: {e}")
 
+    # If the model was inside an org folder (organized layout) and that
+    # folder is now empty, drop it so the listing stays tidy.
+    parent = model_path.parent
+    if (
+        parent != parent_model_dir
+        and parent.exists()
+        and not any(parent.iterdir())
+    ):
+        try:
+            parent.rmdir()
+            logger.info(f"Removed empty org folder: {parent}")
+        except OSError as e:
+            logger.debug(f"Could not remove empty org folder {parent}: {e}")
+
     # Re-discover models
     if engine_pool is not None:
         settings_manager = _get_settings_manager()
@@ -5023,6 +5162,15 @@ async def start_oq_quantization(
         raise HTTPException(
             status_code=400,
             detail="Invalid dtype. Must be 'bfloat16' or 'float16'",
+        )
+    is_paro, _ = _paroquant_compat_for_model({"model_path": request.model_path})
+    if is_paro:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Model is already quantized with paroquant; "
+                "oQ re-quantization is not supported"
+            ),
         )
     try:
         task = await _oq_manager.start_quantization(

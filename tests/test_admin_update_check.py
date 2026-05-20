@@ -14,7 +14,8 @@ class _FakeResponse:
 
     def __init__(self, status_code, data=None):
         self.status_code = status_code
-        self._data = data or []
+        self._data = data if data is not None else []
+
 
     def json(self):
         return self._data
@@ -45,6 +46,7 @@ class TestCheckUpdate:
             "prerelease": False,
         }])
 
+
         with patch("omlx.admin.routes.asyncio") as mock_asyncio:
             mock_asyncio.to_thread = _make_async_return(fake_resp)
 
@@ -64,6 +66,7 @@ class TestCheckUpdate:
             "draft": False,
             "prerelease": False,
         }])
+
 
         with patch("omlx.admin.routes.asyncio") as mock_asyncio:
             mock_asyncio.to_thread = _make_async_return(fake_resp)
@@ -109,6 +112,7 @@ class TestCheckUpdate:
             "prerelease": False,
         }])
 
+
         call_count = 0
 
         async def counting_to_thread(*args, **kwargs):
@@ -132,11 +136,13 @@ class TestCheckUpdate:
     async def test_cache_expires(self):
         """Should hit API again if cache is manually cleared (simulating expiration)."""
         fake_resp = _FakeResponse(200, [{
+
             "tag_name": "v99.0.0",
-            "html_url": "https://github.com/...",
+            "html_url": "https://github.com/jundot/omlx/releases/tag/v99.0.0",
             "draft": False,
             "prerelease": False,
         }])
+
         call_count = 0
 
         async def counting_to_thread(func, *args, **kwargs):

@@ -450,6 +450,7 @@ class TestCheckUpdate:
                     "html_url": "https://github.com/jundot/omlx/releases/tag/v99.0.0.dev1",
                 }
             ],
+
         )
         with patch("omlx.admin.routes.asyncio") as mock_asyncio:
             mock_asyncio.to_thread = _make_async_return(fake_resp)
@@ -469,6 +470,7 @@ class TestCheckUpdate:
                     "html_url": "https://github.com/jundot/omlx/releases/tag/v99.0.0",
                 }
             ],
+
         )
         with patch("omlx.admin.routes.asyncio") as mock_asyncio:
             mock_asyncio.to_thread = _make_async_return(fake_resp)
@@ -488,6 +490,7 @@ class TestCheckUpdate:
                     "html_url": "https://github.com/jundot/omlx/releases/tag/v99.0.0rc1",
                 }
             ],
+
         )
         with patch("omlx.admin.routes.asyncio") as mock_asyncio:
             mock_asyncio.to_thread = _make_async_return(fake_resp)

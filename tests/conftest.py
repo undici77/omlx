@@ -13,11 +13,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 from unittest.mock import MagicMock
 
+import omlx  # Triggers global MLX mock installation for non-macOS
 import pytest
-
-# Robust MetaPathFinder for mlx and harmony
-from mlx_mock import install_mock
-install_mock()
 
 import mlx.core as mx
 import openai_harmony

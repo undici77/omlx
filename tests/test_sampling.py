@@ -28,9 +28,10 @@ from omlx.utils.sampling import (
 
 def _capture_rng() -> tuple:
     """Materialize the global RNG state so it can be compared across calls."""
-    s = mx.random.state[0]
+    s = mx.random.state
     mx.eval(s)
-    return tuple(np.asarray(s).tolist())
+    val = np.asarray(s).tolist()
+    return tuple(val) if isinstance(val, list) else (val,)
 
 
 def test_temp_zero_returns_argmax():

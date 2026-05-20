@@ -12,6 +12,30 @@ Features:
 - Tiered cache (GPU + paged SSD offloading)
 """
 
+import sys
+import platform
+
+# Install MLX and Harmony mocks for non-macOS environments BEFORE any other imports.
+# This ensures that any module in the package (or its dependencies) that
+# attempts to import 'mlx' or 'openai_harmony' gets the mock implementation.
+if platform.system() != "Darwin":
+    try:
+        # Use absolute-like path discovery to avoid premature package loading
+        import importlib.util
+        import os
+        
+        # Path to mlx_mock.py
+        mock_path = os.path.join(os.path.dirname(__file__), "utils", "mlx_mock.py")
+        if os.path.exists(mock_path):
+            spec = importlib.util.spec_from_file_location("omlx.utils.mlx_mock", mock_path)
+            if spec and spec.loader:
+                mock_module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(mock_module)
+                mock_module.install_mock()
+    except Exception:
+        # Silently fail as this is a convenience for non-macOS
+        pass
+
 from omlx._version import __version__
 
 # Continuous batching engine (core functionality, no torch required)

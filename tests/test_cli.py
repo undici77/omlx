@@ -12,6 +12,24 @@ import sys
 from unittest.mock import patch, MagicMock
 
 import pytest
+import os
+
+
+def run_cli(args, timeout=10):
+    """Helper to run the CLI in a subprocess with the MLX mock environment."""
+    env = os.environ.copy()
+    # Add project root and tests/ to PYTHONPATH so the MLX mock is picked up
+    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    tests_dir = os.path.dirname(os.path.abspath(__file__))
+    env["PYTHONPATH"] = f"{project_root}:{tests_dir}:{env.get('PYTHONPATH', '')}"
+
+    return subprocess.run(
+        [sys.executable, "-m", "omlx.cli"] + args,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        env=env,
+    )
 
 
 class TestCLIModule:
@@ -34,12 +52,7 @@ class TestCLIHelp:
 
     def test_main_help(self):
         """Test main CLI help output."""
-        result = subprocess.run(
-            [sys.executable, "-m", "omlx.cli", "--help"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
+        result = run_cli(["--help"])
         # Should succeed with help
         assert result.returncode == 0
         # Should show available commands
@@ -47,12 +60,7 @@ class TestCLIHelp:
 
     def test_serve_help(self):
         """Test serve command help output."""
-        result = subprocess.run(
-            [sys.executable, "-m", "omlx.cli", "serve", "--help"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
+        result = run_cli(["serve", "--help"])
         # Should succeed with help
         assert result.returncode == 0
         # Should show serve options
@@ -68,33 +76,18 @@ class TestCLIEntryPoint:
     def test_module_runnable(self):
         """Test that CLI module is runnable."""
         # Should not crash when running with --help
-        result = subprocess.run(
-            [sys.executable, "-m", "omlx.cli", "--help"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
+        result = run_cli(["--help"])
         assert result.returncode == 0
 
     def test_invalid_command_error(self):
         """Test error handling for invalid command."""
-        result = subprocess.run(
-            [sys.executable, "-m", "omlx.cli", "invalid_command"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
+        result = run_cli(["invalid_command"])
         # Should fail with non-zero exit code
         assert result.returncode != 0
 
     def test_no_command_shows_help(self):
         """Test that no command shows help."""
-        result = subprocess.run(
-            [sys.executable, "-m", "omlx.cli"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
+        result = run_cli([])
         # Should exit with non-zero (no command provided)
         assert result.returncode != 0
 
@@ -104,32 +97,17 @@ class TestServeCommandOptions:
 
     def test_serve_has_model_dir_option(self):
         """Test that serve command has --model-dir option."""
-        result = subprocess.run(
-            [sys.executable, "-m", "omlx.cli", "serve", "--help"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
+        result = run_cli(["serve", "--help"])
         assert "--model-dir" in result.stdout
 
     def test_serve_has_max_model_memory_option(self):
         """Test that serve command has --max-model-memory option."""
-        result = subprocess.run(
-            [sys.executable, "-m", "omlx.cli", "serve", "--help"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
+        result = run_cli(["serve", "--help"])
         assert "--max-model-memory" in result.stdout
 
     def test_serve_no_model_specific_options(self):
         """Test that serve command does not have model-specific options (managed via admin page)."""
-        result = subprocess.run(
-            [sys.executable, "-m", "omlx.cli", "serve", "--help"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
+        result = run_cli(["serve", "--help"])
         # These options are now managed via admin page, not CLI
         assert "--pin" not in result.stdout
         assert "--default-model" not in result.stdout
@@ -141,65 +119,35 @@ class TestServeCommandOptions:
 
     def test_serve_has_host_port_options(self):
         """Test that serve command has --host and --port options."""
-        result = subprocess.run(
-            [sys.executable, "-m", "omlx.cli", "serve", "--help"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
+        result = run_cli(["serve", "--help"])
         assert "--host" in result.stdout
         assert "--port" in result.stdout
 
     def test_serve_has_scheduler_options(self):
         """Test that serve command has scheduler options."""
-        result = subprocess.run(
-            [sys.executable, "-m", "omlx.cli", "serve", "--help"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
+        result = run_cli(["serve", "--help"])
         assert "--max-concurrent-requests" in result.stdout
 
     def test_serve_has_cache_options(self):
         """Test that serve command has cache options."""
-        result = subprocess.run(
-            [sys.executable, "-m", "omlx.cli", "serve", "--help"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
+        result = run_cli(["serve", "--help"])
         assert "--paged-ssd-cache-dir" in result.stdout
         assert "--paged-ssd-cache-max-size" in result.stdout
         assert "--no-cache" in result.stdout
 
     def test_serve_has_mcp_option(self):
         """Test that serve command has --mcp-config option."""
-        result = subprocess.run(
-            [sys.executable, "-m", "omlx.cli", "serve", "--help"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
+        result = run_cli(["serve", "--help"])
         assert "--mcp-config" in result.stdout
 
     def test_serve_has_base_path_option(self):
         """Test that serve command has --base-path option."""
-        result = subprocess.run(
-            [sys.executable, "-m", "omlx.cli", "serve", "--help"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
+        result = run_cli(["serve", "--help"])
         assert "--base-path" in result.stdout
 
     def test_serve_has_api_key_option(self):
         """Test that serve command has --api-key option."""
-        result = subprocess.run(
-            [sys.executable, "-m", "omlx.cli", "serve", "--help"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
+        result = run_cli(["serve", "--help"])
         assert "--api-key" in result.stdout
 
 
@@ -209,25 +157,22 @@ class TestLaunchCommandOptions:
 
     def test_launch_has_host_port_options(self):
         """Test that launch command has --host and --port options."""
-        result = subprocess.run(
-            [sys.executable, "-m", "omlx.cli", "launch", "--help"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
+        result = run_cli(["launch", "--help"])
         assert result.returncode == 0
         assert "--host" in result.stdout
         assert "--port" in result.stdout
 
     def test_launch_has_model_option(self):
         """Test that launch command has --model option."""
-        result = subprocess.run(
-            [sys.executable, "-m", "omlx.cli", "launch", "--help"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
+        result = run_cli(["launch", "--help"])
         assert "--model" in result.stdout
+
+    def test_launch_lists_hermes(self):
+        """Test that launch help lists Hermes as an available integration."""
+        result = run_cli(["launch", "--help"])
+        assert result.returncode == 0
+        assert "hermes" in result.stdout
+        assert "Hermes Agent" in result.stdout
 
 
 class TestLaunchCommandFunction:
@@ -284,7 +229,63 @@ class TestLaunchCommandFunction:
             context_window=32768,
             max_tokens=8192,
             model_type="vlm",
+            extra_args=None,
         )
+
+    def test_launch_command_forwards_extra_args(self):
+        """Unknown CLI tokens (e.g. --resume <id>) should reach integration.launch."""
+        from omlx.cli import launch_command
+
+        integration = MagicMock()
+        integration.display_name = "Claude Code"
+        integration.is_installed.return_value = True
+
+        health_response = MagicMock()
+        health_response.raise_for_status.return_value = None
+
+        status_response = MagicMock()
+        status_response.ok = True
+        status_response.json.return_value = {
+            "models": [
+                {
+                    "id": "qwen2.5-vl",
+                    "model_type": "llm",
+                    "max_context_window": 32768,
+                    "max_tokens": 8192,
+                }
+            ]
+        }
+
+        settings = MagicMock()
+        settings.server.host = "127.0.0.1"
+        settings.server.port = 8000
+
+        args = argparse.Namespace(
+            tool="claude",
+            host=None,
+            port=None,
+            api_key="test-key",
+            model="qwen2.5-vl",
+            tools_profile="coding",
+        )
+
+        with patch("requests.get", side_effect=[health_response, status_response]):
+            with patch("omlx.integrations.get_integration", return_value=integration):
+                with patch("omlx.settings.GlobalSettings.load", return_value=settings):
+                    launch_command(args, extra_args=["--resume", "abc123"])
+
+        _, kwargs = integration.launch.call_args
+        assert kwargs["extra_args"] == ["--resume", "abc123"]
+
+
+class TestLaunchArgvParsing:
+    """Tests for top-level argv parsing of `omlx launch ...`."""
+
+    def test_serve_still_rejects_unknown_args(self):
+        """Non-launch commands must keep strict argparse rejection."""
+        result = run_cli(["serve", "--bogus-flag"])
+        assert result.returncode != 0
+        assert "unrecognized arguments" in result.stderr or "--bogus-flag" in result.stderr
 
 
 class TestServeCommandFunctions:
@@ -297,12 +298,7 @@ class TestServeCommandFunctions:
 
     def test_serve_model_dir_optional_with_default(self):
         """Test that serve --model-dir is optional with default ~/.omlx/models."""
-        result = subprocess.run(
-            [sys.executable, "-m", "omlx.cli", "serve", "--help"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
+        result = run_cli(["serve", "--help"])
         # Should show that model-dir has a default
         assert "default" in result.stdout.lower()
         # Help text should mention ~/.omlx/models or similar
@@ -374,22 +370,12 @@ class TestCLIDocstrings:
 
     def test_main_has_description(self):
         """Test that main help has description."""
-        result = subprocess.run(
-            [sys.executable, "-m", "omlx.cli", "--help"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
+        result = run_cli(["--help"])
         # Should have some description
         assert "omlx" in result.stdout.lower() or "llm" in result.stdout.lower()
 
     def test_serve_has_description(self):
         """Test that serve command has description."""
-        result = subprocess.run(
-            [sys.executable, "-m", "omlx.cli", "serve", "--help"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
+        result = run_cli(["serve", "--help"])
         # Should describe multi-model serving
         assert "multi-model" in result.stdout.lower() or "server" in result.stdout.lower()

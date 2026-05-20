@@ -31,6 +31,7 @@ UNIVERSAL_PROFILE_FIELDS = (
     "preserve_thinking",
     "thinking_budget_enabled",
     "thinking_budget_tokens",
+    "preserve_thinking",
     "reasoning_parser",
     "max_tool_result_tokens",
     "chat_template_kwargs",
@@ -53,6 +54,10 @@ MODEL_SPECIFIC_PROFILE_FIELDS = (
     "dflash_in_memory_cache_max_entries",
     "dflash_in_memory_cache_max_bytes",
     "dflash_ssd_cache",
+    "dflash_draft_window_size",
+    "dflash_draft_sink_size",
+    "dflash_verify_mode",
+
     "mtp_enabled",
     "vlm_mtp_enabled",
     "vlm_mtp_draft_model",

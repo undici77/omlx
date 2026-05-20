@@ -73,7 +73,7 @@ macOS 15.0+ (Sequoia), Python 3.11+ (推奨) および Apple Silicon (M1/M2/M3/M
 
 ### macOSアプリ
 
-ApplicationsフォルダからoMLXを起動します。ウェルカム画面が3つのステップを案内します — モデルディレクトリの設定、サーバー起動、最初のモデルダウンロード。以上です。OpenClaw、OpenCode、Codex、Copilotに接続するには、[統合](#統合)を参照してください。
+ApplicationsフォルダからoMLXを起動します。ウェルカム画面が3つのステップを案内します — モデルディレクトリの設定、サーバー起動、最初のモデルダウンロード。以上です。OpenClaw、OpenCode、Codex、Hermes Agent、Copilotに接続するには、[統合](#統合)を参照してください。
 
 <p align="center">
   <img src="docs/images/Screenshot 2026-02-10 at 00.36.32.png" alt="oMLX ウェルカム画面" width="360">
@@ -164,7 +164,7 @@ Claude Codeで小さなコンテキストモデルを実行するためのコン
 
 ### 統合
 
-管理画面からOpenClaw、OpenCode、Codex、Copilot、Piをワンクリックで設定できます。設定ファイルを手動で編集する必要はありません。
+管理画面からOpenClaw、OpenCode、Codex、Hermes Agent、Copilot、Piをワンクリックで設定できます。設定ファイルを手動で編集する必要はありません。
 
 <p align="center">
   <img src="docs/images/omlx_integrations.png" alt="oMLX 統合" width="720">

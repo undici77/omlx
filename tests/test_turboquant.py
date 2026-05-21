@@ -26,6 +26,7 @@ def _sample_unit_vectors(count: int, dim: int) -> mx.array:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 def test_turboquant_mse_matches_paper_small_bit_distortions():
     vectors = _sample_unit_vectors(256, 64)
     expected = {1: 0.36, 2: 0.117, 3: 0.03}
@@ -55,6 +56,7 @@ def test_turboquant_prod_is_nearly_unbiased_across_seeds():
     assert abs(bias) < 0.05
 
 
+@pytest.mark.slow
 def test_fractional_turboquant_improves_reconstruction():
     vectors = mx.random.normal((1, 2, 32, 64))
 
@@ -77,6 +79,7 @@ def test_fractional_turboquant_improves_reconstruction():
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 def test_turboquant_cache_round_trip():
     keys = mx.random.normal((1, 2, 16, 32))
     values = mx.random.normal((1, 2, 16, 32))

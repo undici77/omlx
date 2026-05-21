@@ -30,7 +30,10 @@ class RealTokenizer:
 @pytest.fixture
 def harmony_encoding():
     """Get the real openai_harmony encoding."""
-    return load_harmony_encoding("HarmonyGptOss")
+    try:
+        return load_harmony_encoding("HarmonyGptOss")
+    except Exception as e:
+        pytest.skip(f"HarmonyGptOss vocab unavailable (offline?): {e}")
 
 
 @pytest.fixture

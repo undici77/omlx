@@ -16,7 +16,10 @@ from omlx.adapter.harmony import (
 @pytest.fixture
 def encoding():
     """Load HarmonyGptOss encoding."""
-    return load_harmony_encoding("HarmonyGptOss")
+    try:
+        return load_harmony_encoding("HarmonyGptOss")
+    except Exception as e:
+        pytest.skip(f"HarmonyGptOss vocab unavailable (offline?): {e}")
 
 
 @pytest.fixture

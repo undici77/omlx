@@ -1162,6 +1162,7 @@ class TestNativeEmbeddingLoading:
         assert result is False
         assert model._loaded is False
 
+    @pytest.mark.slow
     def test_embed_produces_normalized_vectors(self, tmp_path):
         """Test that embed produces L2-normalized embedding vectors."""
         import sys, math

@@ -100,6 +100,7 @@ class MockMLXLoader(importlib.abc.Loader):
 
             self.dtype = dtype or str(self._data.dtype)
             self.shape, self.size, self.ndim = self._data.shape, self._data.size, self._data.ndim
+            self.nbytes = self._data.nbytes
 
         def _to_np(self, other):
             if hasattr(other, "_data"): return other._data
@@ -118,7 +119,7 @@ class MockMLXLoader(importlib.abc.Loader):
             return self.__class__(self._data.reshape(new_shape), dtype=self.dtype)
         def transpose(self, *axes):
             if len(axes) == 1 and isinstance(axes[0], (list, tuple)): axes = axes[0]
-            return self.__class__(self._data.transpose(axes), dtype=self.dtype)
+            return self.__class__(self._data.transpose(axes if axes else None), dtype=self.dtype)
         def squeeze(self, axis=None): return self.__class__(np.squeeze(self._data, axis=axis), dtype=self.dtype)
         def abs(self): return self.__class__(np.abs(self._data), dtype=self.dtype)
         def max(self, axis=None, keepdims=False): return self.__class__(np.max(self._data, axis=axis, keepdims=keepdims), dtype=self.dtype)
@@ -143,6 +144,15 @@ class MockMLXLoader(importlib.abc.Loader):
         def __sub__(self, other): return self.__class__(self._data - self._to_np(other))
         def __mul__(self, other): return self.__class__(self._data * self._to_np(other))
         def __truediv__(self, other): return self.__class__(self._data / self._to_np(other))
+        def __lshift__(self, other): return self.__class__(self._data.astype(int) << (other._data.astype(int) if hasattr(other, "_data") else int(other)))
+        def __rshift__(self, other): return self.__class__(self._data.astype(int) >> (other._data.astype(int) if hasattr(other, "_data") else int(other)))
+        def __and__(self, other): return self.__class__(self._data.astype(int) & (self._to_np(other).astype(int)))
+        def __or__(self, other): return self.__class__(self._data.astype(int) | (self._to_np(other).astype(int)))
+        def __xor__(self, other): return self.__class__(self._data.astype(int) ^ (self._to_np(other).astype(int)))
+        def __ior__(self, other):
+            self._data = (self._data.astype(int) | (self._to_np(other).astype(int))).astype(self._data.dtype)
+            return self
+        def __matmul__(self, other): return self.__class__(self._data @ self._to_np(other))
         def __floordiv__(self, other): return self.__class__(self._data // self._to_np(other))
         def __pow__(self, other): return self.__class__(self._data ** self._to_np(other))
         def __radd__(self, other): return self.__class__(self._to_np(other) + self._data)
@@ -162,8 +172,39 @@ class MockMLXLoader(importlib.abc.Loader):
             else:
                 for x in self._data: yield self.__class__(x, dtype=self.dtype)
         def __array__(self, dtype=None): return self._data.astype(dtype) if dtype else self._data
-        def view(self, dtype): return self.__class__(self._data, dtype=dtype)
+        def view(self, dtype):
+            np_dtype = _map_dtype(dtype) or dtype
+            try:
+                result = self.__class__(self._data.view(np_dtype))
+            except Exception:
+                result = self.__class__(self._data.astype(np_dtype))
+            # Preserve MLX dtype label (e.g. "bfloat16" instead of mapped "float16")
+            mlx_dtype = dtype if isinstance(dtype, str) else getattr(dtype, "__name__", None)
+            if mlx_dtype:
+                result.dtype = mlx_dtype
+            return result
+        def __int__(self): return int(self._data.item())
+        def __index__(self): return int(self._data.item())
         def __buffer__(self, flags): return self._data.__buffer__(flags)
+        @property
+        def at(self):
+            """MLX scatter-update syntax: arr.at[idx].add(val) / arr.at[idx].set(val)."""
+            outer = self
+            class _AtIndexer:
+                def __init__(self, idx): self._idx = idx
+                def add(self, val):
+                    d = outer._data.copy()
+                    v = val._data if hasattr(val, "_data") else np.array(val)
+                    np.add.at(d, self._idx, v)
+                    return outer.__class__(d, dtype=outer.dtype)
+                def set(self, val):
+                    d = outer._data.copy()
+                    v = val._data if hasattr(val, "_data") else np.array(val)
+                    d[self._idx] = v
+                    return outer.__class__(d, dtype=outer.dtype)
+            class _At:
+                def __getitem__(self, idx): return _AtIndexer(idx)
+            return _At()
         @property
         def T(self): return self.__class__(self._data.T, dtype=self.dtype)
 
@@ -269,17 +310,32 @@ class MockMLXLoader(importlib.abc.Loader):
                         if name == "split": return lambda a, i, axis=0: [loader.array(x) for x in np.split(loader.array(a)._data, i, axis=axis)]
                         if name in ("zeros", "ones"):
                             return lambda shape, dtype=None, **k: loader.array(getattr(np, name)(shape, dtype=_map_dtype(dtype) or "float32"), dtype=dtype)
+                        if name == "full":
+                            return lambda shape, fill_value, dtype=None, **k: loader.array(np.full(shape, fill_value, dtype=_map_dtype(dtype) or "float32"), dtype=dtype)
                         if name == "arange":
                             return lambda *a, dtype=None, **k: loader.array(np.arange(*a, dtype=_map_dtype(dtype) or "float32"), dtype=dtype)
-                        if name in ("reshape", "transpose", "expand_dims", "squeeze", "broadcast_to", "argmax", "argmin", "zeros_like", "ones_like"):
+                        if name in ("reshape", "transpose", "expand_dims", "squeeze", "broadcast_to", "argmax", "argmin", "zeros_like", "ones_like", "argsort"):
                             return lambda a, *args, **kwargs: loader.array(getattr(np, name)(loader.array(a)._data, *args, **kwargs))
                         if name == "matmul": return lambda a, b: loader.array(loader.array(a)._data @ loader.array(b)._data)
                         if name in ("mean", "max", "min", "sum"): return lambda a, axis=None, keepdims=False: loader.array(getattr(np, name)(loader.array(a)._data, axis=axis, keepdims=keepdims))
                         if name == "take": return lambda a, i, axis=None: loader.array(np.take(loader.array(a)._data, loader.array(i)._data.astype(int), axis=axis))
                         if name == "einsum": return lambda sub, *operands: loader.array(np.einsum(sub, *[loader.array(o)._data for o in operands]))
                         if name == "clip": return lambda a, a_min, a_max: loader.array(np.clip(loader.array(a)._data, a_min, a_max))
-                        if name in ("exp", "log", "abs", "sqrt", "round", "floor", "ceil", "sign"): return lambda a: loader.array(getattr(np, name)(loader.array(a)._data))
+                        if name in ("exp", "log", "abs", "sqrt", "round", "floor", "ceil", "sign", "cos", "sin", "tan", "tanh", "sigmoid"): return lambda a: loader.array(getattr(np, name)(loader.array(a)._data))
+                        if name == "pad":
+                            return lambda a, pad_width, mode="constant", **k: loader.array(np.pad(loader.array(a)._data, pad_width, mode=mode, **{kk: vv for kk, vv in k.items() if kk == "constant_values"}))
+                        if name == "copy": return lambda a, **k: loader.array(loader.array(a)._data.copy())
+                        if name == "stream":
+                            import contextlib
+                            @contextlib.contextmanager
+                            def _stream_cm(*a, **k): yield
+                            return _stream_cm
                         if name in ("maximum", "minimum", "where"): return lambda *a: loader.array(getattr(np, name)(*[loader.array(x)._data if hasattr(x, "_data") else x for x in a]))
+                        if name == "contiguous": return lambda a, **k: a
+                        if name in ("stop_gradient", "eval"): return lambda *a, **k: a[0] if a else None
+                        if name == "power": return lambda a, b: loader.array(np.power(loader.array(a)._data, loader.array(b)._data if hasattr(b, "_data") else b))
+                        if name == "from_fp8": return lambda a, dtype=None, **k: loader.array(loader.array(a)._data.astype(_map_dtype(dtype) or "float32"), dtype=dtype)
+                        if name == "clear_cache": return lambda *a, **k: None
 
                     def _default_func(*args, **kwargs):
                         if args and hasattr(args[0], "shape"): return loader.array(np.zeros(args[0].shape))
@@ -301,9 +357,9 @@ class MockMLXLoader(importlib.abc.Loader):
             def _advance():
                 try: m.state._data[0] += 1
                 except Exception: pass
-            m.uniform = lambda l=0, h=1, s=None, **k: (_advance() or loader.array(np.random.uniform(l, h, size=s if s is not None else ())))
-            m.normal = lambda s=None, **k: (_advance() or loader.array(np.random.normal(size=s if s is not None else ())))
-            m.categorical = lambda l, n=1, a=-1, **k: (_advance() or loader.array(np.random.randint(0, loader.array(l).shape[a] if loader.array(l).ndim > abs(a) else 1, size=loader.array(l).shape[:a] + loader.array(l).shape[a+1:] if n == 1 else (n,)), dtype="int32"))
+            m.uniform = lambda l=0, h=1, s=None, **k: (_advance() or loader.array(np.random.uniform(l, h, size=s if s is not None else k.get("shape", ()))))
+            m.normal = lambda s=None, **k: (_advance() or loader.array(np.random.normal(size=s if s is not None else k.get("shape", ()))))
+            m.categorical = lambda l, n=1, a=-1, **k: (_advance() or loader.array(np.random.randint(0, loader.array(l).shape[a] if loader.array(l).ndim > abs(a) else 1, size=loader.array(l).shape[:a] if n == 1 else (n,)), dtype="int32"))
             m.seed = lambda s: None; sys.modules[spec.name] = m; return m
         if spec.name == "mlx.core.linalg":
             m = MockModule(spec.name)
@@ -348,7 +404,9 @@ class MockMLXLoader(importlib.abc.Loader):
             module.inf, module.nan, module.array = float("inf"), float("nan"), self.array
             module.get_active_memory, module.get_peak_memory, module.eval = (lambda: 0), (lambda: 0), (lambda *a: None)
             module.compile = lambda f=None, **k: (lambda f: f) if f is None else f
-            module.synchronize = lambda: None
+            module.synchronize = lambda *a: None
+            module.cpu = "cpu"
+            module.gpu = "gpu"
             module.metal = type("Metal", (), {"is_available": lambda *a, **k: False, "device_info": lambda *a, **k: {"max_buffer_length": 1 << 30}})()
 
 class MockMLXFinder(importlib.abc.MetaPathFinder):

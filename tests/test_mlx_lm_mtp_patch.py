@@ -377,8 +377,13 @@ class TestBatchGeneratorDispatch:
         assert hasattr(GenerationBatch, "_omlx_mtp_patched")
 
     def test_is_mtp_eligible_requires_mtp_forward_and_solo_batch(self):
-        from omlx.patches import mlx_lm_mtp
-        from omlx.patches.mlx_lm_mtp.batch_generator import _is_mtp_eligible
+        from omlx.patches.mlx_lm_mtp import (
+            is_mtp_active,
+            set_mtp_active,
+        )
+        from omlx.patches.mlx_lm_mtp import batch_generator
+
+        _is_mtp_eligible = batch_generator._is_mtp_eligible
 
         class _NonMtpModel:
             pass
@@ -405,17 +410,9 @@ class TestBatchGeneratorDispatch:
                 self.model = model
                 self.uids = uids
 
-        prior_active = mlx_lm_mtp.is_mtp_active()
+        prior_active = is_mtp_active()
         try:
-            # Head attached but the per-load mtp_active flag is off
-            # (e.g. VLM runtime patches attach unconditionally so weight
-            # load matches, while inference-time MTP stays disabled).
-            mlx_lm_mtp.set_mtp_active(False)
-            assert (
-                _is_mtp_eligible(_GenBatch(_MtpModel(), uids=[1])) is False
-            )
-
-            mlx_lm_mtp.set_mtp_active(True)
+            set_mtp_active(False)
             # Non-MTP model never triggers the MTP path.
             assert _is_mtp_eligible(_GenBatch(_NonMtpModel(), uids=[1])) is False
             # Has mtp_forward but no attached head → still off.
@@ -423,6 +420,12 @@ class TestBatchGeneratorDispatch:
                 _is_mtp_eligible(_GenBatch(_MtpModelWithoutHead(), uids=[1]))
                 is False
             )
+            # Head attached but the per-load mtp_active flag is off
+            # (e.g. VLM runtime patches attach unconditionally so weight
+            # load matches, while inference-time MTP stays disabled).
+            assert _is_mtp_eligible(_GenBatch(_MtpModel(), uids=[1])) is False
+
+            set_mtp_active(True)
             # Has both method and head + batch=1 + flag on → triggers the path.
             assert _is_mtp_eligible(_GenBatch(_MtpModel(), uids=[1])) is True
             # MTP model with batch=2 falls back to standard step.
@@ -431,8 +434,228 @@ class TestBatchGeneratorDispatch:
             )
             # Empty batch never triggers.
             assert _is_mtp_eligible(_GenBatch(_MtpModel(), uids=[])) is False
+            # Grammar-constrained decoding relies on GenerationBatch._step hooks,
+            # so MTP must stay off until it mirrors accept_token explicitly.
+            with pytest.MonkeyPatch.context() as mp:
+                mp.setattr(batch_generator, "_has_grammar_processors", lambda _: True)
+                assert _is_mtp_eligible(_GenBatch(_MtpModel(), uids=[1])) is False
         finally:
-            mlx_lm_mtp.set_mtp_active(prior_active)
+            set_mtp_active(prior_active)
+
+    def test_mtp_state_valid_requires_single_matching_uid(self):
+        from omlx.patches.mlx_lm_mtp.batch_generator import (
+            _MtpState,
+            _mtp_state_valid_for_batch,
+        )
+
+        state = _MtpState(uid=7)
+
+        assert _mtp_state_valid_for_batch(SimpleNamespace(uids=[7]), state) is True
+        assert _mtp_state_valid_for_batch(SimpleNamespace(uids=[8]), state) is False
+        assert _mtp_state_valid_for_batch(SimpleNamespace(uids=[7, 8]), state) is False
+        assert _mtp_state_valid_for_batch(SimpleNamespace(uids=[]), state) is False
+        assert _mtp_state_valid_for_batch(SimpleNamespace(uids=[7]), None) is False
+
+    def test_drop_invalid_mtp_state_after_batch_reshape(self):
+        from omlx.patches.mlx_lm_mtp.batch_generator import (
+            _MtpState,
+            _drop_invalid_mtp_state,
+        )
+
+        batch = SimpleNamespace(uids=[1, 2], _omlx_mtp_state=_MtpState(uid=1))
+
+        dropped = _drop_invalid_mtp_state(batch, "test-reshape")
+
+        assert dropped is not None
+        assert not hasattr(batch, "_omlx_mtp_state")
+
+    def test_drop_invalid_mtp_state_keeps_matching_singleton(self):
+        from omlx.patches.mlx_lm_mtp.batch_generator import (
+            _MtpState,
+            _drop_invalid_mtp_state,
+        )
+
+        state = _MtpState(uid=1)
+        batch = SimpleNamespace(uids=[1], _omlx_mtp_state=state)
+
+        kept = _drop_invalid_mtp_state(batch, "test-filter")
+
+        assert kept is state
+        assert batch._omlx_mtp_state is state
+
+    def test_prepare_mtp_state_lazy_activates_with_current_uid(self, monkeypatch):
+        from omlx.patches.mlx_lm_mtp import batch_generator
+
+        class _MtpModel:
+            def __init__(self):
+                self.mtp = object()
+
+            def mtp_forward(self, *_):
+                pass
+
+        batch = SimpleNamespace(
+            model=_MtpModel(),
+            uids=[42],
+            logits_processors=[],
+        )
+
+        def fake_post_init(gen_batch):
+            gen_batch._omlx_mtp_state = batch_generator._MtpState(
+                uid=gen_batch.uids[0]
+            )
+
+        monkeypatch.setattr(batch_generator, "_post_init_mtp", fake_post_init)
+
+        state = batch_generator._prepare_mtp_state_for_next(batch)
+
+        assert state is batch._omlx_mtp_state
+        assert state.uid == 42
+
+    def test_prepare_mtp_state_drops_stale_owner_and_reinitializes(self, monkeypatch):
+        from omlx.patches.mlx_lm_mtp import batch_generator
+
+        class _MtpModel:
+            def __init__(self):
+                self.mtp = object()
+
+            def mtp_forward(self, *_):
+                pass
+
+        old_state = batch_generator._MtpState(uid=1)
+        batch = SimpleNamespace(
+            model=_MtpModel(),
+            uids=[2],
+            logits_processors=[],
+            _omlx_mtp_state=old_state,
+        )
+
+        def fake_post_init(gen_batch):
+            gen_batch._omlx_mtp_state = batch_generator._MtpState(
+                uid=gen_batch.uids[0]
+            )
+
+        monkeypatch.setattr(batch_generator, "_post_init_mtp", fake_post_init)
+
+        state = batch_generator._prepare_mtp_state_for_next(batch)
+
+        assert state is batch._omlx_mtp_state
+        assert state is not old_state
+        assert state.uid == 2
+
+    # --- reconcile-on-drop (singleton -> batch reshape) ---------------------
+
+    def _make_reconcile_batch(self, monkeypatch, *, uid, tokens, queue_entries):
+        """Build a fake singleton batch and stub the heavy backbone/cache calls.
+
+        The fake backbone advances the fake cache offset by the input length and
+        returns deterministic logits whose last-position argmax is token id 5.
+        """
+        from collections import deque
+
+        import mlx.core as mx
+        import numpy as np
+
+        from omlx.patches.mlx_lm_mtp import batch_generator
+
+        vocab = 8
+
+        class _FakeCache:
+            def __init__(self):
+                self.offset = 0
+
+        def fake_rebuild(model):
+            return [_FakeCache()]
+
+        def fake_backbone(model, inputs, cache, n_confirmed=0):
+            cache[0].offset = int(inputs.shape[1])
+            arr = np.full((1, int(inputs.shape[1]), vocab), -10.0, dtype=np.float32)
+            arr[0, -1, 5] = 10.0  # last-position argmax -> token 5
+            return mx.array(arr), None, None
+
+        monkeypatch.setattr(batch_generator, "_rebuild_singleton_cache", fake_rebuild)
+        monkeypatch.setattr(batch_generator, "_call_backbone", fake_backbone)
+        monkeypatch.setattr(batch_generator, "_get_generation_stream", lambda: mx.cpu)
+
+        def greedy(lp_2d):
+            return mx.argmax(lp_2d, axis=-1).astype(mx.uint32)
+
+        state = batch_generator._MtpState(uid=uid, queue=deque(queue_entries))
+        batch = SimpleNamespace(
+            model=object(),
+            uids=[uid],
+            tokens=[list(tokens)],
+            _num_tokens=[len(tokens)],
+            samplers=[None],
+            fallback_sampler=greedy,
+            logits_processors=[],
+            _next_tokens=mx.array([999]),  # deliberately stale
+            _next_logprobs=[],
+            _token_context=[],
+            prompt_cache=[object()],  # old MTP-advanced cache, to be replaced
+            _omlx_mtp_state=state,
+        )
+        return batch_generator, batch, state
+
+    def test_reconcile_uses_queue_front_as_next_token(self, monkeypatch):
+        import mlx.core as mx
+
+        bg, batch, state = self._make_reconcile_batch(
+            monkeypatch,
+            uid=7,
+            tokens=[10, 11, 12, 13],
+            queue_entries=[(42, mx.zeros((8,)), "draft")],
+        )
+
+        assert bg._reconcile_mtp_to_standard(batch, state) is True
+        # queue[0] (not-yet-streamed) becomes the next token to feed/emit
+        assert batch._next_tokens.tolist() == [42]
+        assert len(batch._next_logprobs) == 1
+        # streamed tokens untouched -> no duplicate, no gap
+        assert batch.tokens[0] == [10, 11, 12, 13]
+        assert batch._num_tokens[0] == 4
+        assert 42 not in batch.tokens[0]
+        # cache rebuilt to contain exactly the streamed tokens
+        assert batch.prompt_cache[0].offset == 4
+
+    def test_reconcile_empty_queue_samples_from_logits(self, monkeypatch):
+        bg, batch, state = self._make_reconcile_batch(
+            monkeypatch,
+            uid=7,
+            tokens=[10, 11, 12, 13],
+            queue_entries=[],
+        )
+
+        assert bg._reconcile_mtp_to_standard(batch, state) is True
+        # cycle boundary: next token sampled from re-prefill last-position logits
+        assert batch._next_tokens.tolist() == [5]
+        assert 5 not in batch.tokens[0]
+        assert batch.tokens[0] == [10, 11, 12, 13]
+        assert batch.prompt_cache[0].offset == 4
+
+    def test_reconcile_returns_false_on_empty_tokens(self, monkeypatch):
+        bg, batch, state = self._make_reconcile_batch(
+            monkeypatch,
+            uid=7,
+            tokens=[],
+            queue_entries=[],
+        )
+
+        # Nothing streamed yet -> cannot re-prefill; signal plain-drop fallback.
+        assert bg._reconcile_mtp_to_standard(batch, state) is False
+
+    def test_reconcile_fallback_on_rebuild_failure(self, monkeypatch):
+        import mlx.core as mx
+
+        bg, batch, state = self._make_reconcile_batch(
+            monkeypatch,
+            uid=7,
+            tokens=[10, 11],
+            queue_entries=[(42, mx.zeros((8,)), "draft")],
+        )
+        monkeypatch.setattr(bg, "_rebuild_singleton_cache", lambda model: None)
+
+        # Cache rebuild unavailable -> degrade to plain drop, never crash.
+        assert bg._reconcile_mtp_to_standard(batch, state) is False
 
 
 # ---------------------------------------------------------------------------

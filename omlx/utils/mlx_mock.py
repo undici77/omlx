@@ -342,9 +342,9 @@ class MockMLXLoader(importlib.abc.Loader):
                         if name == "from_fp8": return lambda a, dtype=None, **k: loader.array(loader.array(a)._data.astype(_map_dtype(dtype) or "float32"), dtype=dtype)
                         if name == "clear_cache": return lambda *a, **k: None
 
-                    def _default_func(*args, **kwargs):
-                        if args and hasattr(args[0], "shape"): return loader.array(np.zeros(args[0].shape))
-                        return loader.array(np.zeros((1, 1)))
+                    _captured_name = name
+                    def _default_func(*args, _n=_captured_name, **kwargs):
+                        raise NotImplementedError(f"mlx.{_n}() is not implemented in the MLX mock. Add it to omlx/utils/mlx_mock.py.")
                     self.__mock_items[name] = _default_func
                 return self.__mock_items[name]
 

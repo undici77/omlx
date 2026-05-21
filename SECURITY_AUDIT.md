@@ -99,4 +99,78 @@ oMLX is compliant with **privacy-by-design** principles:
 3. **Data Sovereignty:** The user owns the weights, the logs, and the keys.
 
 ---
-*This document should be updated whenever new API routes or storage mechanisms are added to the oMLX project.*
+
+## 7. CI / Non-macOS Testing Security Strategy
+
+### 7.1 The MLX Mock: Scope and Safety
+
+oMLX uses a NumPy-backed import-hook mock (`omlx/utils/mlx_mock.py`) to enable test execution on Linux/CI where the real `mlx` C++ library cannot be installed. The following security properties are **by design and must be preserved**:
+
+**The mock is installed at import time via `sys.meta_path`, not at test time.** The chain is:
+```
+conftest.py → import omlx → omlx/__init__.py → omlx/utils/mlx_mock.py → install_mock()
+```
+This means the mock is active for the entire test process. There is no risk of "real MLX" being loaded accidentally on Linux/CI: the `MockMLXFinder` sits at `sys.meta_path[0]` and intercepts all `mlx.*` imports before the normal import machinery runs.
+
+**The mock never reaches production macOS deployments.** The guard in `omlx/__init__.py` is:
+```python
+if platform.system() != "Darwin":
+    # load and install mock
+```
+On macOS (the only production platform), this block is skipped entirely and the real `mlx` is used. The mock cannot accidentally activate in production.
+
+**Single source of truth:** As of commit `fe6066a` (May 2026), `tests/mlx_mock.py` is a 5-line shim that re-exports from `omlx/utils/mlx_mock.py`. There is **one file to audit**, not two. If `tests/mlx_mock.py` is ever found to contain significant logic again, that is a regression — consolidate it back to a shim immediately.
+
+### 7.2 Fail-Loud Mock Policy
+
+The mock's unknown-function fallback raises `NotImplementedError` (not a silent zeros return):
+```python
+def _default_func(*args, _n=_captured_name, **kwargs):
+    raise NotImplementedError(
+        f"mlx.{_n}() is not implemented in the MLX mock. "
+        f"Add it to omlx/utils/mlx_mock.py."
+    )
+```
+**Security rationale:** Silent wrong-value returns mask bugs. A test that passes because `mx.some_function()` silently returned zeros is worse than a test that fails loudly. The `NotImplementedError` ensures every new MLX surface area is **consciously reviewed and explicitly implemented** in the mock before tests can pass.
+
+**Policy:** Any PR that makes `_default_func` return a value again (instead of raising) must include a documented justification.
+
+### 7.3 Test Quality Policies
+
+These policies govern what is acceptable in the test suite:
+
+| Policy | Rule | Rationale |
+|---|---|---|
+| `@pytest.mark.slow` | Tests requiring a real model load or hardware-dependent numerical precision | Cannot run in CI without Apple Silicon; must not block PRs |
+| `@pytest.mark.integration` | Tests requiring a live oMLX server | Excluded from `pytest.ini` default run |
+| `pytest.skip()` in fixture | Tests requiring external data (vocab files, network) | Offline CI must not fail due to missing downloads |
+| Inline mock override | Never inline `sys.meta_path` hacks in test files | Use `omlx/utils/mlx_mock.py` exclusively |
+
+`pytest.ini` enforces: `addopts = -m "not slow and not integration"` — the default `pytest` run in CI must yield **zero failures**.
+
+### 7.4 Compliance Verification — Mandatory Gate
+
+Before any commit that modifies Python source files, run:
+```bash
+python scripts/compliance_check.py
+```
+This script verifies three security-relevant properties:
+1. **`settings.py` defaults** — `host=127.0.0.1`, `check_updates=False`, `check_statuskit=False`, `skip_api_key_verification=False`
+2. **`README.md` privacy sections** — required sections (Privacy & Security) exist; prohibited sections (telemetry, tracking) are absent
+3. **License headers** — every `.py` file starts with `# SPDX-License-Identifier: Apache-2.0`
+
+Expected output: `ALL CHECKS PASSED. Project is compliant with Security Audit v1.0.`
+
+If this check fails, **do not commit.** The compliance check is the programmatic enforcement of the policies in this document.
+
+### 7.5 Merge Conflict Security Checklist
+
+When resolving merge conflicts, verify these security-sensitive files specifically:
+
+- [ ] **`omlx/_version.py`** — Must retain `# SPDX-License-Identifier: Apache-2.0` header. Version should be the higher of the two conflicting values.
+- [ ] **`omlx/settings.py`** — Verify defaults were not accidentally changed by the merge (run compliance check after resolving).
+- [ ] **`omlx/utils/mlx_mock.py`** — Must remain the single canonical mock. If a merge reverts `tests/mlx_mock.py` from a shim back to a 400+ line duplicate, restore it to the shim.
+- [ ] **`tests/conftest.py`** — Must start with `import omlx` before any `import mlx.*` to ensure the mock is installed first.
+
+---
+*This document should be updated whenever new API routes, storage mechanisms, security-relevant defaults, or test infrastructure decisions are added to the oMLX project.*

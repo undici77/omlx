@@ -81,6 +81,8 @@ class MockModel:
     def __init__(self, config: Optional[MockModelConfig] = None):
         self.config = config or MockModelConfig()
         self._parameters: Dict[str, Any] = {}
+        # Mock layers for mlx-lm cache compatibility
+        self.layers = [MagicMock() for _ in range(self.config.num_hidden_layers)]
 
     def __call__(self, input_ids: Any, **kwargs: Any) -> Any:
         """Forward pass (returns mock logits)."""

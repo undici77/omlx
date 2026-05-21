@@ -39,6 +39,7 @@ def test_turboquant_mse_matches_paper_small_bit_distortions():
         assert mse == pytest.approx(target, rel=0.25, abs=0.02)
 
 
+@pytest.mark.slow
 def test_turboquant_prod_is_nearly_unbiased_across_seeds():
     keys = _sample_unit_vectors(128, 64)
     queries = mx.random.normal((128, 64))
@@ -239,6 +240,7 @@ def test_attention_patch_routes_tq():
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 def test_rebuild_codecs_mse():
     """Rebuild codecs from state after wiping them — simulates SSD restore."""
     keys = mx.random.normal((1, 2, 16, 64))
@@ -260,6 +262,7 @@ def test_rebuild_codecs_mse():
     assert mx.allclose(expected_v, rebuilt_v, atol=1e-5).item()
 
 
+@pytest.mark.slow
 def test_rebuild_codecs_fractional_bits():
     """Rebuild codecs with fractional bits (3.5 → key=3bit, value=4bit)."""
     keys = mx.random.normal((1, 2, 16, 64))

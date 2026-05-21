@@ -340,7 +340,20 @@ class MockMLXLoader(importlib.abc.Loader):
                         if name in ("stop_gradient", "eval"): return lambda *a, **k: a[0] if a else None
                         if name == "power": return lambda a, b: loader.array(np.power(loader.array(a)._data, loader.array(b)._data if hasattr(b, "_data") else b))
                         if name == "from_fp8": return lambda a, dtype=None, **k: loader.array(loader.array(a)._data.astype(_map_dtype(dtype) or "float32"), dtype=dtype)
-                        if name == "clear_cache": return lambda *a, **k: None
+                        if name in ("clear_cache", "new_thread_local_stream"): return lambda *a, **k: None
+                        if name == "default_device": return lambda *a, **k: "gpu"
+                        if name == "hadamard_transform":
+                            return lambda x, scale=1.0, **k: loader.array(loader.array(x)._data * scale)
+                        if name == "issubdtype":
+                            _float_dtypes = frozenset({"float32", "float16", "bfloat16", "float64"})
+                            _int_dtypes = frozenset({"int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64"})
+                            def _issubdtype(dt1, dt2, _fd=_float_dtypes, _id=_int_dtypes):
+                                s1 = dt1 if isinstance(dt1, str) else getattr(dt1, "__name__", str(dt1))
+                                s2 = dt2 if isinstance(dt2, str) else getattr(dt2, "__name__", str(dt2))
+                                if s2 in ("floating", "float64"): return s1 in _fd
+                                if s2 in ("integer", "signedinteger", "unsignedinteger"): return s1 in _id
+                                return s1 == s2
+                            return _issubdtype
 
                     _captured_name = name
                     def _default_func(*args, _n=_captured_name, **kwargs):

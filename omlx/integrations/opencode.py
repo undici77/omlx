@@ -95,7 +95,7 @@ class OpenCodeIntegration(Integration):
             model_type=model_type,
         )
 
-        env = os.environ.copy()
+        env = self._scrubbed_env()
         args = ["opencode"]
 
         os.execvpe("opencode", args, env)

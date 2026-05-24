@@ -371,7 +371,9 @@
             benchModelId: '',
             benchPromptLengths: { 1024: true, 4096: true, 8192: false, 16384: false, 32768: false, 65536: false, 131072: false, 200000: false },
             benchBatchSizes: { 2: true, 4: true, 8: false },
+            benchAllowUpload: false,
             benchRunning: false,
+
             benchBenchId: null,
             benchProgress: null,
             benchSingleResults: [],
@@ -2489,7 +2491,9 @@
                             prompt_lengths: promptLengths,
                             generation_length: 128,
                             batch_sizes: batchSizes,
-                        }),
+                            allow_upload: this.benchAllowUpload,
+                            }),
+
                     });
 
                     if (response.status === 401) {

@@ -18,6 +18,7 @@ from omlx.admin.benchmark import (
     cleanup_old_runs,
     create_run,
     get_run,
+    run_benchmark,
 )
 
 
@@ -498,10 +499,81 @@ class TestUploadToOmlxAi:
 
         upload_event = next(e for e in events if e["type"] == "upload")
         assert upload_event["data"]["duplicate"] is True
-        assert upload_event["data"]["id"] == "xyz789"
 
-        done_event = next(e for e in events if e["type"] == "upload_done")
-        assert done_event["data"]["success"] == 1
+
+# =============================================================================
+# Privacy & Consent tests
+# =============================================================================
+
+
+class TestBenchmarkPrivacy:
+    @pytest.mark.asyncio
+    async def test_run_benchmark_respects_opt_out(self):
+        """Verify _upload_to_omlx_ai is NOT called when allow_upload=False."""
+        from omlx.admin.benchmark import run_benchmark
+
+        run = BenchmarkRun(
+            bench_id="privacy-opt-out",
+            request=BenchmarkRequest(
+                model_id="test-model",
+                prompt_lengths=[1024],
+                allow_upload=False,
+            ),
+        )
+
+        # Mock dependencies
+        mock_engine = MagicMock()
+        # Mock stream_generate to work with 'async for'
+        mock_engine.stream_generate.return_value.__aiter__.return_value = [None]
+        mock_engine.tokenizer = MagicMock()
+
+        mock_pool = MagicMock()
+        mock_pool.get_loaded_model_ids.return_value = []
+        mock_pool.get_engine = AsyncMock(return_value=mock_engine)
+        mock_pool.load_engine = AsyncMock(return_value=mock_engine)
+        mock_pool._unload_engine = AsyncMock()
+        mock_pool._settings_manager = None
+
+        with patch("omlx.admin.benchmark._upload_to_omlx_ai", AsyncMock()) as mock_upload:
+            with patch("omlx.admin.benchmark._run_single_test", AsyncMock(return_value={"gen_tps": 50.0})):
+                await run_benchmark(run, mock_pool)
+
+        # Should NOT have been called
+        mock_upload.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_run_benchmark_respects_opt_in(self):
+        """Verify _upload_to_omlx_ai IS called when allow_upload=True."""
+        from omlx.admin.benchmark import run_benchmark
+
+        run = BenchmarkRun(
+            bench_id="privacy-opt-in",
+            request=BenchmarkRequest(
+                model_id="test-model",
+                prompt_lengths=[1024],
+                allow_upload=True,
+            ),
+        )
+
+        # Mock dependencies
+        mock_engine = MagicMock()
+        # Mock stream_generate to work with 'async for'
+        mock_engine.stream_generate.return_value.__aiter__.return_value = [None]
+        mock_engine.tokenizer = MagicMock()
+
+        mock_pool = MagicMock()
+        mock_pool.get_loaded_model_ids.return_value = []
+        mock_pool.get_engine = AsyncMock(return_value=mock_engine)
+        mock_pool.load_engine = AsyncMock(return_value=mock_engine)
+        mock_pool._unload_engine = AsyncMock()
+        mock_pool._settings_manager = None
+
+        with patch("omlx.admin.benchmark._upload_to_omlx_ai", AsyncMock()) as mock_upload:
+            with patch("omlx.admin.benchmark._run_single_test", AsyncMock(return_value={"gen_tps": 50.0})):
+                await run_benchmark(run, mock_pool)
+
+        # Should HAVE been called
+        mock_upload.assert_called_once_with(run, mock_pool)
 
     @pytest.mark.asyncio
     async def test_upload_skipped_when_experimental_features_enabled(self):

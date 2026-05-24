@@ -35,6 +35,12 @@ def check_settings_defaults():
         check_file_content(settings_path, r'check_statuskit: bool = False', "check_statuskit is False by default"),
         check_file_content(settings_path, r'skip_api_key_verification: bool = False', "API key verification is enabled by default"),
     ]
+    
+    # Check benchmark opt-in default
+    print("\n--- Verifying Benchmark Privacy ---")
+    benchmark_path = Path("omlx/admin/benchmark.py")
+    results.append(check_file_content(benchmark_path, r'allow_upload: bool = False', "Benchmark allow_upload is False by default"))
+    
     return all(results)
 
 def check_readme_privacy():

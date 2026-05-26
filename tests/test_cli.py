@@ -100,10 +100,11 @@ class TestServeCommandOptions:
         result = run_cli(["serve", "--help"])
         assert "--model-dir" in result.stdout
 
-    def test_serve_has_max_model_memory_option(self):
-        """Test that serve command has --max-model-memory option."""
+    def test_serve_has_no_max_memory_options(self):
+        """The --max-model-memory and --max-process-memory CLI flags are removed."""
         result = run_cli(["serve", "--help"])
-        assert "--max-model-memory" in result.stdout
+        assert "--max-model-memory" not in result.stdout
+        assert "--max-process-memory" not in result.stdout
 
     def test_serve_no_model_specific_options(self):
         """Test that serve command does not have model-specific options (managed via admin page)."""
@@ -315,8 +316,6 @@ class TestHasCliOverrides:
         defaults = {
             "model_dir": None,
             "port": None,
-            "max_model_memory": None,
-            "max_process_memory": None,
             "host": None,
             "log_level": None,
         }
@@ -341,15 +340,6 @@ class TestHasCliOverrides:
     def test_model_dir_explicit(self):
         from omlx.cli import _has_cli_overrides
         assert _has_cli_overrides(self._make_args(model_dir="/tmp/models")) is True
-
-    def test_max_model_memory_explicit(self):
-        from omlx.cli import _has_cli_overrides
-        assert _has_cli_overrides(self._make_args(max_model_memory="auto")) is True
-        assert _has_cli_overrides(self._make_args(max_model_memory="32GB")) is True
-
-    def test_max_process_memory_explicit(self):
-        from omlx.cli import _has_cli_overrides
-        assert _has_cli_overrides(self._make_args(max_process_memory="64GB")) is True
 
     def test_log_level_explicit(self):
         from omlx.cli import _has_cli_overrides

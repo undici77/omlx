@@ -18,7 +18,7 @@ class FakePool:
     def get_status(self):
         return {
             "current_model_memory": 1024,
-            "max_model_memory": 2048,
+            "final_ceiling": 2048,
             "models": [
                 {
                     "id": "model-a",
@@ -61,6 +61,9 @@ def test_active_models_generation_includes_activity_and_waiting_rows():
 
     with (
         patch.object(admin_routes, "_get_engine_pool", return_value=FakePool(scheduler)),
+        patch("omlx.admin.routes._get_server_state", return_value=None),
+        patch.object(admin_routes, "_get_settings_manager", return_value=None),
+        patch.object(admin_routes, "_get_global_settings", return_value=None),
         patch("omlx.prefill_progress.get_prefill_tracker", return_value=FakePrefillTracker()),
         patch("time.monotonic", return_value=110.0),
     ):
@@ -104,6 +107,9 @@ def test_active_models_loading_includes_elapsed_and_percent_estimate():
             "_get_engine_pool",
             return_value=FakePool(scheduler, loading_started_at=102.0),
         ),
+        patch("omlx.admin.routes._get_server_state", return_value=None),
+        patch.object(admin_routes, "_get_settings_manager", return_value=None),
+        patch.object(admin_routes, "_get_global_settings", return_value=None),
         patch("omlx.prefill_progress.get_prefill_tracker", return_value=FakePrefillTracker()),
         patch("time.monotonic", return_value=110.0),
     ):
@@ -140,7 +146,7 @@ class FakeNonStreamingPool:
     def get_status(self):
         return {
             "current_model_memory": 1024,
-            "max_model_memory": 2048,
+            "final_ceiling": 2048,
             "models": [
                 {
                     "id": "embed-model",
@@ -160,6 +166,9 @@ def test_active_models_includes_non_streaming_activity_rows():
 
     with (
         patch.object(admin_routes, "_get_engine_pool", return_value=FakeNonStreamingPool()),
+        patch("omlx.admin.routes._get_server_state", return_value=None),
+        patch.object(admin_routes, "_get_settings_manager", return_value=None),
+        patch.object(admin_routes, "_get_global_settings", return_value=None),
         patch("omlx.prefill_progress.get_prefill_tracker", return_value=EmptyPrefillTracker()),
         patch("time.monotonic", return_value=110.0),
     ):
@@ -207,7 +216,7 @@ class FakeIdlePool:
     def get_status(self):
         return {
             "current_model_memory": 1024,
-            "max_model_memory": 2048,
+            "final_ceiling": 2048,
             "models": [
                 {
                     "id": "model-a",
@@ -366,7 +375,7 @@ def test_idle_and_ttl_not_computed_for_loading_model():
         def get_status(self):
             return {
                 "current_model_memory": 0,
-                "max_model_memory": 0,
+                "final_ceiling": 0,
                 "models": [
                     {
                         "id": "model-a",

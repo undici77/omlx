@@ -42,6 +42,7 @@ from .cache.paged_cache import PagedCacheManager
 from .cache.prefix_cache import BlockAwarePrefixCache
 from .exceptions import is_cache_corruption_error
 from .prefill_progress import get_prefill_tracker
+from .prefill_transient_tracker import PrefillTransientTracker
 from .request import Request, RequestOutput, RequestStatus, SamplingParams
 from .speculative.vlm_mtp import VLMMTPDrafter, run_vlm_mtp_decode
 from .utils.proc_memory import get_phys_footprint
@@ -785,6 +786,18 @@ class Scheduler:
         # soft_threshold. Schedulers stop admitting new prefills while this is
         # set; in-flight requests proceed.
         self._admission_paused: bool = False
+        # Adaptive prefill throttle params, propagated from enforcer.
+        # Until set, _adaptive_chunk_size is a no-op (returns requested as-is).
+        self._prefill_safe_zone_ratio: float = 0.80
+        self._prefill_min_chunk_tokens: int = 32
+        # EWMA estimator of per-token chunk transient bytes, used by
+        # _adaptive_chunk_size in the caution zone. Owned per-scheduler.
+        _tracker_model_id = ""
+        if config is not None and config.model_name:
+            _tracker_model_id = os.path.basename(config.model_name.rstrip("/"))
+        self._prefill_transient_tracker = PrefillTransientTracker(
+            model_id=_tracker_model_id
+        )
 
         # SpecPrefill: draft model for attention-based sparse prefill
         self._specprefill_draft_model: Any | None = None
@@ -1838,6 +1851,16 @@ class Scheduler:
                     n_to_process = min(n_to_process, delta)
                 n_to_process = max(1, n_to_process)
 
+            # Adaptive throttle: shrink chunk when entering the caution zone
+            # so the hard cap is honored before the chunk-end check. Raises
+            # RuntimeError if the min chunk would exceed the cap — the
+            # #1405 cleanup path catches it and emits an error to the client.
+            n_to_process = self._adaptive_chunk_size(
+                n_to_process,
+                request_id=request.request_id,
+                loop_label="external",
+            )
+
             model_kwargs: dict[str, Any] = {}
             if embeds_array is not None and embeds_array.shape[1] > 0:
                 model_kwargs["inputs_embeds"] = embeds_array[:, :n_to_process]
@@ -1846,8 +1869,17 @@ class Scheduler:
                         extra_kwargs, n_to_process
                     )
 
+            _throttle_pre = get_phys_footprint()
             self.model(input_arr[:, :n_to_process], cache=prompt_cache, **model_kwargs)
             mx.eval([c.state for c in prompt_cache])
+            _throttle_post = get_phys_footprint()
+            self._record_chunk_transient(
+                n_to_process,
+                _throttle_pre,
+                _throttle_post,
+                request_id=request.request_id,
+                loop_label="external",
+            )
 
             input_arr = input_arr[:, n_to_process:]
             if embeds_array is not None:
@@ -1879,6 +1911,24 @@ class Scheduler:
             # See utils/proc_memory.py for why phys_footprint matters.
             if self._memory_limit_bytes > 0:
                 current = max(mx.get_active_memory(), get_phys_footprint())
+                _hard = self._memory_hard_limit_bytes
+                _soft = self._memory_limit_bytes
+                # Only log when crossing the soft watermark — that's the
+                # caution zone where adaptive throttle decisions matter.
+                # Skipped on healthy traffic to keep the log quiet.
+                if current > _soft:
+                    logger.debug(
+                        "[memcheck:external] rid=%s n=%d processed=%d "
+                        "current=%.3fGB soft=%.3fGB hard=%.3fGB %s",
+                        request.request_id,
+                        n_to_process,
+                        processed_tokens,
+                        current / 1024**3,
+                        _soft / 1024**3,
+                        _hard / 1024**3,
+                        "OVER_HARD" if _hard > 0 and current > _hard
+                        else "OVER_SOFT",
+                    )
                 if (
                     self._memory_hard_limit_bytes > 0
                     and current > self._memory_hard_limit_bytes
@@ -1934,6 +1984,181 @@ class Scheduler:
             self.model._language_model._rope_deltas = _saved_rope_deltas
 
         return prompt_cache, last_token
+
+    # ------------------------------------------------------------------
+    # Adaptive prefill throttle
+    # ------------------------------------------------------------------
+
+    def _adaptive_chunk_size(
+        self,
+        requested: int,
+        *,
+        request_id: str,
+        loop_label: str,
+    ) -> int:
+        """Shrink the next prefill chunk when current memory enters the
+        caution zone of the hard cap.
+
+        - safe zone (current < hard * safe_zone_ratio): return ``requested``
+          unchanged. Most of the time this path is taken and there is no
+          throughput impact.
+        - caution zone: use the per-scheduler EWMA tracker (or static
+          MemoryMonitor estimate on the first chunk) to predict the next
+          chunk's transient bytes. If ``current + predicted > hard * 0.95``
+          shrink ``requested`` so the prediction fits the remaining
+          headroom.
+        - if the shrunk size would be below ``prefill_min_chunk_tokens``,
+          raise RuntimeError. The same #1405 cleanup path that catches the
+          chunk-end hard-limit RuntimeError will pop self.requests, remove
+          the prefill tracker entry, and emit a finish_reason="error"
+          output to the client.
+
+        Args:
+            requested: The chunk size the caller would have used without
+                throttle (already clamped by boundary alignment).
+            request_id: For debug log correlation.
+            loop_label: "external" or "chunked_first" or "chunked_step",
+                used only for debug log identification.
+
+        Returns:
+            The chunk size to actually process (>= 1, <= requested).
+        """
+        if self._memory_hard_limit_bytes <= 0 or requested <= 0:
+            return requested
+
+        current = max(mx.get_active_memory(), get_phys_footprint())
+        hard_cap = self._memory_hard_limit_bytes
+        safe_zone = int(hard_cap * self._prefill_safe_zone_ratio)
+
+        if current < safe_zone:
+            logger.debug(
+                "[throttle:%s] zone=safe rid=%s current=%.2fGB "
+                "safe_zone=%.2fGB hard_cap=%.2fGB",
+                loop_label,
+                request_id,
+                current / 1024**3,
+                safe_zone / 1024**3,
+                hard_cap / 1024**3,
+            )
+            return requested
+
+        # Caution zone — predict next-chunk transient.
+        tracker = self._prefill_transient_tracker
+        predicted = tracker.predict(requested)
+        if predicted <= 0 and self.memory_monitor is not None:
+            # First chunk fallback: use the static KV+SDPA estimator.
+            # estimate_prefill_peak_bytes returns KV + SDPA for the last
+            # chunk; here we use it as an upper bound for any single chunk.
+            try:
+                predicted = self.memory_monitor.estimate_prefill_peak_bytes(
+                    new_tokens=requested,
+                    chunk_size=requested,
+                    cached_tokens=0,
+                )
+            except Exception:
+                predicted = 0
+        per_token = tracker.bytes_per_token
+
+        ceiling_target = int(hard_cap * 0.95)
+        headroom = max(0, ceiling_target - current)
+
+        logger.debug(
+            "[throttle:%s] zone=caution rid=%s current=%.2fGB "
+            "safe_zone=%.2fGB hard_cap=%.2fGB headroom=%.2fGB "
+            "predict_n=%d predicted=%.2fMB per_token=%.1fKB samples=%d",
+            loop_label,
+            request_id,
+            current / 1024**3,
+            safe_zone / 1024**3,
+            hard_cap / 1024**3,
+            headroom / 1024**3,
+            requested,
+            predicted / 1024**2,
+            per_token / 1024,
+            tracker.samples,
+        )
+
+        if predicted <= 0:
+            # No estimate available; let the chunk-end check be the safety net.
+            return requested
+
+        if current + predicted <= ceiling_target:
+            return requested
+
+        # Need to shrink. Use measured per_token if available; otherwise
+        # scale ``requested`` by the headroom ratio.
+        if per_token > 0:
+            safe_n = int(headroom / per_token)
+        else:
+            ratio = headroom / max(predicted, 1)
+            safe_n = max(1, int(requested * ratio))
+
+        safe_n = min(requested, max(0, safe_n))
+
+        if safe_n < self._prefill_min_chunk_tokens:
+            logger.warning(
+                "[throttle:%s] abort rid=%s min_chunk=%d would exceed "
+                "hard_cap (current=%.2fGB headroom=%.2fGB per_token=%.1fKB)",
+                loop_label,
+                request_id,
+                self._prefill_min_chunk_tokens,
+                current / 1024**3,
+                headroom / 1024**3,
+                per_token / 1024,
+            )
+            raise RuntimeError(
+                f"Adaptive throttle: min chunk {self._prefill_min_chunk_tokens} "
+                f"would exceed hard cap "
+                f"(current={current / 1024**3:.2f}GB, "
+                f"headroom={headroom / 1024**3:.2f}GB, "
+                f"hard={hard_cap / 1024**3:.2f}GB)"
+            )
+
+        logger.info(
+            "[throttle:%s] shrink rid=%s chunk %d -> %d "
+            "(current=%.2fGB headroom=%.2fGB predicted=%.2fMB)",
+            loop_label,
+            request_id,
+            requested,
+            safe_n,
+            current / 1024**3,
+            headroom / 1024**3,
+            predicted / 1024**2,
+        )
+        return safe_n
+
+    def _record_chunk_transient(
+        self,
+        n_tokens: int,
+        pre_bytes: int,
+        post_bytes: int,
+        *,
+        request_id: str,
+        loop_label: str,
+    ) -> None:
+        """Feed one chunk's measured transient into the EWMA tracker."""
+        delta = post_bytes - pre_bytes
+        if delta <= 0:
+            logger.debug(
+                "[throttle:%s] measure rid=%s n=%d delta=%dB (skipped: <=0)",
+                loop_label,
+                request_id,
+                n_tokens,
+                delta,
+            )
+            return
+        self._prefill_transient_tracker.update(n_tokens, delta)
+        logger.debug(
+            "[throttle:%s] measure rid=%s n=%d transient=%.2fMB "
+            "per_token=%.1fKB ewma=%.1fKB samples=%d",
+            loop_label,
+            request_id,
+            n_tokens,
+            delta / 1024**2,
+            (delta / max(n_tokens, 1)) / 1024,
+            self._prefill_transient_tracker.bytes_per_token / 1024,
+            self._prefill_transient_tracker.samples,
+        )
 
     # ------------------------------------------------------------------
     # Chunked prefill helpers (used when config.chunked_prefill=True)
@@ -2020,10 +2245,29 @@ class Scheduler:
                 n = min(n, delta)
             n = max(1, n)
 
+        # Adaptive throttle — see _adaptive_chunk_size docstring. Raises
+        # if even prefill_min_chunk_tokens would exceed the cap; #1405
+        # cleanup paths in _schedule_waiting / _advance_chunked_prefills
+        # convert that into a finish_reason="error" output for the client.
+        n = self._adaptive_chunk_size(
+            n,
+            request_id=state.request.request_id,
+            loop_label="chunked_step",
+        )
+
         chunk = state.tokens_remaining[:, :n]
         state.tokens_remaining = state.tokens_remaining[:, n:]
+        _throttle_pre = get_phys_footprint()
         self.model(chunk, cache=state.cache)
         mx.eval([c.state for c in state.cache])
+        _throttle_post = get_phys_footprint()
+        self._record_chunk_transient(
+            n,
+            _throttle_pre,
+            _throttle_post,
+            request_id=state.request.request_id,
+            loop_label="chunked_step",
+        )
         state.tokens_processed += n
 
         # Boundary snapshot
@@ -2059,6 +2303,23 @@ class Scheduler:
         # before the kernel kills us.
         if self._memory_limit_bytes > 0:
             current = max(mx.get_active_memory(), get_phys_footprint())
+            _hard = self._memory_hard_limit_bytes
+            _soft = self._memory_limit_bytes
+            # Caution-zone-only memcheck log (see external loop counterpart).
+            if current > _soft:
+                logger.debug(
+                    "[memcheck:chunked_step] rid=%s n=%d processed=%d/%d "
+                    "current=%.3fGB soft=%.3fGB hard=%.3fGB %s",
+                    state.request.request_id,
+                    n,
+                    state.tokens_processed,
+                    state.total_length - 1,
+                    current / 1024**3,
+                    _soft / 1024**3,
+                    _hard / 1024**3,
+                    "OVER_HARD" if _hard > 0 and current > _hard
+                    else "OVER_SOFT",
+                )
             if (
                 self._memory_hard_limit_bytes > 0
                 and current > self._memory_hard_limit_bytes
@@ -4772,6 +5033,29 @@ class Scheduler:
                         done = self._step_prefill_chunk(state)
                     except _PrefillAbortedError:
                         raise
+                    except RuntimeError as e:
+                        # Hard memory limit hit on the first chunk.
+                        # _step_prefill_chunk updates the PrefillProgressTracker
+                        # before the limit check, so without this catch the
+                        # tracker entry leaks and stays in the dashboard
+                        # forever (#1405). Mirrors the cleanup in
+                        # _advance_chunked_prefills (d736bfd).
+                        logger.error(
+                            "Chunked prefill (first chunk) failed for %s: %s",
+                            request.request_id,
+                            e,
+                        )
+                        self.requests.pop(request.request_id, None)
+                        get_prefill_tracker().remove(request.request_id)
+                        rejected_outputs.append(
+                            RequestOutput(
+                                request_id=request.request_id,
+                                finished=True,
+                                finish_reason="error",
+                                error=str(e),
+                            )
+                        )
+                        continue
 
                     if done:
                         self._emit_final_boundary_if_needed(state)
@@ -4791,12 +5075,35 @@ class Scheduler:
                 self.request_id_to_uid[request.request_id] = temp_uid
                 self.uid_to_request_id[temp_uid] = request.request_id
 
-                prefilled_cache, last_token = self._do_external_prefill(
-                    request,
-                    tokens_to_process,
-                    cache_to_use,
-                    vlm_embeds=vlm_embeds,
-                )
+                try:
+                    prefilled_cache, last_token = self._do_external_prefill(
+                        request,
+                        tokens_to_process,
+                        cache_to_use,
+                        vlm_embeds=vlm_embeds,
+                    )
+                except RuntimeError as e:
+                    # Hard memory limit hit during external prefill. Without
+                    # this catch, the exception bubbles up to step() and then
+                    # engine_core's fail_all_requests(), which pops
+                    # self.requests but cannot reach the PrefillProgressTracker
+                    # singleton, so the dashboard entry leaks across model
+                    # reload (#1405). Mirrors the cleanup in
+                    # _advance_chunked_prefills (d736bfd).
+                    logger.error("Prefill failed for %s: %s", request.request_id, e)
+                    self.uid_to_request_id.pop(temp_uid, None)
+                    self.request_id_to_uid.pop(request.request_id, None)
+                    self.requests.pop(request.request_id, None)
+                    get_prefill_tracker().remove(request.request_id)
+                    rejected_outputs.append(
+                        RequestOutput(
+                            request_id=request.request_id,
+                            finished=True,
+                            finish_reason="error",
+                            error=str(e),
+                        )
+                    )
+                    continue
 
                 # Clean up temp UID mapping
                 del self.uid_to_request_id[temp_uid]

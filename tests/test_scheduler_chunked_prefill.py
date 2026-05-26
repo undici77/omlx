@@ -471,3 +471,156 @@ class TestScheduleWaitingChunkedFork:
 
         mock_ep.assert_called_once()
         mock_bp.assert_not_called()
+
+    def test_non_chunked_path_runtime_error_cleans_up_and_rejects(self):
+        """RuntimeError from _do_external_prefill in the non-chunked path
+        must pop self.requests, drop the temp uid mappings, remove the
+        PrefillProgressTracker entry, and emit a finish_reason=\"error\"
+        RequestOutput so the client sees the failure (#1405)."""
+        from omlx.prefill_progress import get_prefill_tracker
+
+        sched, req = self._setup(n_tokens=3, step_size=4)
+        rid = req.request_id
+        tracker = get_prefill_tracker()
+        tracker.clear()
+        tracker.update(rid, processed=1, total=3, model_id="test")
+        assert tracker.get_model_progress("test"), "tracker entry not set up"
+
+        try:
+            with patch.object(
+                sched,
+                "_do_external_prefill",
+                side_effect=RuntimeError("Memory limit exceeded during prefill"),
+            ):
+                scheduled, rejected = sched._schedule_waiting()
+
+            assert rid not in sched.requests
+            assert rid not in sched.request_id_to_uid
+            assert not any(v == rid for v in sched.uid_to_request_id.values())
+            assert tracker.get_model_progress("test") == []
+            assert scheduled == []
+            assert len(rejected) == 1
+            out = rejected[0]
+            assert out.request_id == rid
+            assert out.finished is True
+            assert out.finish_reason == "error"
+            assert "Memory limit" in out.error
+        finally:
+            tracker.clear()
+
+    def test_adaptive_throttle_safe_zone_passes_through(self):
+        """When current memory < safe_zone, _adaptive_chunk_size returns the
+        requested size unchanged (no throughput cost in normal operation)."""
+        sched = _make_scheduler()
+        sched._memory_hard_limit_bytes = 10 * 1024**3
+        sched._prefill_safe_zone_ratio = 0.80
+        sched._prefill_min_chunk_tokens = 32
+
+        with patch("omlx.scheduler.mx.get_active_memory", return_value=1 * 1024**3):
+            with patch(
+                "omlx.scheduler.get_phys_footprint", return_value=1 * 1024**3
+            ):
+                result = sched._adaptive_chunk_size(
+                    2048, request_id="r1", loop_label="external"
+                )
+        assert result == 2048
+
+    def test_adaptive_throttle_caution_zone_shrinks_chunk(self):
+        """In caution zone, chunk size is reduced so predicted transient
+        fits within remaining headroom to the cap."""
+        sched = _make_scheduler()
+        sched._memory_hard_limit_bytes = 10 * 1024**3
+        sched._prefill_safe_zone_ratio = 0.80
+        sched._prefill_min_chunk_tokens = 32
+        # Seed tracker so predict() returns a non-zero value
+        sched._prefill_transient_tracker.update(
+            n_tokens=1000, transient_bytes=2 * 1024**3
+        )  # 2 MB/token
+
+        # current = 9 GB, ceiling_target = 9.5 GB, headroom = 0.5 GB
+        with patch("omlx.scheduler.mx.get_active_memory", return_value=9 * 1024**3):
+            with patch(
+                "omlx.scheduler.get_phys_footprint", return_value=9 * 1024**3
+            ):
+                result = sched._adaptive_chunk_size(
+                    2048, request_id="r1", loop_label="external"
+                )
+        # 0.5 GB / 2 MB-per-token ≈ 256 (with EWMA prediction)
+        assert result < 2048
+        assert result >= sched._prefill_min_chunk_tokens
+
+    def test_adaptive_throttle_min_chunk_aborts(self):
+        """If even prefill_min_chunk_tokens would exceed the cap, raise
+        RuntimeError so the #1405 cleanup path can emit a clean error."""
+        sched = _make_scheduler()
+        sched._memory_hard_limit_bytes = 10 * 1024**3
+        sched._prefill_safe_zone_ratio = 0.80
+        sched._prefill_min_chunk_tokens = 32
+        # Pretend each token costs 100 MB — even 32 tokens would need 3.2 GB
+        # but headroom is only 0.01 GB
+        sched._prefill_transient_tracker.update(
+            n_tokens=10, transient_bytes=1024 * 1024 * 1024
+        )
+
+        target = int(10 * 1024**3 * 0.95) - 10 * 1024**2  # very little headroom
+        with patch("omlx.scheduler.mx.get_active_memory", return_value=target):
+            with patch("omlx.scheduler.get_phys_footprint", return_value=target):
+                import pytest
+
+                with pytest.raises(RuntimeError, match="Adaptive throttle"):
+                    sched._adaptive_chunk_size(
+                        2048, request_id="r1", loop_label="external"
+                    )
+
+    def test_adaptive_throttle_no_cap_passthrough(self):
+        """When hard limit is unset (=0), no throttle, no measurement."""
+        sched = _make_scheduler()
+        sched._memory_hard_limit_bytes = 0
+        result = sched._adaptive_chunk_size(
+            2048, request_id="r1", loop_label="external"
+        )
+        assert result == 2048
+
+    def test_chunked_first_chunk_runtime_error_cleans_up_and_rejects(self):
+        """RuntimeError on the chunked first chunk must pop self.requests,
+        remove the PrefillProgressTracker entry, and emit an error
+        RequestOutput. _step_prefill_chunk updates the tracker before the
+        hard-limit check, so without this catch the entry would leak
+        (#1405)."""
+        from omlx.prefill_progress import get_prefill_tracker
+
+        sched, req = self._setup(n_tokens=10, step_size=4)
+        rid = req.request_id
+        tracker = get_prefill_tracker()
+        tracker.clear()
+        tracker.update(rid, processed=2, total=10, model_id="test")
+        assert tracker.get_model_progress("test"), "tracker entry not set up"
+
+        try:
+            with patch.object(
+                sched,
+                "_begin_prefill",
+                return_value=_make_prefill_state(sched, req),
+            ):
+                with patch.object(
+                    sched,
+                    "_step_prefill_chunk",
+                    side_effect=RuntimeError(
+                        "Memory limit exceeded during chunked prefill"
+                    ),
+                ):
+                    scheduled, rejected = sched._schedule_waiting()
+
+            assert rid not in sched.requests
+            assert rid not in sched._prefill_states
+            assert req not in sched.prefilling
+            assert tracker.get_model_progress("test") == []
+            assert scheduled == []
+            assert len(rejected) == 1
+            out = rejected[0]
+            assert out.request_id == rid
+            assert out.finished is True
+            assert out.finish_reason == "error"
+            assert "Memory limit" in out.error
+        finally:
+            tracker.clear()

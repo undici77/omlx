@@ -215,6 +215,7 @@ class GlobalSettingsRequest(BaseModel):
 
     # Scheduler settings
     max_concurrent_requests: int | None = None
+    embedding_batch_size: int | None = None
     chunked_prefill: bool | None = None
 
     # Cache settings
@@ -2700,6 +2701,7 @@ async def get_global_settings(is_admin: bool = Depends(require_admin)):
         },
         "scheduler": {
             "max_concurrent_requests": global_settings.scheduler.max_concurrent_requests,
+            "embedding_batch_size": global_settings.scheduler.embedding_batch_size,
             "chunked_prefill": global_settings.scheduler.chunked_prefill,
         },
         "cache": {
@@ -2815,6 +2817,8 @@ async def update_global_settings(
 
     # Track which settings were applied at runtime
     runtime_applied: list[str] = []
+    pending_embedding_batch_size: int | None = None
+    previous_embedding_batch_size: int | None = None
 
     # Apply server settings
     if request.host is not None:
@@ -2935,6 +2939,15 @@ async def update_global_settings(
         global_settings.scheduler.max_concurrent_requests = (
             request.max_concurrent_requests
         )
+
+    # Apply embedding batch size setting (Live for loaded embedding engines)
+    if request.embedding_batch_size is not None:
+        if request.embedding_batch_size <= 0:
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid embedding_batch_size: must be > 0",
+            )
+        pending_embedding_batch_size = request.embedding_batch_size
 
     # Apply chunked prefill setting (Live)
     if request.chunked_prefill is not None:
@@ -3217,16 +3230,33 @@ async def update_global_settings(
         global_settings.auth.skip_api_key_verification = request.skip_api_key_verification
         runtime_applied.append("skip_api_key_verification")
 
+    if pending_embedding_batch_size is not None:
+        previous_embedding_batch_size = global_settings.scheduler.embedding_batch_size
+        global_settings.scheduler.embedding_batch_size = pending_embedding_batch_size
+
     # Validate settings
     errors = global_settings.validate()
     if errors:
+        if previous_embedding_batch_size is not None:
+            global_settings.scheduler.embedding_batch_size = previous_embedding_batch_size
         raise HTTPException(status_code=400, detail=errors)
 
     # Persist to file
     try:
         global_settings.save()
     except Exception as e:
+        if previous_embedding_batch_size is not None:
+            global_settings.scheduler.embedding_batch_size = previous_embedding_batch_size
         raise HTTPException(status_code=500, detail=f"Failed to save settings: {e}")
+
+    if pending_embedding_batch_size is not None:
+        from ..server import _server_state
+
+        pool = _server_state.engine_pool
+        if pool is not None:
+            await pool.apply_embedding_batch_size(pending_embedding_batch_size)
+        runtime_applied.append("embedding_batch_size")
+        logger.info(f"Embedding batch size set to {pending_embedding_batch_size}")
 
     # Build response message
     message = "Settings saved successfully."
@@ -5008,17 +5038,28 @@ async def stream_accuracy_benchmark(
         )
 
     async def event_generator():
+        # Replay-then-attach: every subscriber starts at offset 0 of the
+        # run's event log and follows along live. Lets the HTML dashboard
+        # recover its view on page refresh and lets multiple consumers
+        # (e.g. browser + Swift app) share the same run.
+        seen = 0
         try:
             while True:
-                try:
-                    event = await asyncio.wait_for(run.queue.get(), timeout=60.0)
-                except TimeoutError:
+                async with run.cond:
+                    while seen >= len(run.events) and not run.terminal:
+                        try:
+                            await asyncio.wait_for(run.cond.wait(), timeout=60.0)
+                        except TimeoutError:
+                            break
+                    new = list(run.events[seen:])
+                    seen = len(run.events)
+                    done = run.terminal
+
+                for ev in new:
+                    yield f"data: {json.dumps(ev)}\n\n"
+                if not new and not done:
                     yield ": keepalive\n\n"
-                    continue
-
-                yield f"data: {json.dumps(event)}\n\n"
-
-                if event.get("type") in ("done", "error"):
+                if done:
                     break
         except asyncio.CancelledError:
             pass
@@ -5039,6 +5080,27 @@ async def stream_accuracy_benchmark(
 # =============================================================================
 
 
+@router.get("/api/bench/active")
+async def get_active_benchmark(is_admin: bool = Depends(require_admin)):
+    """Return the currently-running throughput benchmark, if any.
+
+    Symmetric to `/api/bench/accuracy/queue/status` — lets a fresh page
+    load or a second tab discover an in-flight run so it can attach to
+    the SSE stream. Combined with the replay-on-subscribe stream this
+    is what makes the multi-tab + page-refresh story actually work.
+    """
+    from .benchmark import get_active_run
+
+    run = get_active_run()
+    if run is None:
+        return {"running": False, "bench_id": None, "model_id": None}
+    return {
+        "running": True,
+        "bench_id": run.bench_id,
+        "model_id": run.request.model_id,
+    }
+
+
 @router.post("/api/bench/start")
 async def start_benchmark(
     request: Request,
@@ -5047,18 +5109,33 @@ async def start_benchmark(
     """Start a benchmark run.
 
     Validates the model, creates a benchmark run, and starts it
-    as an asyncio background task.
+    as an asyncio background task. Rejects with 409 if another
+    throughput bench is already running — two concurrent runs on
+    the same engine produce mutually-corrupted measurements.
     """
     from .benchmark import (
         BenchmarkRequest,
         cleanup_old_runs,
         create_run,
+        get_active_run,
         run_benchmark,
     )
 
     engine_pool = _get_engine_pool()
     if engine_pool is None:
         raise HTTPException(status_code=503, detail="Engine pool not initialized")
+
+    # One throughput bench at a time. The replay-on-subscribe stream lets
+    # clients attach to the already-running one if that's what they want.
+    active = get_active_run()
+    if active is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"A throughput benchmark is already running "
+                f"(bench_id={active.bench_id}, model_id={active.request.model_id})."
+            ),
+        )
 
     body = await request.json()
     try:
@@ -5116,19 +5193,28 @@ async def stream_benchmark(
         raise HTTPException(status_code=404, detail=f"Benchmark not found: {bench_id}")
 
     async def event_generator():
+        # Replay-then-attach: see /api/bench/accuracy/{id}/stream for the
+        # full rationale. The bench stream's terminal events are
+        # `upload_done` and `error` — `done` only marks the boundary
+        # between tests and upload.
+        seen = 0
         try:
             while True:
-                try:
-                    event = await asyncio.wait_for(run.queue.get(), timeout=60.0)
-                except TimeoutError:
-                    # Send keepalive
+                async with run.cond:
+                    while seen >= len(run.events) and not run.terminal:
+                        try:
+                            await asyncio.wait_for(run.cond.wait(), timeout=60.0)
+                        except TimeoutError:
+                            break
+                    new = list(run.events[seen:])
+                    seen = len(run.events)
+                    done = run.terminal
+
+                for ev in new:
+                    yield f"data: {json.dumps(ev)}\n\n"
+                if not new and not done:
                     yield ": keepalive\n\n"
-                    continue
-
-                yield f"data: {json.dumps(event)}\n\n"
-
-                # Stop streaming on terminal events
-                if event.get("type") in ("upload_done", "error"):
+                if done:
                     break
         except asyncio.CancelledError:
             pass
@@ -5185,6 +5271,7 @@ async def get_benchmark_results(
         "status": run.status,
         "results": run.results,
         "error": run.error_message if run.error_message else None,
+        "upload_state": run.upload_state,
     }
 
 

@@ -151,6 +151,8 @@ class ModelSettingsRequest(BaseModel):
     vlm_mtp_draft_model: str | None = None
     vlm_mtp_draft_block_size: int | None = None
     reasoning_parser: str | None = None
+    guided_grammar_enabled: bool | None = None
+    guided_grammar: str | None = None
     is_pinned: bool | None = None
     is_default: bool | None = None
     # Security: per-model opt-in for trust_remote_code (issue #926)
@@ -1531,6 +1533,17 @@ async def list_grammar_parsers(is_admin: bool = Depends(require_admin)):
     Returns ``[]`` if xgrammar is missing, fails to load (e.g. broken native
     binding on macOS arm64), or has neither API available.
     """
+    # Install the torch stub BEFORE any xgrammar import. If this lives
+    # inside the first try-block, a failure on the 0.1.34+ path can leave
+    # the fallback try-block importing xgrammar without the stub, which
+    # is guaranteed ImportError on stub-only (DMG) deployments.
+    try:
+        from omlx._torch_stub import install as _install_torch_stub
+
+        _install_torch_stub()
+    except Exception as e:  # pragma: no cover — defensive
+        logger.debug("torch stub install failed: %s", e)
+
     # Prefer the 0.1.34+ registry so newer parsers (qwen3_6, gemma4,
     # deepseek_v4, ...) are exposed.
     try:
@@ -2093,6 +2106,11 @@ async def update_model_settings(
 
     if "reasoning_parser" in sent:
         current_settings.reasoning_parser = request.reasoning_parser or None
+    if "guided_grammar_enabled" in sent:
+        current_settings.guided_grammar_enabled = request.guided_grammar_enabled or False
+    if "guided_grammar" in sent:
+        grammar = request.guided_grammar.strip() if request.guided_grammar else None
+        current_settings.guided_grammar = grammar or None
     if request.is_pinned is not None:
         current_settings.is_pinned = request.is_pinned
         # Also update the engine pool entry
@@ -4599,6 +4617,8 @@ async def list_hf_models(is_admin: bool = Depends(require_admin)):
                     if (child / "config.json").exists():
                         _add_model(child, child.name)
 
+    # Sort case-insensitively by name for a stable, user-friendly order.
+    models.sort(key=lambda m: m["name"].lower())
     return {"models": models}
 
 

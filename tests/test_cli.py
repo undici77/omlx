@@ -7,9 +7,11 @@ Note: Configuration validation tests are in test_config.py.
 """
 
 import argparse
+import socket
 import subprocess
 import sys
-from unittest.mock import patch, MagicMock
+from types import ModuleType, SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -298,22 +300,77 @@ class TestLaunchCommandFunction:
             tools_profile="coding",
         )
 
-        with patch("requests.get", side_effect=[health_response, status_response]):
-            with patch("omlx.integrations.get_integration", return_value=integration):
-                with patch("omlx.settings.GlobalSettings.load", return_value=settings):
-                    launch_command(args)
+        with (
+            patch("requests.get", side_effect=[health_response, status_response]),
+            patch("omlx.integrations.get_integration", return_value=integration),
+            patch("omlx.settings.GlobalSettings.load", return_value=settings),
+        ):
+            launch_command(args)
 
-        integration.launch.assert_called_once_with(
-            port=8000,
+        integration.launch.assert_called_once()
+        ctx = integration.launch.call_args.args[0]
+        assert ctx.host == "127.0.0.1"
+        assert ctx.port == 8000
+        assert ctx.api_key == "test-key"
+        assert ctx.model == "qwen2.5-vl"
+        assert ctx.tools_profile == "coding"
+        assert ctx.context_window == 32768
+        assert ctx.max_tokens == 8192
+        assert ctx.model_type == "vlm"
+        assert ctx.extra_args == ()
+
+    def test_launch_command_resolves_alias_status_metadata(self):
+        """Alias model IDs should keep status metadata from the real model."""
+        from omlx.cli import launch_command
+
+        integration = MagicMock()
+        integration.display_name = "OpenCode"
+        integration.is_installed.return_value = True
+
+        health_response = MagicMock()
+        health_response.raise_for_status.return_value = None
+
+        status_response = MagicMock()
+        status_response.ok = True
+        status_response.json.return_value = {
+            "models": [
+                {
+                    "id": "qwen2.5-vl-raw",
+                    "model_alias": "gpt-4o",
+                    "model_type": "vlm",
+                    "max_context_window": 32768,
+                    "max_tokens": 8192,
+                    "enable_thinking": False,
+                }
+            ]
+        }
+
+        settings = MagicMock()
+        settings.server.host = "127.0.0.1"
+        settings.server.port = 8000
+
+        args = argparse.Namespace(
+            tool="opencode",
+            host=None,
+            port=None,
             api_key="test-key",
-            model="qwen2.5-vl",
-            host="127.0.0.1",
+            model="gpt-4o",
             tools_profile="coding",
-            context_window=32768,
-            max_tokens=8192,
-            model_type="vlm",
-            extra_args=None,
         )
+
+        with (
+            patch("requests.get", side_effect=[health_response, status_response]),
+            patch("omlx.integrations.get_integration", return_value=integration),
+            patch("omlx.settings.GlobalSettings.load", return_value=settings),
+        ):
+            launch_command(args)
+
+        ctx = integration.launch.call_args.args[0]
+        assert ctx.model == "gpt-4o"
+        assert ctx.context_window == 32768
+        assert ctx.max_tokens == 8192
+        assert ctx.model_type == "vlm"
+        assert ctx.reasoning is False
 
     def test_launch_command_forwards_extra_args(self):
         """Unknown CLI tokens (e.g. --resume <id>) should reach integration.launch."""
@@ -352,13 +409,15 @@ class TestLaunchCommandFunction:
             tools_profile="coding",
         )
 
-        with patch("requests.get", side_effect=[health_response, status_response]):
-            with patch("omlx.integrations.get_integration", return_value=integration):
-                with patch("omlx.settings.GlobalSettings.load", return_value=settings):
-                    launch_command(args, extra_args=["--resume", "abc123"])
+        with (
+            patch("requests.get", side_effect=[health_response, status_response]),
+            patch("omlx.integrations.get_integration", return_value=integration),
+            patch("omlx.settings.GlobalSettings.load", return_value=settings),
+        ):
+            launch_command(args, extra_args=["--resume", "abc123"])
 
-        _, kwargs = integration.launch.call_args
-        assert kwargs["extra_args"] == ["--resume", "abc123"]
+        ctx = integration.launch.call_args.args[0]
+        assert ctx.extra_args == ("--resume", "abc123")
 
 
 class TestLaunchArgvParsing:
@@ -378,6 +437,82 @@ class TestLaunchArgvParsing:
 
 class TestServeCommandFunctions:
     """Tests for serve command function."""
+
+    @staticmethod
+    def _make_serve_args(tmp_path, host="127.0.0.1", port=8000, **overrides):
+        defaults = {
+            "model_dir": None,
+            "host": host,
+            "port": port,
+            "log_level": None,
+            "sse_keepalive_mode": None,
+            "max_concurrent_requests": None,
+            "embedding_batch_size": None,
+            "paged_ssd_cache_dir": None,
+            "paged_ssd_cache_max_size": None,
+            "hot_cache_max_size": None,
+            "no_cache": True,
+            "initial_cache_blocks": None,
+            "mcp_config": None,
+            "hf_endpoint": None,
+            "ms_endpoint": None,
+            "http_proxy": None,
+            "https_proxy": None,
+            "no_proxy": None,
+            "ca_bundle": None,
+            "base_path": str(tmp_path),
+            "api_key": None,
+        }
+        defaults.update(overrides)
+        return argparse.Namespace(**defaults)
+
+    @staticmethod
+    def _make_settings(tmp_path, host="127.0.0.1", port=8000):
+        log_dir = tmp_path / "logs"
+        settings = SimpleNamespace()
+        settings.base_path = tmp_path
+        settings.server = SimpleNamespace(host=host, port=port, log_level="info")
+        settings.huggingface = SimpleNamespace(endpoint=None)
+        settings.modelscope = SimpleNamespace(endpoint=None)
+        settings.network = SimpleNamespace(
+            http_proxy=None,
+            https_proxy=None,
+            no_proxy=None,
+            ca_bundle=None,
+        )
+        settings.logging = SimpleNamespace(
+            retention_days=7,
+            get_log_dir=lambda base_path: log_dir,
+        )
+        settings.model = SimpleNamespace(
+            get_model_dirs=lambda base_path: [tmp_path / "models"],
+        )
+        settings.memory = SimpleNamespace(memory_guard_tier="balanced")
+        settings.mcp = SimpleNamespace(config_path=None)
+        settings.cache = SimpleNamespace(
+            enabled=False,
+            get_ssd_cache_dir=lambda base_path: tmp_path / "cache",
+            get_ssd_cache_max_size_bytes=lambda base_path: 0,
+            get_hot_cache_max_size_bytes=lambda: 0,
+        )
+        settings.auth = SimpleNamespace(api_key=None)
+        settings.ensure_directories = lambda: log_dir.mkdir(parents=True, exist_ok=True)
+        settings.validate = lambda: []
+        settings.save = MagicMock()
+        settings.to_scheduler_config = lambda: SimpleNamespace(
+            paged_ssd_cache_dir=None,
+            paged_ssd_cache_max_size=0,
+            hot_cache_max_size=0,
+        )
+        return settings
+
+    @staticmethod
+    def _reserve_port(host="127.0.0.1"):
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.bind((host, 0))
+        sock.listen(1)
+        return sock
 
     def test_serve_command_exists(self):
         """Test that serve_command function exists."""
@@ -419,6 +554,109 @@ class TestServeCommandFunctions:
         assert "embedding_batch_size" in result.stdout
         assert not (tmp_path / "settings.json").exists()
 
+    def test_serve_exits_on_port_conflict_before_importing_server(
+        self, tmp_path, monkeypatch
+    ):
+        """Port conflicts should fail before server import can preload pinned models."""
+        import uvicorn
+
+        from omlx.cli import serve_command
+
+        listener = self._reserve_port()
+        host, port = listener.getsockname()
+        settings = self._make_settings(tmp_path, host=host, port=port)
+        args = self._make_serve_args(tmp_path, host=host, port=port)
+        previous_server = sys.modules.pop("omlx.server", None)
+        events = []
+
+        original_bind_socket = uvicorn.Config.bind_socket
+
+        def tracking_bind_socket(config):
+            events.append("bind")
+            return original_bind_socket(config)
+
+        monkeypatch.setattr("omlx.settings.init_settings", lambda **kwargs: settings)
+        monkeypatch.setattr(
+            "omlx.logging_config.configure_file_logging",
+            lambda **kwargs: None,
+        )
+        monkeypatch.setattr("faulthandler.enable", lambda *args, **kwargs: None)
+        monkeypatch.setattr("uvicorn.Config.bind_socket", tracking_bind_socket)
+        try:
+            with pytest.raises(SystemExit) as exc:
+                serve_command(args)
+
+            assert exc.value.code != 0
+            assert events == ["bind"]
+            assert "omlx.server" not in sys.modules
+        finally:
+            listener.close()
+            if previous_server is not None:
+                sys.modules["omlx.server"] = previous_server
+
+    def test_serve_hands_prebound_socket_to_uvicorn(self, tmp_path, monkeypatch):
+        """Successful serve startup should pass the pre-bound socket into uvicorn."""
+        import omlx
+        import uvicorn
+
+        from omlx.cli import serve_command
+
+        host, port = "127.0.0.1", 0
+        settings = self._make_settings(tmp_path, host=host, port=port)
+        args = self._make_serve_args(tmp_path, host=host, port=port)
+        events = []
+
+        fake_server = ModuleType("omlx.server")
+
+        async def app(scope, receive, send):
+            return None
+
+        def fake_init_server(**kwargs):
+            events.append("init")
+
+        fake_server.app = app
+        fake_server.init_server = MagicMock(side_effect=fake_init_server)
+        monkeypatch.setitem(sys.modules, "omlx.server", fake_server)
+        monkeypatch.setattr(omlx, "server", fake_server, raising=False)
+
+        fake_mlx = ModuleType("mlx")
+        fake_mlx_core = ModuleType("mlx.core")
+        fake_mlx_core.device_info = lambda: {"memory_size": 0}
+        fake_mlx_core.set_cache_limit = MagicMock()
+        fake_mlx.core = fake_mlx_core
+        monkeypatch.setitem(sys.modules, "mlx", fake_mlx)
+        monkeypatch.setitem(sys.modules, "mlx.core", fake_mlx_core)
+
+        monkeypatch.setattr("omlx.settings.init_settings", lambda **kwargs: settings)
+        monkeypatch.setattr(
+            "omlx.logging_config.configure_file_logging",
+            lambda **kwargs: None,
+        )
+        monkeypatch.setattr("faulthandler.enable", lambda *args, **kwargs: None)
+        captured = {}
+        original_bind_socket = uvicorn.Config.bind_socket
+
+        def tracking_bind_socket(config):
+            sock = original_bind_socket(config)
+            events.append("bind")
+            return sock
+
+        def fake_run(self, sockets=None):
+            self.config.load()
+            events.append("run")
+            captured["socket_name"] = sockets[0].getsockname()
+            captured["socket_count"] = len(sockets)
+
+        monkeypatch.setattr("uvicorn.Config.bind_socket", tracking_bind_socket)
+        monkeypatch.setattr("uvicorn.Server.run", fake_run)
+
+        serve_command(args)
+
+        fake_server.init_server.assert_called_once()
+        assert events == ["bind", "init", "run"]
+        assert captured["socket_count"] == 1
+        assert captured["socket_name"][0] == host
+        assert captured["socket_name"][1] > 0
 
 
 class TestHasCliOverrides:

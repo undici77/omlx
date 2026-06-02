@@ -233,6 +233,8 @@ class TestRealDflashIntegration:
         from omlx.patches.dflash_lifecycle import install_dflash_lifecycle_wrap
         try:
             from dflash_mlx.engine import target_qwen_gdn
+            if target_qwen_gdn.__class__.__name__ == "MockModule":
+                pytest.skip("dflash-mlx is mocked in this environment")
         except ImportError:
             pytest.skip("dflash-mlx not installed in this environment")
 

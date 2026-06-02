@@ -24,7 +24,7 @@ _APPLIED = False
 
 def _register_module() -> None:
     qualname = "mlx_lm.models.step3p7"
-    if qualname in sys.modules:
+    if qualname in sys.modules and hasattr(sys.modules[qualname], "Model"):
         return
 
     here = Path(__file__).parent
@@ -52,6 +52,8 @@ def apply_step3p7_patch() -> bool:
 
     try:
         module = importlib.import_module("mlx_lm.models.step3p7")
+        if not hasattr(module, "Model"):
+            raise ImportError("Mock step3p7 lacks Model")
     except ImportError:
         try:
             import mlx_lm  # noqa: F401

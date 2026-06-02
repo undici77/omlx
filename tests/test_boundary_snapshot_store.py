@@ -756,6 +756,7 @@ class TestBoundarySnapshotSSDStore:
                         [MagicMock()],
                         _mock_extract_cache_states,
                     )
+                    _time.sleep(0.002)
             except Exception as e:
                 errors.append(e)
 
@@ -793,7 +794,12 @@ class TestBoundarySnapshotSSDStore:
         assert not errors, errors
 
         # Let writer drain.
-        _time.sleep(0.5)
+        for _ in range(100):
+            if self.store._write_queue.qsize() == 0:
+                if self.store._writer_busy.acquire(blocking=False):
+                    self.store._writer_busy.release()
+                    break
+            _time.sleep(0.1)
 
         # Orphan check: every .safetensors on disk must have a matching
         # registry entry. The reverse direction is fine to drift (the

@@ -74,6 +74,15 @@ class MockMLXLoader(importlib.abc.Loader):
         def tolist(self):
             return self._data.tolist()
 
+        def moveaxis(self, src, dst):
+            return self.__class__(np.moveaxis(self._data, src, dst), dtype=self.dtype)
+
+        def __float__(self):
+            return float(self.item())
+
+        def __int__(self):
+            return int(self.item())
+
         def astype(self, dtype):
             return self.__class__(self._data, dtype=dtype)
 
@@ -134,7 +143,7 @@ class MockMLXLoader(importlib.abc.Loader):
                 yield self.__class__(item)
 
         def __getitem__(self, i):
-            return self.__class__(self._data[self._unwrap_index(i)])
+            return self.__class__(self._data[self._unwrap_index(i)], dtype=self.dtype)
 
         def __setitem__(self, i, v):
             self._data[self._unwrap_index(i)] = v._data if hasattr(v, "_data") else v
@@ -266,7 +275,9 @@ class MockMLXLoader(importlib.abc.Loader):
                 self.__spec__ = importlib.machinery.ModuleSpec(name, None)
 
             def __getattr__(self, name):
-                if name in ("__path__", "__file__", "__all__"):
+                if name == "__file__":
+                    return "mock_mlx.py"
+                if name in ("__path__", "__all__"):
                     return None
                 if name not in self.__mock_items:
                     if self.__name__ == "mlx.core":
@@ -277,9 +288,23 @@ class MockMLXLoader(importlib.abc.Loader):
                         if name == "metal":
                             m = MockModule("mlx.core.metal")
                             m.is_available = lambda: False
-                            m.device_info = lambda: {"max_buffer_length": 1 << 30}
+                            m.device_info = lambda: {
+                                "memory_size": 16 * 1024 * 1024 * 1024,
+                                "max_recommended_working_set_size": 12 * 1024 * 1024 * 1024,
+                                "device_name": "Apple M2 Mock",
+                                "max_buffer_length": 1 << 30,
+                            }
                             m.clear_cache = lambda: None
                             return m
+                        if name == "device_info":
+                            return lambda: {
+                                "memory_size": 16 * 1024 * 1024 * 1024,
+                                "max_recommended_working_set_size": 12 * 1024 * 1024 * 1024,
+                                "device_name": "Apple M2 Mock",
+                                "max_buffer_length": 1 << 30,
+                            }
+                        if name == "copy":
+                            return lambda a: loader.array(loader.array(a)._data.copy(), dtype=getattr(a, "dtype", None))
                         if name in ("random", "linalg", "distributed", "fast"):
                             return loader.create_module(
                                 importlib.machinery.ModuleSpec(
@@ -332,6 +357,16 @@ class MockMLXLoader(importlib.abc.Loader):
                             return lambda qw, scales=None, biases=None, **k: loader.array(loader.array(qw)._data.astype(np.float32))
                         if name == "quantize":
                             return lambda w, group_size=64, bits=4, mode="affine", **k: (loader.array(np.round(loader.array(w)._data).astype(np.uint32), dtype="uint32"), loader.array(np.ones((loader.array(w).shape[0], max(1, loader.array(w).shape[1] // max(group_size, 1))), dtype=np.float32)), loader.array(np.zeros((loader.array(w).shape[0], max(1, loader.array(w).shape[1] // max(group_size, 1))), dtype=np.float32)))
+                        if name == "clip":
+                            return lambda a, a_min, a_max: loader.array(
+                                np.clip(
+                                    loader.array(a)._data,
+                                    loader.array(a_min)._data if hasattr(a_min, "_data") else a_min,
+                                    loader.array(a_max)._data if hasattr(a_max, "_data") else a_max,
+                                )
+                            )
+                        if name == "get_peak_memory":
+                            return lambda: 0
                         if name in ("mean", "max", "min", "sum", "all", "any"):
                             return lambda a, axis=None, keepdims=False: loader.array(
                                 getattr(np, name)(
@@ -542,8 +577,20 @@ class MockMLXLoader(importlib.abc.Loader):
                                 self.offset = 0
                                 for key, val in k.items():
                                     setattr(self, key, val)
+                                if a and hasattr(a[0], "vocab_size"):
+                                    self.vocab_size = a[0].vocab_size
+                                elif a and isinstance(a[0], dict) and "vocab_size" in a[0]:
+                                    self.vocab_size = a[0]["vocab_size"]
 
                             def __call__(self, *a, **k):
+                                if a:
+                                    inputs = a[0]
+                                    if hasattr(inputs, "shape"):
+                                        B, L = inputs.shape[0], inputs.shape[1]
+                                        vocab_size = getattr(self, "vocab_size", 1024)
+                                        if hasattr(self, "args") and hasattr(self.args, "vocab_size"):
+                                            vocab_size = self.args.vocab_size
+                                        return loader.array(np.zeros((B, L, vocab_size)))
                                 return loader.array(np.zeros((1, 1)))
 
                             @classmethod
@@ -553,6 +600,14 @@ class MockMLXLoader(importlib.abc.Loader):
                             @classmethod
                             def from_cache(cls, *a, **k):
                                 return cls()
+
+                            def make_cache(self):
+                                cache_mod = sys.modules.get("mlx_lm.models.cache")
+                                rotating_cls = getattr(cache_mod, "RotatingKVCache", object) if cache_mod else object
+                                return [rotating_cls() for _ in range(10)]
+
+                            def sanitize(self, weights):
+                                return weights
 
                             def prompt(self, *a, **k):
                                 return None
@@ -978,7 +1033,20 @@ class MockMLXLoader(importlib.abc.Loader):
                     if v and len(v) >= 4:
                         self.ratio, self.remainder, self._pool_lengths, self._processed = v
 
-            for cls in (_BaseCache, KVCache, RotatingKVCache, BatchRotatingKVCache, CacheList, ArraysCache, PoolingCache, BatchPoolingCache):
+            class BatchKVCache(KVCache):
+                def __init__(self, left_padding):
+                    super().__init__()
+                    self.left_padding = loader.array(left_padding)
+                    self.offset = loader.array([-l for l in left_padding]) if len(left_padding) > 1 else -left_padding[0]
+
+                def make_mask(self, N, return_array=False, window_size=None):
+                    cache_mod = sys.modules.get("mlx_lm.models.cache")
+                    create_fn = getattr(cache_mod, "create_causal_mask")
+                    offset = self.offset
+                    phys = offset.max().item() if hasattr(offset, "max") else offset
+                    return create_fn(N, offset=phys, window_size=window_size, left_padding=self.left_padding)
+
+            for cls in (_BaseCache, KVCache, RotatingKVCache, BatchRotatingKVCache, CacheList, ArraysCache, PoolingCache, BatchPoolingCache, BatchKVCache):
                 cls.__module__ = spec.name
 
             m._BaseCache = _BaseCache
@@ -989,6 +1057,7 @@ class MockMLXLoader(importlib.abc.Loader):
             m.CacheList = CacheList
             m.PoolingCache = PoolingCache
             m.BatchPoolingCache = BatchPoolingCache
+            m.BatchKVCache = BatchKVCache
             m.make_prompt_cache = lambda *a, **k: []
             m.create_attention_mask = lambda *a, **k: loader.array(np.zeros((1, 1, 1, 1)))
             m.create_causal_mask = lambda *a, **k: loader.array(np.zeros((1, 1, 1, 1)))
@@ -1150,7 +1219,10 @@ class MockMLXLoader(importlib.abc.Loader):
             m.GenerationBatch = GenerationBatch
             m.PromptProcessingBatch = PromptProcessingBatch
             m.SequenceStateMachine = SequenceStateMachine
-            m.BatchGenerator = type("BatchGenerator", (), {"__init__": lambda *a, **k: None})
+            m.BatchGenerator = type("BatchGenerator", (), {
+                "__init__": lambda *a, **k: None,
+                "_next": lambda *a, **k: None,
+            })
             if not hasattr(loader, "_generation_stream"):
                 loader._generation_stream = type("Stream", (), {})()
             m.generation_stream = loader._generation_stream
@@ -1389,7 +1461,9 @@ class MockMLXLoader(importlib.abc.Loader):
                         self.bits = float(value[0])
                         self.seed = int(value[1])
 
-                def dequantize(self):
+                def dequantize(self, keys=None, values=None):
+                    if keys is not None and values is not None:
+                        return self.key_codec.dequantize(keys), self.value_codec.dequantize(values)
                     if self.keys is None:
                         empty = loader.array(np.zeros((1, 1, 0, 1)))
                         return empty, empty

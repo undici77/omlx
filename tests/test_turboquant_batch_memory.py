@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Phase 2: batched TurboQuant accuracy + memory/occupancy vs single-seq.
 
 Three comparisons on a real model:

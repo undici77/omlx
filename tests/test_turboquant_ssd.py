@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Phase 3: TurboQuant + paged-SSD prefix cache (single + batch).
 
 Validates the SSD round-trip now that TurboQuant decode actually engages:

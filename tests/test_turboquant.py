@@ -521,6 +521,7 @@ def test_decode_single_token_quantize_is_accurate():
     assert rel_err < 0.05, f"decode-token quantize error {rel_err:.1%} (kernel bug?)"
 
 
+@pytest.mark.slow
 def test_batch_masked_decode_is_accurate():
     """Regression: B>1 continuous-batching decode passes an array mask.
 

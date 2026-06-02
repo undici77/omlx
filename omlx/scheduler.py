@@ -139,7 +139,7 @@ def _safe_sync_stream(stream=None):
     current thread" RuntimeError. Swallow that specific case so cleanup can
     proceed; re-raise anything else so real GPU errors stay visible.
     """
-    target = stream if stream is not None else generation_stream
+    target = stream if stream is not None else _default_generation_stream
     try:
         mx.synchronize(target)
     except RuntimeError as e:
@@ -1693,7 +1693,7 @@ class Scheduler:
         from mlx_lm.models.cache import CacheList, KVCache
 
         def _ok(c: Any) -> bool:
-            if isinstance(c, KVCache):
+            if type(c) is KVCache:
                 return True
             if isinstance(c, CacheList):
                 return all(_ok(inner) for inner in c.caches)
@@ -1713,14 +1713,14 @@ class Scheduler:
         from mlx_lm.models.cache import CacheList, KVCache
         from mlx_vlm.turboquant import TurboQuantKVCache
 
-        kv_indices = [i for i, c in enumerate(prompt_cache) if isinstance(c, KVCache)]
+        kv_indices = [i for i, c in enumerate(prompt_cache) if type(c) is KVCache]
         skip_last = self._turboquant_skip_last and len(kv_indices) > 1
         last_kv_idx = kv_indices[-1] if skip_last else -1
 
         converted = 0
         bits = float(self._turboquant_kv_bits)
         for i, cache_obj in enumerate(prompt_cache):
-            if isinstance(cache_obj, KVCache):
+            if type(cache_obj) is KVCache:
                 if i == last_kv_idx:
                     continue
                 prompt_cache[i] = TurboQuantKVCache(bits=bits)
@@ -1728,7 +1728,7 @@ class Scheduler:
             elif isinstance(cache_obj, CacheList):
                 new_caches = []
                 for c in cache_obj.caches:
-                    if isinstance(c, KVCache):
+                    if type(c) is KVCache:
                         new_caches.append(TurboQuantKVCache(bits=bits))
                         converted += 1
                     else:

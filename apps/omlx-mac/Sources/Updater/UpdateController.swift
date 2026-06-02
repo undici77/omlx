@@ -1,0 +1,338 @@
+// Updates section view-model.
+//
+// Drives the AppView's Status screen: the check state (idle / checking /
+// available), the channel (Stable / Release Candidate / Dev), and two background
+// prefs (autoCheck + autoDownload). Channel + prefs persist to
+// `~/Library/Application Support/oMLX/update-prefs.json` so they survive
+// a relaunch.
+//
+// Update mechanism: GitHub Releases is the single source of truth. The
+// PyObjC menubar app shipped this pattern; the Swift app uses the same
+// flow via `ReleasesChecker` + `AppUpdater`. No appcast XML, no EdDSA
+// keys. Apple's notarization stapled to each .dmg is the trust boundary.
+
+import AppKit
+import Foundation
+
+enum UpdateChannel: String, Codable, CaseIterable, Identifiable, Sendable {
+    case stable
+    case releaseCandidate = "release_candidate"
+    case dev
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .stable:
+            return String(localized: "update.channel.stable",
+                          defaultValue: "Stable",
+                          comment: "Display name for the Stable update channel")
+        case .releaseCandidate:
+            return String(localized: "update.channel.release_candidate",
+                          defaultValue: "Release Candidate",
+                          comment: "Display name for the Release Candidate update channel")
+        case .dev:
+            return String(localized: "update.channel.dev",
+                          defaultValue: "Dev",
+                          comment: "Display name for the Dev update channel")
+        }
+    }
+
+    init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        switch raw {
+        case "stable":
+            self = .stable
+        case "release_candidate", "beta":
+            self = .releaseCandidate
+        case "dev", "nightly":
+            self = .dev
+        default:
+            self = .stable
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
+}
+
+struct AvailableUpdate: Equatable, Sendable {
+    let version: String
+    let sizeText: String?
+    let notes: String
+    let htmlURL: URL
+    let dmgURL: URL?
+}
+
+@MainActor
+final class UpdateController: ObservableObject {
+    static let stateDidChangeNotification = Notification.Name("OMLXUpdateControllerStateDidChange")
+
+    enum CheckState: Equatable, Sendable {
+        case idle(lastChecked: Date?)
+        case checking
+        case downloading(percent: Int)
+        case available(AvailableUpdate)
+        case ready(AvailableUpdate)
+    }
+
+    @Published private(set) var state: CheckState = .idle(lastChecked: nil) {
+        didSet {
+            NotificationCenter.default.post(
+                name: Self.stateDidChangeNotification,
+                object: self
+            )
+        }
+    }
+    @Published private(set) var lastError: String?
+    @Published var channel: UpdateChannel {
+        didSet {
+            guard !suspendPersist else { return }
+            persist()
+            checkForUpdates()
+        }
+    }
+    @Published var autoCheck: Bool {
+        didSet {
+            guard !suspendPersist else { return }
+            persist()
+            if autoCheck {
+                backgroundCheck()
+                scheduleBackgroundChecker()
+            } else {
+                backgroundTimer?.invalidate()
+                backgroundTimer = nil
+            }
+        }
+    }
+    @Published var autoDownload: Bool {
+        didSet { if !suspendPersist { persist() } }
+    }
+    @Published var consentGiven: Bool {
+        didSet { if !suspendPersist { persist() } }
+    }
+
+    /// Whether the auto-check / auto-download toggles should be enabled.
+    /// When consent is not yet given the user may still enable them (which
+    /// grants consent), but the UI shows an inline consent notice.
+    var updatesEnabled: Bool { consentGiven }
+
+    /// Grant explicit opt-in consent for update checks. Call from the UI
+    /// when the user acknowledges what update checks do.
+    func grantConsent() {
+        consentGiven = true
+    }
+
+    private let storeURL: URL
+    private let currentVersion: String
+    private var suspendPersist = true
+    private var checkTask: Task<Void, Never>?
+    private var updater: AppUpdater?
+    private var backgroundTimer: Timer?
+    private var terminateForUpdate: (@MainActor () -> Void)?
+
+    init(
+        storeURL: URL = AppConfig.appSupportURL().appendingPathComponent("update-prefs.json"),
+        currentVersion: String = Bundle.main.shortVersionString
+    ) {
+        self.storeURL = storeURL
+        self.currentVersion = currentVersion
+        let prefs = Self.readPrefs(from: storeURL) ?? Prefs(
+            channel: .stable, autoCheck: false, autoDownload: false, consentGiven: false
+        )
+        self.channel = prefs.channel
+        self.autoCheck = prefs.autoCheck
+        self.autoDownload = prefs.autoDownload
+        self.consentGiven = prefs.consentGiven
+        self.suspendPersist = false
+    }
+
+    /// Idempotent. Call once after AppDelegate stands up so we clean up any
+    /// staged bundle from a prior session and (when enabled) kick off a
+    /// background check.
+    func bootstrap() {
+        AppUpdater.cleanupStaged()
+        if autoCheck {
+            backgroundCheck()
+            scheduleBackgroundChecker()
+        }
+    }
+
+    func setTerminateForUpdate(_ handler: @escaping @MainActor () -> Void) {
+        self.terminateForUpdate = handler
+    }
+
+    /// User-initiated check.
+    func checkForUpdates() {
+        checkTask?.cancel()
+        state = .checking
+        lastError = nil
+        checkTask = Task { [weak self] in
+            guard let self else { return }
+            await self.runCheck(userInitiated: true)
+        }
+    }
+
+    /// One-button "Install & Restart" — matches the PyObjC menubar's
+    /// flow. When the state is `.available`, kick off the download and
+    /// auto-finish into `.ready`, then swap + terminate from the
+    /// `onReady` callback below. When the state is already `.ready`
+    /// (auto-download completed in the background), swap immediately.
+    func installAndRestart() {
+        switch state {
+        case .available(let info):
+            guard let dmg = info.dmgURL else {
+                lastError = String(localized: "update.error.no_dmg",
+                                   defaultValue: "No installable DMG was attached to this release.",
+                                   comment: "Shown when the release has no matching DMG asset")
+                return
+            }
+            startDownload(info: info, dmgURL: dmg, autoInstall: true)
+        case .ready:
+            performSwap()
+        default:
+            break
+        }
+    }
+
+    private func performSwap() {
+        if AppUpdater.performSwapAndRelaunch() {
+            if let terminateForUpdate {
+                terminateForUpdate()
+            } else {
+                NSApp.terminate(nil)
+            }
+        } else {
+            lastError = String(localized: "update.error.swap_failed",
+                               defaultValue: "Could not find the staged update. Try downloading again.",
+                               comment: "Shown when the swap script can't find the staged bundle")
+            state = .idle(lastChecked: Date())
+        }
+    }
+
+    // MARK: - Internals
+
+    private func backgroundCheck() {
+        checkTask?.cancel()
+        checkTask = Task { [weak self] in
+            guard let self else { return }
+            await self.runCheck(userInitiated: false)
+        }
+    }
+
+    private func scheduleBackgroundChecker() {
+        backgroundTimer?.invalidate()
+        // Re-check every 24 h while the app is running.
+        backgroundTimer = Timer.scheduledTimer(withTimeInterval: 24 * 3600, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                if self.autoCheck { self.backgroundCheck() }
+            }
+        }
+    }
+
+    private func runCheck(userInitiated: Bool) async {
+        do {
+            let result = try await ReleasesChecker.check(
+                currentVersion: currentVersion,
+                channel: channel
+            )
+            await MainActor.run {
+                if let release = result {
+                    let info = AvailableUpdate(
+                        version: release.version,
+                        sizeText: release.dmgSize.map { ByteCountFormatter.string(fromByteCount: $0, countStyle: .file) },
+                        notes: release.notes,
+                        htmlURL: release.htmlURL,
+                        dmgURL: release.dmgURL
+                    )
+                    self.state = .available(info)
+                    if self.autoDownload, let dmg = info.dmgURL, !userInitiated {
+                        self.startDownload(info: info, dmgURL: dmg, autoInstall: false)
+                    }
+                } else {
+                    self.state = .idle(lastChecked: Date())
+                }
+            }
+        } catch is CancellationError {
+            // Quietly drop — a fresh check is in flight or app is shutting down.
+        } catch {
+            NSLog("oMLX: update check failed — %@", String(describing: error))
+            await MainActor.run {
+                if userInitiated {
+                    self.lastError = String(describing: error)
+                }
+                self.state = .idle(lastChecked: Date())
+            }
+        }
+    }
+
+    private func startDownload(info: AvailableUpdate, dmgURL: URL, autoInstall: Bool) {
+        let updater = AppUpdater(
+            dmgURL: dmgURL,
+            version: info.version,
+            onProgress: { [weak self] progress in
+                guard let self else { return }
+                switch progress {
+                case .starting, .mounting, .staging:
+                    if case .downloading = self.state { /* keep showing percent */ } else {
+                        self.state = .downloading(percent: 0)
+                    }
+                case .downloading(let pct, _, _):
+                    self.state = .downloading(percent: pct)
+                case .ready:
+                    self.state = .ready(info)
+                }
+            },
+            onError: { [weak self] err in
+                guard let self else { return }
+                self.lastError = String(describing: err)
+                self.state = .available(info)
+                self.updater = nil
+            },
+            onReady: { [weak self] in
+                guard let self else { return }
+                self.state = .ready(info)
+                self.updater = nil
+                if autoInstall {
+                    self.performSwap()
+                }
+            }
+        )
+        self.updater = updater
+        updater.start()
+    }
+
+    // MARK: - Persistence
+
+    private struct Prefs: Codable {
+        var channel: UpdateChannel
+        var autoCheck: Bool
+        var autoDownload: Bool
+        var consentGiven: Bool
+    }
+
+    private static func readPrefs(from url: URL) -> Prefs? {
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        return try? JSONDecoder().decode(Prefs.self, from: data)
+    }
+
+    private func persist() {
+        let prefs = Prefs(
+            channel: channel,
+            autoCheck: autoCheck,
+            autoDownload: autoDownload,
+            consentGiven: consentGiven
+        )
+        guard let data = try? JSONEncoder().encode(prefs) else { return }
+        try? data.write(to: storeURL, options: [.atomic])
+    }
+}
+
+private extension Bundle {
+    var shortVersionString: String {
+        (infoDictionary?["CFBundleShortVersionString"] as? String) ?? "0.0.0"
+    }
+}

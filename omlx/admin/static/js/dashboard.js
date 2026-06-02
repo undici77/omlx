@@ -33,7 +33,7 @@
                 server: { host: '127.0.0.1', port: 8000, log_level: 'info', sse_keepalive_mode: 'chunk' },
                 model: { model_dirs: [''] },
                 memory: { prefill_memory_guard: true, memory_guard_tier: 'balanced', memory_guard_custom_ceiling_gb: 0 },
-                scheduler: { max_concurrent_requests: 8 },
+                scheduler: { max_concurrent_requests: 8, embedding_batch_size: 32, chunked_prefill: false },
                 cache: { enabled: true, ssd_cache_dir: '', ssd_cache_max_size: 'auto', hot_cache_max_size: '0', initial_cache_blocks: 256, hot_cache_only: false },
                 sampling: { max_context_window: 32768, max_tokens: 32768, temperature: 1.0, top_p: 0.95, top_k: 0, repetition_penalty: 1.0 },
                 mcp: { config_path: '' },
@@ -381,6 +381,11 @@
             benchUploadDone: null,
             benchUploading: false,
             benchUploadSkipped: null,  // { features: [...] } when upload was skipped due to experimental features
+            // { bench_id, model_id } when the server reports a running bench
+            // that is NOT the one this tab is displaying. Drives the "another
+            // bench is running" banner + disables Start so the user doesn't
+            // race a 409 on the server.
+            benchOtherActive: null,
 
             // Bench sub-tab & dropdown
             benchTab: 'throughput',
@@ -469,6 +474,17 @@
                     this.handleMainTabChange(value);
                 });
 
+                // When the user returns to this browser tab after looking
+                // elsewhere, re-check whether a different bench just started
+                // in another tab. Fires the banner without requiring an
+                // in-app tab switch.
+                document.addEventListener('visibilitychange', () => {
+                    if (document.visibilityState !== 'visible') return;
+                    if (this.mainTab === 'bench' && this.benchTab === 'throughput') {
+                        this.loadBenchState();
+                    }
+                });
+
                 this.$watch('hfMlxOnly', () => {
                     this.hfRecommended = { trending: [], popular: [] };
                     this.hfRecommendedLoaded = false;
@@ -547,6 +563,7 @@
                 }
                 if (value === 'bench') {
                     if (!this.benchDeviceInfo) await this.loadBenchDeviceInfo();
+                    await this.loadBenchState();
                     await this.loadAccState();
                 }
             },
@@ -716,6 +733,7 @@
                 if (!s.server.port) errors.push('Port');
                 if (!s.model.model_dirs || !s.model.model_dirs.some(d => d.trim())) errors.push('Model Directory');
                 if (!s.scheduler.max_concurrent_requests) errors.push('Max Concurrent Requests');
+                if (!s.scheduler.embedding_batch_size) errors.push('Embedding Batch Size');
                 if (!s.cache.ssd_cache_max_size) errors.push('Max Cache Size');
                 if (!s.sampling.max_context_window) errors.push('Max Context Window');
                 if (!s.sampling.max_tokens) errors.push('Max Tokens');
@@ -755,6 +773,7 @@
                             memory_guard_tier: this.globalSettings.memory.memory_guard_tier,
                             memory_guard_custom_ceiling_gb: this.globalSettings.memory.memory_guard_custom_ceiling_gb,
                             max_concurrent_requests: this.globalSettings.scheduler.max_concurrent_requests,
+                            embedding_batch_size: this.globalSettings.scheduler.embedding_batch_size,
                             chunked_prefill: this.globalSettings.scheduler.chunked_prefill,
                             cache_enabled: this.globalSettings.cache.enabled,
                             ssd_cache_dir: this.globalSettings.cache.ssd_cache_dir,
@@ -996,6 +1015,16 @@
                         if (ms.enableToolResultLimit) out.max_tool_result_tokens = ms.max_tool_result_tokens || null;
                         continue;
                     }
+                    if (k === 'guided_grammar_enabled') {
+                        out.guided_grammar_enabled = !!ms.guided_grammar_enabled;
+                        continue;
+                    }
+                    if (k === 'guided_grammar') {
+                        out.guided_grammar = ms.guided_grammar_enabled
+                            ? ((ms.guided_grammar || '').trim() || null)
+                            : null;
+                        continue;
+                    }
                     // Standard field: apply nullish coalescing; coerce string numerics
                     let v = ms[k] ?? null;
                     if (typeof v === 'string' && v !== '' && !isNaN(Number(v))) v = Number(v);
@@ -1191,6 +1220,8 @@
                 ms.max_context_window = null;
                 ms.max_tokens = null;
                 ms.reasoning_parser = null;
+                ms.guided_grammar_enabled = false;
+                ms.guided_grammar = '';
                 ms.ttl_seconds = null;
                 ms.enable_thinking = null;
                 ms.enableThinkingBudget = false;
@@ -1211,6 +1242,10 @@
                     } else if (k === 'max_tool_result_tokens') {
                         ms.enableToolResultLimit = s[k] != null;
                         ms.max_tool_result_tokens = s[k] ?? null;
+                    } else if (k === 'guided_grammar_enabled') {
+                        ms.guided_grammar_enabled = !!s[k];
+                    } else if (k === 'guided_grammar') {
+                        ms.guided_grammar = s[k] || '';
                     } else if (k === 'chat_template_kwargs' || k === 'forced_ct_kwargs') {
                         const ctk = s.chat_template_kwargs || {};
                         const forced = new Set(s.forced_ct_kwargs || []);
@@ -1291,6 +1326,10 @@
                     } else if (k === 'max_tool_result_tokens') {
                         ms.enableToolResultLimit = !!s[k];
                         ms.max_tool_result_tokens = s[k] || null;
+                    } else if (k === 'guided_grammar_enabled') {
+                        ms.guided_grammar_enabled = !!s[k];
+                    } else if (k === 'guided_grammar') {
+                        ms.guided_grammar = s[k] || '';
                     } else if (k === 'chat_template_kwargs' || k === 'forced_ct_kwargs') {
                         // Rebuild ctKwargEntries
                         const ctk = s.chat_template_kwargs || {};
@@ -1551,6 +1590,8 @@
                     thinking_default: model.thinking_default ?? null,
                     enableThinkingBudget: !!(settings.thinking_budget_tokens),
                     thinking_budget_tokens: settings.thinking_budget_tokens || null,
+                    guided_grammar_enabled: settings.guided_grammar_enabled || false,
+                    guided_grammar: settings.guided_grammar || '',
                     enableToolResultLimit: !!(settings.max_tool_result_tokens),
                     max_tool_result_tokens: settings.max_tool_result_tokens || null,
                     reasoning_parser: settings.reasoning_parser || '',
@@ -1650,6 +1691,10 @@
                                 thinking_budget_tokens: this.modelSettings.enableThinkingBudget
                                     ? (this.modelSettings.thinking_budget_tokens || null)
                                     : 0,
+                                guided_grammar_enabled: this.modelSettings.guided_grammar_enabled,
+                                guided_grammar: this.modelSettings.guided_grammar_enabled
+                                    ? (this.modelSettings.guided_grammar || null)
+                                    : null,
                                 max_tool_result_tokens: this.modelSettings.enableToolResultLimit
                                     ? (this.modelSettings.max_tool_result_tokens || null)
                                     : 0,
@@ -1774,6 +1819,8 @@
                         this.modelSettings.presence_penalty = null;
                         this.modelSettings.force_sampling = false;
                         this.modelSettings.reasoning_parser = null;
+                        this.modelSettings.guided_grammar_enabled = false;
+                        this.modelSettings.guided_grammar = '';
                         this.modelSettings.ttl_seconds = null;
                         this.modelSettings.enableIndexCache = false;
                         this.modelSettings.index_cache_freq = 0;
@@ -2510,10 +2557,24 @@
                                 total: data.total,
                             };
                         } else if (data.type === 'result') {
+                            // SSE replay-on-subscribe re-delivers every event on
+                            // every reconnect (incl. page refresh), so append-only
+                            // arrays must dedupe. Single rows are keyed by
+                            // (pp, tg); batch rows by batch_size.
                             if (data.data.test_type === 'single') {
-                                this.benchSingleResults = [...this.benchSingleResults, data.data];
+                                const exists = this.benchSingleResults.some(
+                                    r => r.pp === data.data.pp && r.tg === data.data.tg
+                                );
+                                if (!exists) {
+                                    this.benchSingleResults = [...this.benchSingleResults, data.data];
+                                }
                             } else if (data.data.test_type === 'batch') {
-                                this.benchBatchResults = [...this.benchBatchResults, data.data];
+                                const exists = this.benchBatchResults.some(
+                                    r => r.batch_size === data.data.batch_size
+                                );
+                                if (!exists) {
+                                    this.benchBatchResults = [...this.benchBatchResults, data.data];
+                                }
                             }
                         } else if (data.type === 'done') {
                             // Benchmark tests done, uploading starts
@@ -2526,7 +2587,13 @@
                             };
                             this.loadModels();
                         } else if (data.type === 'upload') {
-                            this.benchUploadResults = [...this.benchUploadResults, data.data];
+                            // Dedupe on replay: upload entries are unique by context_length.
+                            const exists = this.benchUploadResults.some(
+                                r => r.context_length === data.data.context_length
+                            );
+                            if (!exists) {
+                                this.benchUploadResults = [...this.benchUploadResults, data.data];
+                            }
                         } else if (data.type === 'upload_done') {
                             this.benchUploadDone = data.data;
                             this.benchUploading = false;
@@ -2697,6 +2764,88 @@
                 }
             },
 
+            async loadBenchState() {
+                // Discover an in-progress throughput run on tab/page load so
+                // a second tab (or a refresh) can attach to its SSE stream
+                // and replay the run's full event history.
+                //
+                // Three cases:
+                //   1. No active run → clear any stale banner state.
+                //   2. Active run, this tab is already attached → no-op.
+                //   3. Active run, this tab is fresh → auto-attach.
+                //   4. Active run, this tab is displaying a *different*
+                //      completed bench → show banner; let the user decide
+                //      whether to clobber their result view.
+                try {
+                    const resp = await fetch('/admin/api/bench/active');
+                    if (!resp.ok) return;
+                    const data = await resp.json();
+
+                    if (!data.running || !data.bench_id) {
+                        this.benchOtherActive = null;
+                        return;
+                    }
+
+                    // Already attached to this bench — nothing to do.
+                    if (this.benchBenchId === data.bench_id && this.benchEventSource) {
+                        return;
+                    }
+
+                    // We have completed results from a DIFFERENT bench on
+                    // screen — don't silently swap them out. Show a banner
+                    // so the user can explicitly accept the new bench.
+                    const hasStaleResults = !this.benchRunning
+                        && this.benchBenchId
+                        && this.benchBenchId !== data.bench_id
+                        && (this.benchSingleResults.length > 0
+                            || this.benchBatchResults.length > 0);
+                    if (hasStaleResults) {
+                        this.benchOtherActive = {
+                            bench_id: data.bench_id,
+                            model_id: data.model_id,
+                        };
+                        return;
+                    }
+
+                    // Fresh slate: attach.
+                    this.benchBenchId = data.bench_id;
+                    this.benchModelId = data.model_id;
+                    this.benchRunning = true;
+                    this.benchOtherActive = null;
+                    this.connectBenchSSE(data.bench_id);
+                } catch (err) {
+                    console.error('Failed to load bench state:', err);
+                }
+            },
+
+            // User clicked "View live" on the banner — clear the stale
+            // result display, attach to the active run. The replay-on-
+            // subscribe stream re-delivers every event so the new bench
+            // populates its table from the start.
+            acceptOtherBench() {
+                if (!this.benchOtherActive) return;
+                const other = this.benchOtherActive;
+                this.benchOtherActive = null;
+                this.benchBenchId = other.bench_id;
+                this.benchModelId = other.model_id;
+                this.benchRunning = true;
+                this.benchSingleResults = [];
+                this.benchBatchResults = [];
+                this.benchUploadResults = [];
+                this.benchUploadDone = null;
+                this.benchUploadSkipped = null;
+                this.benchProgress = null;
+                this.benchError = '';
+                this.connectBenchSSE(other.bench_id);
+            },
+
+            dismissOtherBench() {
+                // Hide for now; the banner reappears next loadBenchState if
+                // the run is still active. Use case: user wants to keep
+                // reviewing their previous result for a moment.
+                this.benchOtherActive = null;
+            },
+
             // Bench sub-tab
             setBenchTab(tab) {
                 if (!DASHBOARD_BENCH_TABS.has(tab)) return;
@@ -2705,6 +2854,7 @@
                 this.syncTabStateToUrl();
                 if (tab === 'throughput') {
                     this.loadBenchDeviceInfo();
+                    this.loadBenchState();
                 }
             },
 
@@ -2820,8 +2970,18 @@
                                 this.accCurrentModel = data.model_id || this.accCurrentModel;
                                 break;
                             case 'result':
-                                data.data._showCategories = false;
-                                this.accAllResults.push(data.data);
+                                // Dedupe on replay: accuracy results are unique by
+                                // (model_id, benchmark).
+                                {
+                                    const exists = this.accAllResults.some(
+                                        r => r.model_id === data.data.model_id
+                                          && r.benchmark === data.data.benchmark
+                                    );
+                                    if (!exists) {
+                                        data.data._showCategories = false;
+                                        this.accAllResults.push(data.data);
+                                    }
+                                }
                                 break;
                             case 'done':
                                 this.accProgress = null;
@@ -3209,8 +3369,8 @@
             // Memory guard tier → live hard ceiling (GB) for the selected tier.
             // Mirrors ProcessMemoryEnforcer._get_hard_limit_bytes:
             //   static_ceiling  = total - tier.static_reserve
-            //   dynamic_ceiling = omlx_phys_footprint + system_available - tier.other_app_reserve
-            //   final = min(static, dynamic)
+            //   dynamic_ceiling = omlx_phys + free + inactive + active * ratio
+            //   final = min(static, dynamic, metal_cap)
             // The static / dynamic inputs come from the global-settings
             // response and reflect the moment that response was fetched.
             // Warning shown below the breakdown when the kernel
@@ -3309,9 +3469,11 @@
                 // Static / metal cap for the final clamp shown to the user.
                 const totalGB = (sys.total_memory_bytes || 0) / GB;
                 const staticReserveGB =
-                    totalGB < 16
-                        ? 4
-                        : { safe: 12, balanced: 8, aggressive: 6, custom: 8 }[tier] ?? 8;
+                    tier === 'custom'
+                        ? 2
+                        : totalGB < 16
+                            ? 4
+                            : { safe: 12, balanced: 8, aggressive: 6 }[tier] ?? 8;
                 const staticCeiling = Math.max(0, totalGB - staticReserveGB);
                 const metalCapGB = (sys.iogpu_wired_limit_bytes || 0) / GB;
 

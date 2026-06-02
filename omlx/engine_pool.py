@@ -60,6 +60,7 @@ class EngineEntry:
     config_model_type: str = ""  # Raw model_type from config.json (e.g., "deepseekocr_2")
     thinking_default: bool | None = None  # True if model thinks by default, False if not, None if unknown
     preserve_thinking_default: bool | None = None  # True when template supports preserve_thinking (Qwen 3.6+)
+    model_context_length: int | None = None  # Declared context length from config.json (None if unknown)
     engine: BaseEngine | EmbeddingEngine | RerankerEngine | STTEngine | STSEngine | TTSEngine | None = None  # Loaded engine instance
     last_access: float = 0.0  # Timestamp for LRU (0 if never loaded)
     is_loading: bool = False  # Prevent concurrent loads
@@ -134,6 +135,19 @@ class EnginePool:
         """Number of currently loaded models."""
         return sum(1 for e in self._entries.values() if e.engine is not None)
 
+    async def apply_embedding_batch_size(self, batch_size: int) -> None:
+        """Apply embedding batch size to future and currently loaded embedding engines."""
+        batch_size = int(batch_size)
+        if batch_size <= 0:
+            raise ValueError("embedding batch size must be > 0")
+
+        async with self._lock:
+            self._scheduler_config.embedding_batch_size = batch_size
+            for entry in list(self._entries.values()):
+                engine = entry.engine if entry is not None else None
+                if isinstance(engine, EmbeddingEngine):
+                    engine._batch_size = batch_size
+
     def discover_models(
         self, model_dirs: str | list[str], pinned_models: list[str] | None = None
     ) -> None:
@@ -176,6 +190,7 @@ class EnginePool:
                     config_model_type=getattr(info, "config_model_type", ""),
                     thinking_default=getattr(info, "thinking_default", None),
                     preserve_thinking_default=getattr(info, "preserve_thinking_default", None),
+                    model_context_length=getattr(info, "model_context_length", None),
                     is_pinned=model_id in pinned_set,
                 )
 
@@ -311,8 +326,8 @@ class EnginePool:
         Get or load engine for the specified model.
 
         This method implements pre-load memory checking:
-        1. Check if model is already loaded → return immediately
-        2. Check if model is too large for memory limit → raise error
+        1. Check if model is already loaded -> return immediately
+        2. Check if model is too large for memory limit -> raise error
         3. Evict LRU models until there's enough space
         4. Load the model
         5. Return the engine
@@ -373,7 +388,7 @@ class EnginePool:
                         )
                         await self._unload_engine(victim)
                         continue
-                    # Nothing else to evict — model cannot fit. Use
+                    # Nothing else to evict -- model cannot fit. Use
                     # ModelTooLargeError when the model alone exceeds the
                     # ceiling (no chance of fitting), InsufficientMemoryError
                     # when the model would fit on a clean process but the
@@ -450,6 +465,31 @@ class EnginePool:
             await entry.engine.stop()
         except Exception as e:
             logger.warning(f"Error stopping engine for {model_id}: {e}")
+
+        # Yield to the event loop before dropping the engine reference.
+        #
+        # When abort_all_requests() fires before _unload_engine(), it sets
+        # asyncio Events for each active request.  Server-side streaming
+        # generators are then scheduled in the asyncio ready queue, but they
+        # cannot run until the event loop gets control.  EngineCore.close()
+        # (called inside stop()) blocks the event loop with synchronous
+        # .result() calls on the MLX executor -- scheduler.shutdown() and
+        # scheduler.deep_reset() -- so those generators are still suspended
+        # when stop() returns.
+        #
+        # If we set entry.engine = None and call gc.collect() immediately,
+        # the generators are still alive with a local 'engine' variable
+        # referencing the BatchedEngine, keeping its refcount above zero.
+        # The model's ~20 GB of MLX weight tensors therefore remain "active"
+        # in Metal memory, the settle barrier times out, and subsequent load
+        # attempts fail with 507 because the ceiling is still exceeded.
+        #
+        # A few asyncio.sleep(0) calls drain the ready queue -- generator
+        # tear-down is at most a few frames deep -- so that by the time we
+        # clear entry.engine and run gc.collect(), no coroutine frame holds
+        # a stale engine reference.
+        for _ in range(5):
+            await asyncio.sleep(0)
 
         # Clear engine reference before settle barrier
         entry.engine = None
@@ -580,7 +620,7 @@ class EnginePool:
             # model families; let VLMBatchedEngine handle MTP-enabled VLMs.
             pass
 
-            # Check if DFlash is enabled — takes priority over engine type
+            # Check if DFlash is enabled -- takes priority over engine type
             # since DFlash has its own model loading pipeline
             engine = None
             if model_settings is not None:
@@ -616,7 +656,7 @@ class EnginePool:
                         )
 
             # Per-model trust_remote_code (security opt-in, issue #926).
-            # When unset, defaults to False — repos with custom modeling_*.py
+            # When unset, defaults to False -- repos with custom modeling_*.py
             # will fail to load until the user explicitly toggles this on
             # in the admin UI's model settings modal.
             trc = bool(getattr(model_settings, "trust_remote_code", False)) if model_settings else False
@@ -627,6 +667,7 @@ class EnginePool:
                     engine = EmbeddingEngine(
                         model_name=entry.model_path,
                         trust_remote_code=trc,
+                        scheduler_config=self._scheduler_config,
                     )
                 elif effective_type == "reranker":
                     engine = RerankerEngine(
@@ -663,7 +704,7 @@ class EnginePool:
                 await engine.start()
             except Exception as start_error:
                 if _is_dflash_engine:
-                    # DFlash engine failed to start — fall back to the
+                    # DFlash engine failed to start -- fall back to the
                     # model's natural engine type (VLM or Batched)
                     logger.warning(
                         f"DFlash start failed for {model_id}: {start_error}. "
@@ -708,7 +749,7 @@ class EnginePool:
 
                 elif force_lm and entry.engine_type == "vlm":
                     # force_lm created a BatchedEngine but mlx-lm can't
-                    # load this VLM model — fall back to VLMBatchedEngine.
+                    # load this VLM model -- fall back to VLMBatchedEngine.
                     logger.warning(
                         f"LM loading failed for VLM model {model_id} "
                         f"(force_lm=True), falling back to VLM engine: "
@@ -744,7 +785,7 @@ class EnginePool:
                         f"(fallback from force_lm)"
                     )
                 elif entry.engine_type == "vlm":
-                    # VLM loading failed — fall back to LLM (BatchedEngine)
+                    # VLM loading failed -- fall back to LLM (BatchedEngine)
                     logger.warning(
                         f"VLM loading failed for {model_id}, "
                         f"falling back to LLM: {start_error}"
@@ -811,7 +852,7 @@ class EnginePool:
             load_completed = True
 
             # VLM MTP: load gemma4_assistant drafter and attach to engine.
-            # Fail-soft — drafter load issues never block the target engine.
+            # Fail-soft -- drafter load issues never block the target engine.
             if (
                 model_settings is not None
                 and getattr(model_settings, "vlm_mtp_enabled", False)
@@ -836,7 +877,7 @@ class EnginePool:
                 except Exception as e:
                     logger.warning(
                         f"VLM MTP drafter load raised for {model_id} "
-                        f"(drafter={drafter_id}): {e} — toggle ignored"
+                        f"(drafter={drafter_id}): {e} -- toggle ignored"
                     )
                     drafter = None
                 if drafter is not None:

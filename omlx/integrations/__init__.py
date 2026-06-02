@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Integration registry for external coding tools."""
 
-from omlx.integrations.base import Integration
+from omlx.integrations.base import Integration, IntegrationContext
 from omlx.integrations.claude import ClaudeCodeIntegration
 from omlx.integrations.codex import CodexIntegration
 from omlx.integrations.copilot import CopilotIntegration
@@ -33,6 +33,7 @@ def list_integrations() -> list[Integration]:
 
 __all__ = [
     "Integration",
+    "IntegrationContext",
     "ClaudeCodeIntegration",
     "CopilotIntegration",
     "HermesIntegration",

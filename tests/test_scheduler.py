@@ -25,6 +25,32 @@ from omlx.request import Request, RequestOutput, RequestStatus, SamplingParams
 from omlx.scheduler import Scheduler, SchedulerConfig, SchedulerOutput, SchedulingPolicy
 
 
+class _ParserStopFactory:
+    kind = "test"
+    stop_token_ids = set()
+    thinking_end_text = None
+
+    def create_session(self, tokenizer):
+        return _ParserStopSession()
+
+
+class _ParserStopSession:
+    def process_token(self, token_id):
+        from omlx.adapter.output_parser import OutputParserTokenResult
+
+        return OutputParserTokenResult(
+            stream_text="",
+            visible_text="",
+            is_stop=True,
+            record_token=False,
+        )
+
+    def finalize(self):
+        from omlx.adapter.output_parser import OutputParserFinalizeResult
+
+        return OutputParserFinalizeResult()
+
+
 class TestSchedulerConfig:
     """Tests for SchedulerConfig dataclass."""
 
@@ -36,6 +62,7 @@ class TestSchedulerConfig:
         assert config.max_num_batched_tokens == 8192
         assert config.policy == SchedulingPolicy.FCFS
         assert config.completion_batch_size == 32
+        assert config.embedding_batch_size == 32
         assert config.prefill_step_size == 2048
         assert config.paged_cache_block_size == 256
         assert config.max_cache_blocks is None
@@ -53,6 +80,7 @@ class TestSchedulerConfig:
             max_num_batched_tokens=4096,
             policy=SchedulingPolicy.PRIORITY,
             completion_batch_size=16,
+            embedding_batch_size=12,
             prefill_step_size=1024,
             paged_cache_block_size=128,
             max_cache_blocks=500,
@@ -68,6 +96,7 @@ class TestSchedulerConfig:
         assert config.max_num_batched_tokens == 4096
         assert config.policy == SchedulingPolicy.PRIORITY
         assert config.completion_batch_size == 16
+        assert config.embedding_batch_size == 12
         assert config.prefill_step_size == 1024
         assert config.paged_cache_block_size == 128
         assert config.max_cache_blocks == 500
@@ -720,6 +749,74 @@ class TestSchedulerReset:
         assert len(scheduler.requests) == 0
         assert scheduler.batch_generator is None
 
+    def test_reset_clears_async_store_cache_bookkeeping(
+        self, mock_model, mock_tokenizer
+    ):
+        """reset() must drop _pending_async_removes and _inflight_store_futures.
+
+        Regression for #1459: when a slow async store_cache worker finishes
+        between scheduler.shutdown()'s 30s wait timeout and the subsequent
+        executor.shutdown(wait=True), the deferred _drain_pending_async_removes
+        step that nulls req._extracted_cache never runs again. If reset()
+        leaves these two containers populated, the futures keep Request
+        references alive and the KV cache stays pinned for the rest of the
+        process lifetime. Clearing them in reset() is the second line of
+        defense after shutdown()'s final drain.
+        """
+        scheduler = Scheduler(model=mock_model, tokenizer=mock_tokenizer)
+
+        fake_future = MagicMock()
+        scheduler._pending_async_removes.append(
+            (999, "req-leaked", fake_future)
+        )
+        scheduler._inflight_store_futures["req-leaked"] = fake_future
+
+        scheduler.reset()
+
+        assert len(scheduler._pending_async_removes) == 0
+        assert len(scheduler._inflight_store_futures) == 0
+
+    def test_shutdown_drains_after_executor_join(self, mock_model, mock_tokenizer):
+        """shutdown() must drain pending removes again after executor join.
+
+        Regression for #1459. When the 30s `wait()` times out, the first
+        drain skips not-yet-done futures (deque break on `not future.done()`).
+        `executor.shutdown(wait=True)` then joins all workers — by the time
+        it returns, every future is done — but without a second drain those
+        skipped entries stay pinned, keeping the request's KV cache alive
+        for the rest of the process lifetime.
+
+        Asserts: drain runs both before and after executor.shutdown.
+        """
+        scheduler = Scheduler(model=mock_model, tokenizer=mock_tokenizer)
+
+        fake_executor = MagicMock()
+        scheduler._store_cache_executor = fake_executor
+        scheduler._store_cache_gate = MagicMock()
+
+        # Seed an inflight future so shutdown() enters the wait branch.
+        scheduler._inflight_store_futures["req-slow"] = MagicMock()
+
+        call_order = []
+        original_drain = scheduler._drain_pending_async_removes
+
+        def record_drain():
+            call_order.append("drain")
+            original_drain()
+
+        def record_executor_shutdown(wait=True):
+            call_order.append("executor_shutdown")
+
+        fake_executor.shutdown.side_effect = record_executor_shutdown
+        scheduler._drain_pending_async_removes = record_drain
+
+        with patch("concurrent.futures.wait"):
+            scheduler.shutdown()
+
+        assert call_order == ["drain", "executor_shutdown", "drain"], (
+            f"Expected drain to bracket executor.shutdown, got: {call_order}"
+        )
+
 
 class TestSchedulerStopTokens:
     """Tests for stop token handling."""
@@ -767,6 +864,22 @@ class TestSchedulerXtcSpecialTokens:
         tokens = scheduler._get_xtc_special_tokens()
 
         assert 2 in tokens
+
+    def test_includes_parser_stop_tokens_without_base_stop(
+        self, mock_model, mock_tokenizer
+    ):
+        """Parser stop tokens are XTC-protected but not BatchGenerator stops."""
+        scheduler = Scheduler(model=mock_model, tokenizer=mock_tokenizer)
+        scheduler._output_parser_factory = _ParserStopFactory()
+        scheduler._output_parser_factory.stop_token_ids = {101, 102}
+
+        stop_tokens = scheduler._get_stop_tokens()
+        xtc_tokens = scheduler._get_xtc_special_tokens()
+
+        assert 101 not in stop_tokens
+        assert 102 not in stop_tokens
+        assert 101 in xtc_tokens
+        assert 102 in xtc_tokens
 
 
 class TestSyncAndClearCache:
@@ -858,8 +971,8 @@ class TestStoreCacheWorkerSync:
             sched_mod._safe_sync_stream()
 
         assert len(calls) == 1
-        assert calls[0] and calls[0][0] is sched_mod.generation_stream, (
-            f"Worker sync must target generation_stream, got: {calls}"
+        assert calls[0] and calls[0][0] is sched_mod._default_generation_stream, (
+            f"Worker sync must target _default_generation_stream, got: {calls}"
         )
 
     def test_safe_sync_swallows_no_stream_runtime_error(self):
@@ -1089,6 +1202,101 @@ class TestSchedulerBoundarySnapshots:
         assert kwargs["model_cache_config"] == "boundary-config"
         assert "req-partial" not in scheduler._boundary_cache_snapshots
 
+    def test_boundary_override_preextracts_in_memory_intermediate_snapshots(
+        self, mock_model, mock_tokenizer
+    ):
+        """In-memory boundary snapshots must be extracted before worker access."""
+        config = SchedulerConfig(paged_cache_block_size=4)
+        scheduler = Scheduler(model=mock_model, tokenizer=mock_tokenizer, config=config)
+
+        request = Request(
+            request_id="req-hot-cache",
+            prompt="hello",
+            sampling_params=SamplingParams(),
+        )
+        scheduler.requests["req-hot-cache"] = request
+
+        raw_intermediate = object()
+        raw_latest = object()
+        extracted_intermediate = [{"state": ("intermediate",)}]
+        extracted_latest = [{"state": ("latest",)}]
+        scheduler._boundary_cache_snapshots["req-hot-cache"] = {
+            4: raw_intermediate,
+            8: raw_latest,
+        }
+
+        def extract(raw_cache):
+            if raw_cache is raw_latest:
+                return extracted_latest, "latest-config"
+            if raw_cache is raw_intermediate:
+                return extracted_intermediate, "intermediate-config"
+            raise AssertionError("unexpected raw cache")
+
+        with patch.object(scheduler, "_extract_cache_states", side_effect=extract) as ex:
+            result = scheduler._get_boundary_store_override(
+                "req-hot-cache", list(range(10))
+            )
+
+        assert result is not None
+        token_sequence, cache_to_store, model_config, provider = result
+        assert token_sequence == list(range(8))
+        assert cache_to_store is extracted_latest
+        assert model_config == "latest-config"
+        assert 4 in provider
+
+        ex.reset_mock()
+        assert provider[4] is extracted_intermediate
+        ex.assert_not_called()
+
+    def test_cleanup_finished_pre_evals_intermediate_boundary_snapshots(
+        self, mock_model, mock_tokenizer
+    ):
+        """Intermediate boundary snapshot arrays are materialized on engine thread."""
+        from omlx import scheduler as sched_mod
+
+        config = SchedulerConfig(paged_cache_block_size=4)
+        scheduler = Scheduler(model=mock_model, tokenizer=mock_tokenizer, config=config)
+        scheduler.block_aware_cache = MagicMock()
+        scheduler.paged_cache_manager = None
+
+        latest_arr = mx.zeros((1,))
+        intermediate_arr = mx.ones((1,))
+        latest_cache = [{"state": (latest_arr,), "cache_type": "ArraysCache"}]
+        intermediate_cache = [
+            {"state": (intermediate_arr,), "cache_type": "ArraysCache"}
+        ]
+        provider = sched_mod._BoundarySnapshotProvider(
+            store=None,
+            request_id="req-hot-cache",
+            valid_tcs=[4],
+            in_memory_snapshots={4: intermediate_cache},
+        )
+
+        request = Request(
+            request_id="req-hot-cache",
+            prompt="hello",
+            sampling_params=SamplingParams(),
+        )
+        request.prompt_token_ids = [1, 2, 3, 4]
+        request.num_prompt_tokens = 4
+        request.output_token_ids = [5, 6, 7]
+        request._extracted_cache = [{"state": ("final",)}]
+        request._model_cache_config = None
+        scheduler.running["req-hot-cache"] = request
+        scheduler.requests["req-hot-cache"] = request
+
+        with patch.object(
+            scheduler,
+            "_get_boundary_store_override",
+            return_value=([1, 2, 3, 4], latest_cache, None, provider),
+        ), patch.object(sched_mod.mx, "eval") as eval_, patch.object(
+            sched_mod, "_safe_sync_stream"
+        ):
+            scheduler._cleanup_finished({"req-hot-cache"})
+
+        eval_.assert_called_once()
+        assert eval_.call_args.args == (latest_arr, intermediate_arr)
+
     def test_boundary_snapshot_synchronizes_generation_stream(
         self, mock_model, mock_tokenizer
     ):
@@ -1163,7 +1371,14 @@ class TestSchedulerBoundarySnapshots:
     def test_prefill_boundary_snapshot_records_rotating_cache(
         self, mock_model, mock_tokenizer
     ):
-        """Prefill callback should store rotating boundary snapshots."""
+        """Prefill callback should store rotating boundary snapshots.
+
+        Regression: deliberately leave ``request_id_to_uid`` /
+        ``uid_to_request_id`` unset, matching what happens in production
+        during prefill (the request has not been inserted into
+        BatchGenerator yet). The earlier shape passed a uid that
+        resolved to None and silently dropped the snapshot.
+        """
         scheduler = Scheduler(
             model=mock_model,
             tokenizer=mock_tokenizer,
@@ -1176,16 +1391,15 @@ class TestSchedulerBoundarySnapshots:
             prompt="hello",
             sampling_params=SamplingParams(),
         )
-        uid = 77
         scheduler.requests[request.request_id] = request
         scheduler.running[request.request_id] = request
-        scheduler.request_id_to_uid[request.request_id] = uid
-        scheduler.uid_to_request_id[uid] = request.request_id
 
         RotatingStub = type("RotatingKVCache", (), {})
         snapshot_cache = [RotatingStub()]
 
-        scheduler._on_prefill_boundary_snapshot(uid, snapshot_cache, 4)
+        scheduler._on_prefill_boundary_snapshot(
+            request.request_id, snapshot_cache, 4
+        )
 
         assert 4 in scheduler._boundary_cache_snapshots[request.request_id]
         assert scheduler._boundary_cache_snapshots[request.request_id][4] == snapshot_cache
@@ -1207,16 +1421,56 @@ class TestSchedulerBoundarySnapshots:
             prompt="hello",
             sampling_params=SamplingParams(),
         )
-        uid = 78
         scheduler.requests[request.request_id] = request
         scheduler.running[request.request_id] = request
-        scheduler.request_id_to_uid[request.request_id] = uid
-        scheduler.uid_to_request_id[uid] = request.request_id
 
         RotatingStub = type("RotatingKVCache", (), {})
-        scheduler._on_prefill_boundary_snapshot(uid, [RotatingStub()], 3)
+        scheduler._on_prefill_boundary_snapshot(
+            request.request_id, [RotatingStub()], 3
+        )
 
         assert request.request_id not in scheduler._boundary_cache_snapshots
+
+    def test_emit_prefill_boundary_snapshot_persists_before_uid_assignment(
+        self, mock_model, mock_tokenizer
+    ):
+        """Snapshots emitted during prefill must persist even though the
+        request has not yet been inserted into BatchGenerator.
+
+        The regression this guards against: the wrapper used to route
+        through ``request_id_to_uid.get(rid, -1)`` →
+        ``uid_to_request_id.get(-1)`` → ``None`` → silent return, so
+        every block-boundary snapshot during prefill was dropped. For
+        hybrid (ArraysCache / GDN) models that meant every non-last
+        cached block stored a placeholder and identical-prefix re-
+        uploads re-prefilled from scratch.
+        """
+        scheduler = Scheduler(
+            model=mock_model,
+            tokenizer=mock_tokenizer,
+            config=SchedulerConfig(paged_cache_block_size=4),
+        )
+        scheduler.block_aware_cache = MagicMock()
+
+        request = Request(
+            request_id="req-prefill-pre-insert",
+            prompt="hello",
+            sampling_params=SamplingParams(),
+        )
+        scheduler.requests[request.request_id] = request
+        scheduler.running[request.request_id] = request
+        # Deliberately do NOT populate request_id_to_uid /
+        # uid_to_request_id — that mirrors production state at the
+        # time _emit_prefill_boundary_snapshot fires.
+        assert request.request_id not in scheduler.request_id_to_uid
+
+        RotatingStub = type("RotatingKVCache", (), {})
+        prompt_cache = [RotatingStub()]
+
+        scheduler._emit_prefill_boundary_snapshot(request, prompt_cache, 4)
+
+        assert request.request_id in scheduler._boundary_cache_snapshots
+        assert 4 in scheduler._boundary_cache_snapshots[request.request_id]
 
 
 class TestSchedulerRotatingBlockAlignment:
@@ -2006,6 +2260,39 @@ class TestOutputParserSmoke:
         assert "<|channel>" not in full_stream
         assert "<channel|>" not in full_stream
         assert full_stream == "<think>\nreasoning</think>\nanswer"
+
+    def test_parser_stop_sets_finish_reason(self, mock_model):
+        tokenizer = self._GemmaTokenizer({11: "<|return|>"})
+        scheduler = Scheduler(
+            model=mock_model,
+            tokenizer=tokenizer,
+            config=SchedulerConfig(model_name="test-model"),
+        )
+        scheduler._output_parser_factory = _ParserStopFactory()
+
+        request = Request(
+            request_id="parser-stop-req",
+            prompt="prompt",
+            sampling_params=SamplingParams(max_tokens=5),
+            prompt_token_ids=[1, 2, 3],
+            num_prompt_tokens=3,
+            status=RequestStatus.RUNNING,
+            batch_uid=99,
+        )
+        scheduler.running[request.request_id] = request
+        scheduler.requests[request.request_id] = request
+        scheduler.uid_to_request_id[99] = request.request_id
+        scheduler.request_id_to_uid[request.request_id] = 99
+
+        responses = [
+            type("Resp", (), {"uid": 99, "token": 11, "finish_reason": None})(),
+        ]
+
+        outputs, finished_ids = scheduler._process_batch_responses(responses)
+
+        assert finished_ids == {"parser-stop-req"}
+        assert outputs[-1].finished is True
+        assert outputs[-1].finish_reason == "stop"
 
 
 class TestVLMPositionStateClearing:

@@ -1,8 +1,11 @@
 #!/bin/bash
-# oMLX macOS Tahoe (26.x) DMG Build Script (Venv isolated)
+# oMLX macOS Tahoe (26.x) App Build Script (Venv isolated)
 # This script creates a temporary virtual environment to run the build,
 # ensuring the host macOS Python environment remains clean.
 # It prefers Python 3.11 to match the project's target runtime.
+#
+# Note: DMG creation is no longer part of this script — use xcrun productbuild
+# or a dedicated DMG tool against the generated oMLX.app.
 
 set -e
 
@@ -41,12 +44,12 @@ $PYTHON_BIN -m venv .build_venv
 source .build_venv/bin/activate
 
 # 3. Install build-time requirements into the venv
-echo -e "${GREEN}[3/6] Installing build dependencies (venvstacks + audit)...${NC}"
+echo -e "${GREEN}[3/5] Installing build dependencies (venvstacks + audit)...${NC}"
 pip install --quiet --upgrade pip
 pip install --quiet venvstacks setuptools pip-audit
 
 # 4. Security Audit
-echo -e "${GREEN}[4/6] Auditing packages for known vulnerabilities...${NC}"
+echo -e "${GREEN}[4/5] Auditing packages for known vulnerabilities...${NC}"
 # Scan the root project dependencies for security flaws
 if pip-audit --desc on .; then
     echo -e "  ✓ No known vulnerabilities found."
@@ -57,30 +60,29 @@ fi
 
 # 5. Navigate to packaging directory and run build
 cd packaging
-echo -e "${GREEN}[5/6] Running oMLX build process...${NC}"
+echo -e "${GREEN}[5/5] Building venvstacks Python layers…${NC}"
 # Use the python from our venv
-python build.py
+python build.py --venvstacks-only
 
 # 6. Locate the output
-echo -e "${GREEN}[6/6] Locating generated DMG...${NC}"
+echo -e "${GREEN}[5/5] Locating generated bundle…${NC}"
 VERSION=$(python -c "import re; print(re.search(r'__version__\s*=\s*\"([^\"]+)\"', open('../omlx/_version.py').read()).group(1))")
-DMG_FILE=$(ls dist/oMLX-${VERSION}.dmg 2>/dev/null | head -n 1)
+APP_DIR=$(ls -d dist/oMLX.app 2>/dev/null | head -n 1)
 
-if [[ -f "$DMG_FILE" ]]; then
+if [[ -d "$APP_DIR" ]]; then
     echo -e "${GREEN}Success!${NC}"
-    echo -e "DMG created at: ${BLUE}$(pwd)/$DMG_FILE${NC}"
-    
+    echo -e "App created at: ${BLUE}$(pwd)/$APP_DIR${NC}"
+
     # Copy app to project root
-    echo -e "${GREEN}Copying oMLX.app to project root...${NC}"
-    if [[ -d "dist/oMLX.app" ]]; then
-        rm -rf ../oMLX.app
-        cp -R dist/oMLX.app ../oMLX.app
-        echo -e "  ✓ oMLX.app copied to $(cd .. && pwd)/oMLX.app"
-    fi
-    
+    echo -e "${GREEN}Copying oMLX.app to project root…${NC}"
+    rm -rf ../oMLX.app
+    cp -R dist/oMLX.app ../oMLX.app
+    echo -e "  ✓ oMLX.app copied to $(cd .. && pwd)/oMLX.app"
+
     echo ""
     echo -e "${BLUE}Note: The build environment is located in .build_venv and can be removed after installation.${NC}"
+    echo -e "${BLUE}DMG creation is no longer part of this script — use xcrun productbuild or a dedicated DMG tool.${NC}"
 else
-    echo "Error: DMG file was not found in the dist/ directory."
+    echo "Error: oMLX.app was not found in the dist/ directory."
     exit 1
 fi

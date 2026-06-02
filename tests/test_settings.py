@@ -100,6 +100,18 @@ class TestServerSettings:
         assert settings.cors_origins == ["http://localhost", "http://127.0.0.1"]  # default
         assert settings.check_updates is True
 
+    def test_from_dict_reads_bind_address_fallback(self):
+        """bind_address is accepted only as a compatibility fallback."""
+        settings = ServerSettings.from_dict({"bind_address": "0.0.0.0"})
+        assert settings.host == "0.0.0.0"
+
+    def test_from_dict_host_wins_over_bind_address(self):
+        """host remains the canonical persisted/admin API key."""
+        settings = ServerSettings.from_dict(
+            {"host": "127.0.0.1", "bind_address": "0.0.0.0"}
+        )
+        assert settings.host == "127.0.0.1"
+
     def test_from_dict_with_cors_origins(self):
         """Test creation from dictionary with cors_origins."""
         data = {
@@ -231,11 +243,13 @@ class TestSchedulerSettings:
         """Test default values."""
         settings = SchedulerSettings()
         assert settings.max_concurrent_requests == 8
+        assert settings.embedding_batch_size == 32
 
     def test_custom_values(self):
         """Test custom values."""
-        settings = SchedulerSettings(max_concurrent_requests=128)
+        settings = SchedulerSettings(max_concurrent_requests=128, embedding_batch_size=16)
         assert settings.max_concurrent_requests == 128
+        assert settings.embedding_batch_size == 16
 
     def test_to_dict(self):
         """Test conversion to dictionary."""
@@ -243,6 +257,7 @@ class TestSchedulerSettings:
         result = settings.to_dict()
         assert result == {
             "max_concurrent_requests": 8,
+            "embedding_batch_size": 32,
             "chunked_prefill": False,
         }
 
@@ -251,6 +266,12 @@ class TestSchedulerSettings:
         data = {"max_concurrent_requests": 512}
         settings = SchedulerSettings.from_dict(data)
         assert settings.max_concurrent_requests == 512
+        assert settings.embedding_batch_size == 32
+
+        data = {"max_concurrent_requests": 512, "embedding_batch_size": 24}
+        settings = SchedulerSettings.from_dict(data)
+        assert settings.max_concurrent_requests == 512
+        assert settings.embedding_batch_size == 24
 
     def test_from_dict_backwards_compat(self):
         """Test creation from dictionary with old keys."""
@@ -658,6 +679,7 @@ class TestGlobalSettings:
             assert settings.server.port == 8000
             assert settings.memory.memory_guard_tier == "balanced"
             assert settings.scheduler.max_concurrent_requests == 8
+            assert settings.scheduler.embedding_batch_size == 32
             assert settings.cache.enabled is True
             assert settings.auth.api_key is None
             assert settings.mcp.config_path is None
@@ -665,59 +687,73 @@ class TestGlobalSettings:
     def test_load_from_file(self):
         """Test loading settings from JSON file."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            # Create settings file
-            settings_file = Path(tmpdir) / "settings.json"
-            settings_file.write_text(
-                json.dumps(
-                    {
-                        "version": "1.0",
-                        "server": {"port": 9000},
-                        "auth": {"api_key": "test-key"},
-                    }
+            # Unset OMLX_API_KEY env var so file value is not overridden (env > file priority)
+            _orig = os.environ.pop("OMLX_API_KEY", None)
+            try:
+                # Create settings file
+                settings_file = Path(tmpdir) / "settings.json"
+                settings_file.write_text(
+                    json.dumps(
+                        {
+                            "version": "1.0",
+                            "server": {"port": 9000},
+                            "auth": {"api_key": "test-key"},
+                        }
+                    )
                 )
-            )
 
-            settings = GlobalSettings.load(base_path=tmpdir)
-            assert settings.server.port == 9000
-            assert settings.auth.api_key == "test-key"
+                settings = GlobalSettings.load(base_path=tmpdir)
+                assert settings.server.port == 9000
+                assert settings.auth.api_key == "test-key"
+            finally:
+                if _orig is not None:
+                    os.environ["OMLX_API_KEY"] = _orig
 
     def test_load_from_file_all_sections(self):
         """Test loading all settings sections from file."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            settings_file = Path(tmpdir) / "settings.json"
-            settings_file.write_text(
-                json.dumps(
-                    {
-                        "version": "1.0",
-                        "server": {"host": "127.0.0.1", "port": 9000, "log_level": "debug"},
-                        "model": {"model_dir": "/models"},
-                        "memory": {"memory_guard_tier": "safe"},
-                        "scheduler": {
-                            "max_concurrent_requests": 128,
-                        },
-                        "cache": {
-                            "enabled": False,
-                            "ssd_cache_dir": "/cache",
-                            "ssd_cache_max_size": "50GB",
-                        },
-                        "auth": {"api_key": "secret"},
-                        "mcp": {"config_path": "/mcp.json"},
-                    }
+            # Unset OMLX_API_KEY env var so file value is not overridden (env > file priority)
+            _orig = os.environ.pop("OMLX_API_KEY", None)
+            try:
+                settings_file = Path(tmpdir) / "settings.json"
+                settings_file.write_text(
+                    json.dumps(
+                        {
+                            "version": "1.0",
+                            "server": {"host": "127.0.0.1", "port": 9000, "log_level": "debug"},
+                            "model": {"model_dir": "/models"},
+                            "memory": {"memory_guard_tier": "safe"},
+                            "scheduler": {
+                                "max_concurrent_requests": 128,
+                                "embedding_batch_size": 24,
+                            },
+                            "cache": {
+                                "enabled": False,
+                                "ssd_cache_dir": "/cache",
+                                "ssd_cache_max_size": "50GB",
+                            },
+                            "auth": {"api_key": "secret"},
+                            "mcp": {"config_path": "/mcp.json"},
+                        }
+                    )
                 )
-            )
 
-            settings = GlobalSettings.load(base_path=tmpdir)
-            assert settings.server.host == "127.0.0.1"
-            assert settings.server.port == 9000
-            assert settings.server.log_level == "debug"
-            assert settings.model.model_dirs == ["/models"]  # Migrated from model_dir
-            assert settings.model.model_dir == "/models"  # Backward compat field
-            assert settings.memory.memory_guard_tier == "safe"
-            assert settings.scheduler.max_concurrent_requests == 128
-            assert settings.cache.enabled is False
-            assert settings.cache.ssd_cache_dir == "/cache"
-            assert settings.auth.api_key == "secret"
-            assert settings.mcp.config_path == "/mcp.json"
+                settings = GlobalSettings.load(base_path=tmpdir)
+                assert settings.server.host == "127.0.0.1"
+                assert settings.server.port == 9000
+                assert settings.server.log_level == "debug"
+                assert settings.model.model_dirs == ["/models"]  # Migrated from model_dir
+                assert settings.model.model_dir == "/models"  # Backward compat field
+                assert settings.memory.memory_guard_tier == "safe"
+                assert settings.scheduler.max_concurrent_requests == 128
+                assert settings.scheduler.embedding_batch_size == 24
+                assert settings.cache.enabled is False
+                assert settings.cache.ssd_cache_dir == "/cache"
+                assert settings.auth.api_key == "secret"
+                assert settings.mcp.config_path == "/mcp.json"
+            finally:
+                if _orig is not None:
+                    os.environ["OMLX_API_KEY"] = _orig
 
     def test_load_nonexistent_file_uses_defaults(self):
         """Test loading with no settings file uses defaults."""
@@ -934,6 +970,11 @@ class TestGlobalSettings:
         errors = settings.validate()
         assert any("max_concurrent_requests" in e.lower() for e in errors)
 
+        settings = GlobalSettings()
+        settings.scheduler.embedding_batch_size = 0
+        errors = settings.validate()
+        assert any("embedding_batch_size" in e.lower() for e in errors)
+
     def test_validate_invalid_cache_size(self):
         """Test validation catches invalid cache size."""
         settings = GlobalSettings()
@@ -1025,6 +1066,17 @@ class TestGlobalSettings:
             ):
                 settings = GlobalSettings.load(base_path=tmpdir)
                 assert settings.scheduler.max_concurrent_requests == 512
+
+    def test_env_override_embedding_batch_size(self):
+        """Test environment variable override for embedding batch size."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch.dict(
+                os.environ,
+                {"OMLX_EMBEDDING_BATCH_SIZE": "24"},
+                clear=False,
+            ):
+                settings = GlobalSettings.load(base_path=tmpdir)
+                assert settings.scheduler.embedding_batch_size == 24
 
     def test_env_override_scheduler_legacy_fallback(self):
         """Test legacy OMLX_MAX_NUM_SEQS env var is accepted as fallback."""
@@ -1181,9 +1233,10 @@ class TestGlobalSettings:
     def test_cli_override_scheduler(self):
         """Test CLI override for scheduler settings."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            args = Namespace(max_concurrent_requests=64)
+            args = Namespace(max_concurrent_requests=64, embedding_batch_size=12)
             settings = GlobalSettings.load(base_path=tmpdir, cli_args=args)
             assert settings.scheduler.max_concurrent_requests == 64
+            assert settings.scheduler.embedding_batch_size == 12
 
     def test_cli_override_cache(self):
         """Test CLI override for cache settings."""
@@ -1292,10 +1345,12 @@ class TestGlobalSettings:
         """Test conversion to SchedulerConfig."""
         settings = GlobalSettings()
         settings.scheduler.max_concurrent_requests = 128
+        settings.scheduler.embedding_batch_size = 12
 
         scheduler_config = settings.to_scheduler_config()
         assert scheduler_config.max_num_seqs == 128
         assert scheduler_config.completion_batch_size == 128
+        assert scheduler_config.embedding_batch_size == 12
         assert scheduler_config.initial_cache_blocks == 256  # default
 
     def test_to_scheduler_config_initial_cache_blocks(self):
@@ -1481,13 +1536,19 @@ class TestSettingsEdgeCases:
     def test_save_with_unicode_api_key(self):
         """Test saving settings with unicode in values."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            settings = GlobalSettings(base_path=Path(tmpdir))
-            settings.auth.api_key = "key-with-unicode-\u4e2d\u6587"
-            settings.save()
+            # Unset OMLX_API_KEY env var so loaded value is not overridden (env > file priority)
+            _orig = os.environ.pop("OMLX_API_KEY", None)
+            try:
+                settings = GlobalSettings(base_path=Path(tmpdir))
+                settings.auth.api_key = "key-with-unicode-\u4e2d\u6587"
+                settings.save()
 
-            # Reload and verify
-            loaded = GlobalSettings.load(base_path=tmpdir)
-            assert loaded.auth.api_key == "key-with-unicode-\u4e2d\u6587"
+                # Reload and verify
+                loaded = GlobalSettings.load(base_path=tmpdir)
+                assert loaded.auth.api_key == "key-with-unicode-\u4e2d\u6587"
+            finally:
+                if _orig is not None:
+                    os.environ["OMLX_API_KEY"] = _orig
 
 
 class TestSamplingSettings:

@@ -54,6 +54,8 @@ class ModelSettings:
         thinking_budget_enabled: Whether a thinking token budget is active.
         thinking_budget_tokens: Max tokens for thinking/reasoning.
         reasoning_parser: xgrammar builtin name: "qwen", "harmony", "llama", etc.
+        guided_grammar_enabled: Whether a default guided grammar is active.
+        guided_grammar: Default EBNF grammar for constrained decoding.
         turboquant_kv_enabled: Enable TurboQuant KV cache compression.
         turboquant_kv_bits: TurboQuant bit depth (2/2.5/3/3.5/4/6/8).
         turboquant_skip_last: Skip last KVCache layer to prevent corruption.
@@ -81,10 +83,11 @@ class ModelSettings:
             (None = dflash default "adaptive"). "adaptive" can shrink block size when
             acceptance drops.
         mtp_enabled: Enable native multi-token prediction (mlx-lm PR 990 / PR 15 monkey-patch).
-            When True, the BatchGenerator uses an MTP draft+verify path for single-request
-            decoding. Compatible model_types: qwen3_5*, qwen3_6*, deepseek_v4*. Mutually
-            exclusive with dflash_enabled and turboquant_kv_enabled. Concurrent requests on
-            the same model fall back to standard continuous batching automatically.
+            When True, BatchGenerator uses MTP draft+verify for singleton decode and
+            for multi-row decode batches whose cache positions are aligned. Unaligned
+            continuous batches fall back to standard decoding automatically. Compatible
+            model_types: qwen3_5*, qwen3_6*, deepseek_v4*. Mutually exclusive with
+            dflash_enabled and turboquant_kv_enabled.
         vlm_mtp_enabled: Enable VLM MTP speculative decoding via an external assistant
             drafter (mlx-vlm 191d7c8+). Target = Gemma4 VLM body, drafter must be a
             "gemma4_assistant" model.
@@ -119,6 +122,8 @@ class ModelSettings:
     thinking_budget_enabled: bool = False
     thinking_budget_tokens: Optional[int] = None
     reasoning_parser: Optional[str] = None  # xgrammar builtin name: "qwen", "harmony", "llama", etc.
+    guided_grammar_enabled: bool = False
+    guided_grammar: Optional[str] = None
 
     # TurboQuant KV cache (mlx-vlm backend)
     turboquant_kv_enabled: bool = False
@@ -154,8 +159,9 @@ class ModelSettings:
     dflash_verify_mode: Optional[str] = None  # "dflash" | "adaptive" | "ddtree" | "off"
 
     # Native MTP (mlx-lm PR 990 / PR 15 monkey-patch). When enabled, BatchGenerator
-    # uses MTP draft+verify path for single-request decoding. Compatible model_types:
-    # qwen3_5*, qwen3_6*, deepseek_v4*. Mutually exclusive with dflash and turboquant.
+    # uses MTP draft+verify for singleton decode and aligned multi-row decode batches.
+    # Compatible model_types: qwen3_5*, qwen3_6*, deepseek_v4*. Mutually exclusive
+    # with dflash and turboquant.
     mtp_enabled: bool = False
 
     # VLM MTP speculative decoding via external assistant drafter (mlx-vlm f96138e+).
@@ -671,6 +677,11 @@ class ModelSettingsManager:
     # ==================== Templates ====================
 
     def _load_templates(self) -> None:
+        # Built-in defaults ship inside the package (omlx/default_global_templates.json)
+        # and are merged in at read time — they are NEVER copied to disk and never
+        # appear in `self._templates`. The user file under <base_path> holds
+        # ONLY user-created templates; a missing/empty file is the legitimate
+        # initial state.
         if not self.templates_file.exists():
             self._templates = {}
             return
@@ -713,12 +724,18 @@ class ModelSettingsManager:
             raise
 
     def list_templates(self) -> list[dict]:
+        # Shipped JSON seeds were retired in favor of the client-side preset
+        # bundle (`omlx/admin/static/omlx_preset.json`); every entry on this
+        # surface is user-created. Callers that distinguish presets from
+        # user templates do so via the preset bundle, not an `is_builtin`
+        # flag on this response.
         with self._lock:
             return [dict(t) for t in self._templates.values()]
 
     def get_template(self, name: str) -> Optional[dict]:
         with self._lock:
-            return dict(self._templates.get(name, {})) or None
+            u = self._templates.get(name)
+            return dict(u) if u is not None else None
 
     def save_template(
         self,

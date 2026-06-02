@@ -2228,6 +2228,9 @@ class BlockAwarePrefixCache(CacheManager):
                 f"offset={kvcache_offset}, kv_heads={kv_heads}, head_dim={head_dim}"
             )
         else:
+            cache.keys = None
+            cache.values = None
+            cache._idx = 0
             logger.debug(
                 f"Created empty RotatingKVCache: max_size={max_size}, keep={keep} "
                 f"(no shape ref, keys=None)"

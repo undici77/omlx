@@ -54,7 +54,12 @@ def _inject_cache_extras() -> None:
     """
     import mlx_lm.models.cache as _cache_mod
 
-    if hasattr(_cache_mod, "PoolingCache") and hasattr(_cache_mod, "BatchPoolingCache"):
+    if (
+        hasattr(_cache_mod, "PoolingCache")
+        and hasattr(_cache_mod, "BatchPoolingCache")
+        and getattr(_cache_mod.PoolingCache, "__module__", "") == "mlx_lm.models.cache"
+        and getattr(_cache_mod.BatchPoolingCache, "__module__", "") == "mlx_lm.models.cache"
+    ):
         return
 
     from . import cache_extras as _extras

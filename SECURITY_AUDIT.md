@@ -1,129 +1,139 @@
 # oMLX Security Audit & Compliance Guide
 
-**Version:** 1.0  
-**Last Updated:** April 18, 2026  
+**Version:** 1.1
+**Last Updated:** May 27, 2026
 **Project:** oMLX (Open MLX Inference Server)
-
-## 1. Security Architecture Overview
-oMLX is a **local-first** inference server. Its primary security model relies on the assumption that it runs on a trusted host (macOS) and is accessed either locally or via a secured network.
-
-- **Framework:** FastAPI (Python 3.10+)
-- **Authentication:** 
-    - **API:** Bearer Token (OpenAI/Anthropic compatible) or `x-api-key` header.
-    - **Admin:** Signed session cookies (`itsdangerous` URLSafeTimedSerializer).
-- **Network Binding:** Default `127.0.0.1:8000`.
-- **Encryption:** None at rest for settings; TLS depends on reverse proxy (if used).
 
 ---
 
-## 2. Data Handling & Privacy Policy
-| Data Category | Handling Policy | Storage Location |
+## ⚡ Auditor Quick-Start (Run These First)
+
+Before any manual inspection, run the automated compliance gate. It covers settings defaults, README privacy sections, and all license headers in ~1 second:
+
+```bash
+source .venv/bin/activate
+PYTHONPATH=. python scripts/compliance_check.py
+```
+Expected: `ALL CHECKS PASSED. Project is compliant with Security Audit v1.0.`
+
+If it fails, **stop and fix the reported items first.** Manual checks below are only needed for items the script cannot verify.
+
+```bash
+# Verify no active server is binding to all interfaces
+lsof -i :8000
+
+# Verify config file permissions
+ls -l ~/.omlx/settings.json          # must be 0600
+
+# Verify authentication bypass is off
+grep "skip_api_key_verification" ~/.omlx/settings.json   # must be false
+
+# Check for prompt leakage in logs (TRACE level exposes full prompt text)
+grep -r "Incoming POST" ~/.omlx/logs  # empty = OK; content = log level too high
+```
+
+---
+
+## 1. Privacy Policy & Data Handling
+
+oMLX is **local-first by design.** No user data leaves the device unless the user explicitly enables an opt-in feature.
+
+| Data Category | Policy | Storage |
 | :--- | :--- | :--- |
-| **User Prompts** | Processed in-memory (GPU/RAM) | Local Logs (if DEBUG/TRACE) |
-| **Model Weights** | Loaded into Unified Memory | `~/.omlx/models` |
-| **API Keys** | Plaintext in config | `~/.omlx/settings.json` |
-| **Telemetry** | **Disabled/None** | N/A |
-| **Update Checks** | **Disabled by default** (Anonymous GET to GitHub if enabled) | N/A |
-| **Update Actions** | User-initiated only | N/A |
+| **User Prompts** | Processed in GPU/RAM only; never transmitted | Local logs only if `log_level = TRACE` (discouraged) |
+| **Model Weights** | Loaded into Unified Memory; not transmitted | `~/.omlx/models` |
+| **API Keys** | Plaintext; protected by OS file permissions | `~/.omlx/settings.json` (must be `0600`) |
+| **Telemetry / Analytics** | **None.** Zero "phone home" by default | N/A |
+| **Update Checks** | **Disabled by default.** Anonymous `GET` to GitHub only if user enables `check_updates` | N/A |
+| **Benchmark Results** | **Opt-in only** (`allow_upload: false` default). User must check "Share results" in UI | omlx.ai (only when explicitly enabled) |
+| **Hardware Fingerprint** | Only included in benchmark uploads; only when `allow_upload: true` | omlx.ai (only when explicitly enabled) |
+| **Update Actions** | User-initiated only; no auto-install | N/A |
+
+### Privacy Compliance Statement
+
+oMLX complies with **privacy-by-design** principles:
+
+1. **Local Processing:** Inference never leaves the device.
+2. **Zero Telemetry by Default:** No analytics, no usage tracking, no opt-out needed — it is simply off.
+3. **Explicit Opt-In for Sharing:** Benchmark results and hardware info are transmitted only when the user checks "Share results" (`allow_upload: true`). The default is `false`.
+4. **Data Sovereignty:** The user owns the weights, the logs, and the API keys.
+
+---
+
+## 2. Security Architecture
+
+oMLX's security model assumes it runs on a **trusted host (macOS)** accessed locally or via a secured network.
+
+- **Framework:** FastAPI (Python 3.10+)
+- **API Auth:** Bearer Token (OpenAI/Anthropic compatible) or `x-api-key` header
+- **Admin Auth:** Signed session cookies (`itsdangerous` URLSafeTimedSerializer)
+- **Default Binding:** `127.0.0.1:8000` (loopback only)
+- **Encryption at rest:** None for settings; TLS via reverse proxy (Nginx/Caddy) if network-exposed
 
 ---
 
 ## 3. Security Audit Checklist
-Use this checklist during future audits to verify the security posture of an oMLX instance.
 
-### 3.1 Network & Connectivity
-- [ ] **Binding:** Verify server binds to `127.0.0.1` unless remote access is explicitly required.
-- [ ] **CORS:** Verify `cors_origins` in `settings.json` is not `["*"]` if the server is internet-exposed.
-- [ ] **TLS:** If accessed over a network, verify a reverse proxy (Nginx/Caddy) provides HTTPS.
-- [ ] **MCP:** Verify `mcp.example.json` does not contain hardcoded secrets or overly permissive tool access.
-- [ ] **Auto-Update:** Verify `server.check_updates` is `false` (default) to prevent unintended external requests on startup.
-- [ ] **StatusKit Check:** Verify `server.check_statuskit` is `false` (default) to ensure no system setting probes/writes occur without consent.
+### 3.1 Privacy & Outbound Traffic (Audit First)
 
-### 3.2 Authentication & Authorization
-- [ ] **Bypass Check:** Verify `auth.skip_api_key_verification` is set to `false`.
-- [ ] **API Key Strength:** Verify `api_key` is a high-entropy string (not "1234").
-- [ ] **Session Secret:** Verify `auth.secret_key` is unique and was generated by the server (default behavior).
-- [ ] **Sub-Keys:** Verify sub-keys are only used for `/v1/` routes and cannot access `/admin/`.
+- [ ] **Telemetry disabled:** Verify no analytics calls exist outside the benchmark opt-in path (`omlx/admin/benchmark.py`).
+- [ ] **Benchmark upload gated:** Verify `BenchmarkRequest.allow_upload` defaults to `False` and the upload is only called when `run.request.allow_upload is True`.
+- [ ] **Update check off:** Verify `server.check_updates` is `false` in `settings.json` (default).
+- [ ] **StatusKit check off:** Verify `server.check_statuskit` is `false` (default; probes a system setting on macOS Tahoe).
+- [ ] **Log level safe:** Verify `server.log_level` is `info` or `warning`. `TRACE` (level 5) logs full prompt text.
 
-### 3.3 Filesystem & Permissions
-- [ ] **Config Protection:** Verify `~/.omlx/settings.json` has `0600` or `0700` permissions.
-- [ ] **Path Traversal:** Verify that model directories are validated against `base_path` using `resolve()`.
-- [ ] **Log Cleanup:** Verify log retention is configured (`logging.retention_days`) to prevent disk exhaustion.
+### 3.2 Network & Connectivity
 
-### 3.4 Logging & Debugging
-- [ ] **Log Level:** Verify `server.log_level` is set to `info` or `warning` in production.
-- [ ] **Sensitive Data:** Ensure `TRACE` (level 5) logging is disabled to prevent prompt/key leakage in logs.
+- [ ] **Binding:** Server binds to `127.0.0.1` unless remote access is explicitly required.
+- [ ] **CORS:** `cors_origins` in `settings.json` is not `["*"]` if the server is internet-exposed.
+- [ ] **TLS:** A reverse proxy (Nginx/Caddy) provides HTTPS if accessed over a network.
+- [ ] **MCP:** `mcp.example.json` contains no hardcoded secrets and no overly permissive tool access.
+
+### 3.3 Authentication & Authorization
+
+- [ ] **Bypass off:** `auth.skip_api_key_verification` is `false`.
+- [ ] **API Key strength:** `api_key` is a high-entropy string (not `"1234"`).
+- [ ] **Session secret:** `auth.secret_key` is unique and was server-generated (default behavior).
+- [ ] **Sub-key scope:** Sub-keys only access `/v1/` routes; they cannot reach `/admin/`.
+
+### 3.4 Filesystem & Permissions
+
+- [ ] **Config permissions:** `~/.omlx/settings.json` has mode `0600`.
+- [ ] **Path traversal:** Model directories are validated against `base_path` using `Path.resolve()`.
+- [ ] **Log retention:** `logging.retention_days` is configured to prevent disk exhaustion.
 
 ---
 
 ## 4. Known Security Risks (Risk Register)
-| ID | Risk Description | Mitigation/Status |
+
+| ID | Risk | Mitigation / Status |
 | :--- | :--- | :--- |
-| **OMLX-01** | **Bypass Mode:** `skip_api_key_verification` allows full unauthenticated admin access. | **Mitigation:** Documentation warning; default is `false`. |
-| **OMLX-02** | **Plaintext Config:** Secrets stored in `settings.json` without encryption. | **Mitigation:** OS-level file permissions. |
-| **OMLX-03** | **CSRF:** Admin panel lacks explicit CSRF tokens for POST actions. | **Status:** Partially mitigated by `SameSite=Lax` cookies. |
-| **OMLX-04** | **CORS Wildcard:** Default `["*"]` allows any site to attempt API requests. | **Status:** User-configurable in settings. |
+| **OMLX-01** | **Auth Bypass:** `skip_api_key_verification = true` grants full unauthenticated admin access. | Default `false`; documented warning. |
+| **OMLX-02** | **Plaintext Config:** Secrets in `settings.json` without encryption. | OS-level `0600` permissions; no fix planned (local-only threat model). |
+| **OMLX-03** | **CSRF:** Admin panel POST actions lack explicit CSRF tokens. | Partially mitigated by `SameSite=Lax` cookies. |
+| **OMLX-04** | **CORS Wildcard:** Default `["*"]` allows any origin to attempt API requests. | User-configurable; documented. |
+| **OMLX-05** | **Benchmark Telemetry:** Benchmark module can upload hardware fingerprint + performance data. | **Mitigated (May 2026):** `allow_upload` defaults to `false`; upload is gated behind user opt-in both in backend (`BenchmarkRequest.allow_upload: bool = False`) and UI checkbox. `compliance_check.py` verifies the default. |
 
 ---
 
-## 5. Auditor's Quick-Start (Verification Commands)
+## 5. CI / Non-macOS Testing Security
 
-### Check Network Binding
-```bash
-lsof -i :8000
-```
+### 5.1 The MLX Mock: Scope and Safety
 
-### Verify File Permissions
-```bash
-ls -ld ~/.omlx
-ls -l ~/.omlx/settings.json
-```
+oMLX uses a NumPy-backed import-hook mock (`omlx/utils/mlx_mock.py`) to run tests on Linux/CI where the real `mlx` C++ library cannot be installed.
 
-### Search for Authentication Bypasses
-```bash
-grep "skip_api_key_verification" ~/.omlx/settings.json
-```
+**Security properties that must be preserved:**
 
-### Check Log Privacy
-```bash
-grep -r "Incoming POST" ~/.omlx/logs
-# If prompts are visible here, log level is too high (TRACE).
-```
+| Property | Detail |
+|----------|--------|
+| **Mock never activates on macOS** | `omlx/__init__.py` guards with `if platform.system() != "Darwin"` — the mock is unconditionally skipped on the only production platform. |
+| **Mock is installed before any test** | `conftest.py → import omlx → install_mock()` inserts `MockMLXFinder` at `sys.meta_path[0]`. No test can accidentally import real `mlx` on Linux. |
+| **Single source of truth** | `omlx/utils/mlx_mock.py` is the only file with mock logic. `tests/mlx_mock.py` is a 5-line re-export shim — never a duplicate. |
 
----
+### 5.2 Fail-Loud Mock Policy
 
-## 6. Compliance Statement
-oMLX is compliant with **privacy-by-design** principles:
-1. **Local Processing:** No data leaves the device for inference.
-2. **Zero Telemetry:** No "phone home" analytics.
-3. **Data Sovereignty:** The user owns the weights, the logs, and the keys.
+The mock raises `NotImplementedError` for any unknown MLX function:
 
----
-
-## 7. CI / Non-macOS Testing Security Strategy
-
-### 7.1 The MLX Mock: Scope and Safety
-
-oMLX uses a NumPy-backed import-hook mock (`omlx/utils/mlx_mock.py`) to enable test execution on Linux/CI where the real `mlx` C++ library cannot be installed. The following security properties are **by design and must be preserved**:
-
-**The mock is installed at import time via `sys.meta_path`, not at test time.** The chain is:
-```
-conftest.py → import omlx → omlx/__init__.py → omlx/utils/mlx_mock.py → install_mock()
-```
-This means the mock is active for the entire test process. There is no risk of "real MLX" being loaded accidentally on Linux/CI: the `MockMLXFinder` sits at `sys.meta_path[0]` and intercepts all `mlx.*` imports before the normal import machinery runs.
-
-**The mock never reaches production macOS deployments.** The guard in `omlx/__init__.py` is:
-```python
-if platform.system() != "Darwin":
-    # load and install mock
-```
-On macOS (the only production platform), this block is skipped entirely and the real `mlx` is used. The mock cannot accidentally activate in production.
-
-**Single source of truth:** As of commit `fe6066a` (May 2026), `tests/mlx_mock.py` is a 5-line shim that re-exports from `omlx/utils/mlx_mock.py`. There is **one file to audit**, not two. If `tests/mlx_mock.py` is ever found to contain significant logic again, that is a regression — consolidate it back to a shim immediately.
-
-### 7.2 Fail-Loud Mock Policy
-
-The mock's unknown-function fallback raises `NotImplementedError` (not a silent zeros return):
 ```python
 def _default_func(*args, _n=_captured_name, **kwargs):
     raise NotImplementedError(
@@ -131,46 +141,46 @@ def _default_func(*args, _n=_captured_name, **kwargs):
         f"Add it to omlx/utils/mlx_mock.py."
     )
 ```
-**Security rationale:** Silent wrong-value returns mask bugs. A test that passes because `mx.some_function()` silently returned zeros is worse than a test that fails loudly. The `NotImplementedError` ensures every new MLX surface area is **consciously reviewed and explicitly implemented** in the mock before tests can pass.
 
-**Policy:** Any PR that makes `_default_func` return a value again (instead of raising) must include a documented justification.
+**Why this matters:** A silent zeros return would let tests pass with wrong results, masking real bugs. `NotImplementedError` forces every new MLX surface area to be **consciously reviewed and explicitly implemented** before tests can pass.
 
-### 7.3 Test Quality Policies
+**Policy:** Any change that makes `_default_func` return a value instead of raising must include a documented justification in the PR.
 
-These policies govern what is acceptable in the test suite:
+### 5.3 Test Quality Policies
 
 | Policy | Rule | Rationale |
-|---|---|---|
-| `@pytest.mark.slow` | Tests requiring a real model load or hardware-dependent numerical precision | Cannot run in CI without Apple Silicon; must not block PRs |
-| `@pytest.mark.integration` | Tests requiring a live oMLX server | Excluded from `pytest.ini` default run |
-| `pytest.skip()` in fixture | Tests requiring external data (vocab files, network) | Offline CI must not fail due to missing downloads |
-| Inline mock override | Never inline `sys.meta_path` hacks in test files | Use `omlx/utils/mlx_mock.py` exclusively |
+|--------|------|-----------|
+| `@pytest.mark.slow` | Tests requiring a real model load or hardware-dependent numerical precision | Cannot run in CI; must not block PRs |
+| `@pytest.mark.integration` | Tests requiring a live oMLX server | Excluded from default `pytest` run |
+| `pytest.skip()` in fixture | Tests requiring external data (vocab files, network) | Offline CI must not fail on missing downloads |
+| Inline mock override | **Never** inline `sys.meta_path` hacks in test files | Use `omlx/utils/mlx_mock.py` exclusively |
 
-`pytest.ini` enforces: `addopts = -m "not slow and not integration"` — the default `pytest` run in CI must yield **zero failures**.
+`pytest.ini` enforces: `addopts = -m "not slow and not integration"` — the default CI run must yield **zero failures**.
 
-### 7.4 Compliance Verification — Mandatory Gate
+### 5.4 Compliance Verification — Mandatory Pre-Commit Gate
 
-Before any commit that modifies Python source files, run:
+Run before every commit that modifies Python source files:
 ```bash
-python scripts/compliance_check.py
+PYTHONPATH=. python scripts/compliance_check.py
 ```
-This script verifies three security-relevant properties:
-1. **`settings.py` defaults** — `host=127.0.0.1`, `check_updates=False`, `check_statuskit=False`, `skip_api_key_verification=False`
-2. **`README.md` privacy sections** — required sections (Privacy & Security) exist; prohibited sections (telemetry, tracking) are absent
-3. **License headers** — every `.py` file starts with `# SPDX-License-Identifier: Apache-2.0`
 
-Expected output: `ALL CHECKS PASSED. Project is compliant with Security Audit v1.0.`
+Verifies:
+1. **`settings.py` security defaults** — `host=127.0.0.1`, `check_updates=False`, `check_statuskit=False`, `skip_api_key_verification=False`, `benchmark.allow_upload=False`
+2. **`README.md` privacy sections** — required sections exist; prohibited telemetry/tracking sections are absent
+3. **License headers** — every `.py` file begins with `# SPDX-License-Identifier: Apache-2.0`
 
-If this check fails, **do not commit.** The compliance check is the programmatic enforcement of the policies in this document.
+**Do not commit if this check fails.**
 
-### 7.5 Merge Conflict Security Checklist
+### 5.5 Merge Conflict Security Checklist
 
-When resolving merge conflicts, verify these security-sensitive files specifically:
+When resolving merge conflicts, verify these files specifically:
 
-- [ ] **`omlx/_version.py`** — Must retain `# SPDX-License-Identifier: Apache-2.0` header. Version should be the higher of the two conflicting values.
-- [ ] **`omlx/settings.py`** — Verify defaults were not accidentally changed by the merge (run compliance check after resolving).
-- [ ] **`omlx/utils/mlx_mock.py`** — Must remain the single canonical mock. If a merge reverts `tests/mlx_mock.py` from a shim back to a 400+ line duplicate, restore it to the shim.
-- [ ] **`tests/conftest.py`** — Must start with `import omlx` before any `import mlx.*` to ensure the mock is installed first.
+- [ ] **`omlx/_version.py`** — Retains `# SPDX-License-Identifier: Apache-2.0` header; version is the higher of the two.
+- [ ] **`omlx/settings.py`** — Security defaults not accidentally changed. Run `compliance_check.py` after resolving.
+- [ ] **`omlx/utils/mlx_mock.py`** — Remains the single canonical mock. Not reverted to an older state.
+- [ ] **`tests/mlx_mock.py`** — Remains the 5-line shim; not replaced with a 400+ line duplicate.
+- [ ] **`tests/conftest.py`** — `import omlx` appears before any `import mlx.*`.
 
 ---
-*This document should be updated whenever new API routes, storage mechanisms, security-relevant defaults, or test infrastructure decisions are added to the oMLX project.*
+
+*Update this document whenever new API routes, storage mechanisms, security-relevant settings defaults, or test infrastructure decisions are added to oMLX.*

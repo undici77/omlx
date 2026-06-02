@@ -1,442 +1,1571 @@
 # SPDX-License-Identifier: Apache-2.0
-import sys
-import types
+import contextlib
 import importlib.abc
 import importlib.machinery
+import json
+import math
+import sys
+import types
+from pathlib import Path
+
 import numpy as np
 
+
 def _map_dtype(dtype):
-    if dtype == "bfloat16": return "float16"
-    if isinstance(dtype, str):
-        if dtype.startswith("uint"):
-            try:
-                bits = int(dtype[4:])
-                if bits <= 8: return "uint8"
-                if bits <= 16: return "uint16"
-                if bits <= 32: return "uint32"
-                return "uint64"
-            except ValueError: pass
-        return dtype
-    if hasattr(dtype, "__name__"): return dtype.__name__
-    return None
+    if dtype == "bfloat16":
+        return "float16"
+    if isinstance(dtype, str) and dtype.startswith("uint"):
+        try:
+            bits = int(dtype[4:])
+            if bits <= 8:
+                return "uint8"
+            if bits <= 16:
+                return "uint16"
+            if bits <= 32:
+                return "uint32"
+            return "uint64"
+        except ValueError:
+            pass
+    if hasattr(dtype, "__name__"):
+        return dtype.__name__
+    return dtype
+
 
 class MockMLXLoader(importlib.abc.Loader):
-    def _save_safetensors_impl(self, path, weights, metadata=None):
-        import json, struct
-        try:
-            header = {}
-            if metadata: header["__metadata__"] = metadata
-            mlx_to_st = {
-                "float32": "F32", "float16": "F16", "bfloat16": "BF16",
-                "int32": "I32", "int64": "I64", "uint8": "U8", "uint32": "U32",
-                "bool_": "BOOL", "uint4": "U8", "uint2": "U8", "uint5": "U8", "uint6": "U8"
-            }
-            offset = 0
-            tensors_data = []
-            for name, arr in weights.items():
-                arr_mock = self.array(arr)
-                st_dtype = mlx_to_st.get(str(arr_mock.dtype), "F32")
-                data = arr_mock._data.tobytes()
-                length = len(data)
-                header[name] = {"dtype": st_dtype, "shape": list(arr_mock.shape), "data_offsets": [offset, offset + length]}
-                tensors_data.append(data)
-                offset += length
-            header_json = json.dumps(header).encode("utf-8")
-            header_size = len(header_json)
-            with open(path, "wb") as f:
-                f.write(struct.pack("<Q", header_size))
-                f.write(header_json)
-                for d in tensors_data:
-                    f.write(d)
-        except Exception: pass
-
-    def _load_safetensors_impl(self, path, return_metadata=False):
-        import json, struct
-        try:
-            with open(path, "rb") as f:
-                header_size_bytes = f.read(8)
-                if len(header_size_bytes) < 8: return ({}, {}) if return_metadata else {}
-                header_size = struct.unpack("<Q", header_size_bytes)[0]
-                header_json = f.read(header_size).decode("utf-8")
-                header = json.loads(header_json)
-                metadata = header.pop("__metadata__", {})
-                tensors = {}
-                st_to_np = {"F16": np.float16, "F32": np.float32, "F64": np.float64, "I8": np.int8, "I16": np.int16, "I32": np.int32, "I64": np.int64, "U8": np.uint8, "U16": np.uint16, "U32": np.uint32, "U64": np.uint64, "BOOL": np.bool_, "BF16": np.uint16}
-                data_start = 8 + header_size
-                for name, info in header.items():
-                    dtype_str = info["dtype"]
-                    shape = info["shape"]
-                    offsets = info["data_offsets"]
-                    f.seek(data_start + offsets[0])
-                    raw_data = f.read(offsets[1] - offsets[0])
-                    np_dtype = st_to_np.get(dtype_str, np.float32)
-                    arr = np.frombuffer(raw_data, dtype=np_dtype).reshape(shape)
-                    if dtype_str == "BF16":
-                        tensors[name] = self.array(arr.view(np.float16), dtype="bfloat16")
-                    else:
-                        st_to_mlx = {"F16": "float16", "F32": "float32", "U8": "uint8", "I32": "int32", "I64": "int64", "BOOL": "bool_", "U32": "uint32"}
-                        tensors[name] = self.array(arr, dtype=st_to_mlx.get(dtype_str, "float32"))
-                return (tensors, metadata) if return_metadata else tensors
-        except Exception: return ({}, {}) if return_metadata else {}
-
     class array:
         def __init__(self, data=None, dtype=None):
             if hasattr(data, "_data"):
                 data = data._data
+            if isinstance(data, (list, tuple)):
+                def _unwrap_nested(value):
+                    if hasattr(value, "_data"):
+                        return value._data
+                    if isinstance(value, (list, tuple)):
+                        return [_unwrap_nested(v) for v in value]
+                    return value
+                data = _unwrap_nested(data)
             if isinstance(data, np.ndarray):
                 self._data = data.copy()
             elif data is None:
                 self._data = np.array([], dtype=_map_dtype(dtype) or "float32")
             else:
-                self._data = np.array(data)
-
+                try:
+                    self._data = np.array(data, dtype=_map_dtype(dtype))
+                except Exception:
+                    self._data = np.array(data)
             mapped = _map_dtype(dtype)
             if mapped:
-                self._data = self._data.astype(mapped)
-
-            # Map float64 to float32 by default
+                try:
+                    self._data = self._data.astype(mapped)
+                except Exception:
+                    pass
             if self._data.dtype == np.float64:
                 self._data = self._data.astype(np.float32)
-
             self.dtype = dtype or str(self._data.dtype)
-            self.shape, self.size, self.ndim = self._data.shape, self._data.size, self._data.ndim
-            self.nbytes = self._data.nbytes
+            self.shape, self.size, self.ndim = (
+                self._data.shape,
+                self._data.size,
+                self._data.ndim,
+            )
 
-        def _to_np(self, other):
-            if hasattr(other, "_data"): return other._data
-            if isinstance(other, np.ndarray): return other
-            return np.array(other)
+        def item(self):
+            return self._data.item()
 
-        def item(self): return self._data.item()
-        def tolist(self): return self._data.tolist()
-        def astype(self, dtype): return self.__class__(self._data, dtype=dtype)
+        def tolist(self):
+            return self._data.tolist()
+
+        def astype(self, dtype):
+            return self.__class__(self._data, dtype=dtype)
+
         def reshape(self, *shape):
-            if len(shape) == 1 and isinstance(shape[0], (list, tuple)): shape = shape[0]
+            if len(shape) == 1 and isinstance(shape[0], (list, tuple)):
+                shape = shape[0]
             return self.__class__(self._data.reshape(shape), dtype=self.dtype)
-        def flatten(self, axis=0):
-            if axis == 0: return self.__class__(self._data.flatten(), dtype=self.dtype)
-            new_shape = list(self.shape[:axis]) + [-1]
-            return self.__class__(self._data.reshape(new_shape), dtype=self.dtype)
-        def transpose(self, *axes):
-            if len(axes) == 1 and isinstance(axes[0], (list, tuple)): axes = axes[0]
-            return self.__class__(self._data.transpose(axes if axes else None), dtype=self.dtype)
-        def squeeze(self, axis=None): return self.__class__(np.squeeze(self._data, axis=axis), dtype=self.dtype)
-        def abs(self): return self.__class__(np.abs(self._data), dtype=self.dtype)
-        def max(self, axis=None, keepdims=False): return self.__class__(np.max(self._data, axis=axis, keepdims=keepdims), dtype=self.dtype)
-        def min(self, axis=None, keepdims=False): return self.__class__(np.min(self._data, axis=axis, keepdims=keepdims), dtype=self.dtype)
-        def sum(self, axis=None, keepdims=False): return self.__class__(np.sum(self._data, axis=axis, keepdims=keepdims), dtype=self.dtype)
-        def mean(self, axis=None, keepdims=False): return self.__class__(np.mean(self._data, axis=axis, keepdims=keepdims), dtype=self.dtype)
-        def __repr__(self):
-            try:
-                dtype_str = self.dtype if isinstance(self.dtype, str) else getattr(self.dtype, "__name__", str(self.dtype))
-                return f"mx.array(shape={self.shape}, dtype={dtype_str})"
-            except Exception: return "mx.array(error)"
-        def __bool__(self): return bool(self.item())
-        def __len__(self): return len(self._data) if self.ndim > 0 else 0
-        def __getitem__(self, i):
-            if isinstance(i, tuple): i = tuple(idx._data if hasattr(idx, "_data") else idx for idx in i)
-            elif hasattr(i, "_data"): i = i._data
-            return self.__class__(self._data[i])
-        def __setitem__(self, i, v):
-            if hasattr(v, "_data"): v = v._data
-            self._data[i] = v
-        def __add__(self, other): return self.__class__(self._data + self._to_np(other))
-        def __sub__(self, other): return self.__class__(self._data - self._to_np(other))
-        def __mul__(self, other): return self.__class__(self._data * self._to_np(other))
-        def __truediv__(self, other): return self.__class__(self._data / self._to_np(other))
-        def __lshift__(self, other): return self.__class__(self._data.astype(int) << (other._data.astype(int) if hasattr(other, "_data") else int(other)))
-        def __rshift__(self, other): return self.__class__(self._data.astype(int) >> (other._data.astype(int) if hasattr(other, "_data") else int(other)))
-        def __and__(self, other): return self.__class__(self._data.astype(int) & (self._to_np(other).astype(int)))
-        def __or__(self, other): return self.__class__(self._data.astype(int) | (self._to_np(other).astype(int)))
-        def __xor__(self, other): return self.__class__(self._data.astype(int) ^ (self._to_np(other).astype(int)))
-        def __ior__(self, other):
-            self._data = (self._data.astype(int) | (self._to_np(other).astype(int))).astype(self._data.dtype)
-            return self
-        def __matmul__(self, other): return self.__class__(self._data @ self._to_np(other))
-        def __ne__(self, other): return self.__class__(self._data != self._to_np(other), dtype="bool_")
-        def __eq__(self, other): return self.__class__(self._data == self._to_np(other), dtype="bool_")
 
-        def __floordiv__(self, other): return self.__class__(self._data // self._to_np(other))
-        def __pow__(self, other): return self.__class__(self._data ** self._to_np(other))
-        def __radd__(self, other): return self.__class__(self._to_np(other) + self._data)
-        def __rsub__(self, other): return self.__class__(self._to_np(other) - self._data)
-        def __rmul__(self, other): return self.__class__(self._to_np(other) * self._data)
-        def __rtruediv__(self, other): return self.__class__(self._to_np(other) / self._data)
-        def __rfloordiv__(self, other): return self.__class__(self._to_np(other) // self._data)
-        def __rpow__(self, other): return self.__class__(self._to_np(other) ** self._data)
-        def __neg__(self): return self.__class__(-self._data)
-        def __eq__(self, other): return self.__class__(self._data == self._to_np(other), dtype="bool_")
-        def __lt__(self, other): return self.__class__(self._data < self._to_np(other), dtype="bool_")
-        def __gt__(self, other): return self.__class__(self._data > self._to_np(other), dtype="bool_")
-        def __le__(self, other): return self.__class__(self._data <= self._to_np(other), dtype="bool_")
-        def __ge__(self, other): return self.__class__(self._data >= self._to_np(other), dtype="bool_")
-        def __iter__(self):
-            if self.ndim == 0: yield self
-            else:
-                for x in self._data: yield self.__class__(x, dtype=self.dtype)
-        def __array__(self, dtype=None): return self._data.astype(dtype) if dtype else self._data
+        def squeeze(self, axis=None):
+            return self.__class__(np.squeeze(self._data, axis=axis), dtype=self.dtype)
+
+        def transpose(self, *axes):
+            return self.__class__(self._data.transpose(*axes), dtype=self.dtype)
+
         def view(self, dtype):
-            np_dtype = _map_dtype(dtype) or dtype
-            try:
-                result = self.__class__(self._data.view(np_dtype))
-            except Exception:
-                result = self.__class__(self._data.astype(np_dtype))
-            # Preserve MLX dtype label (e.g. "bfloat16" instead of mapped "float16")
-            mlx_dtype = dtype if isinstance(dtype, str) else getattr(dtype, "__name__", None)
-            if mlx_dtype:
-                result.dtype = mlx_dtype
-            return result
-        def __int__(self): return int(self._data.item())
-        def __index__(self): return int(self._data.item())
-        def __buffer__(self, flags): return self._data.__buffer__(flags)
+            mapped = _map_dtype(dtype)
+            if dtype == "bfloat16":
+                if self._data.dtype == np.uint16:
+                    return self.__class__(self._data.view(np.float16), dtype=dtype)
+                return self.__class__(self._data, dtype=dtype)
+            if mapped:
+                try:
+                    return self.__class__(self._data.view(mapped), dtype=dtype)
+                except Exception:
+                    pass
+            return self.astype(dtype)
+
+        def max(self, axis=None, keepdims=False):
+            return self.__class__(np.max(self._data, axis=axis, keepdims=keepdims))
+
+        def min(self, axis=None, keepdims=False):
+            return self.__class__(np.min(self._data, axis=axis, keepdims=keepdims))
+
+        def sum(self, axis=None, keepdims=False):
+            return self.__class__(np.sum(self._data, axis=axis, keepdims=keepdims))
+
+        def mean(self, axis=None, keepdims=False):
+            return self.__class__(np.mean(self._data, axis=axis, keepdims=keepdims))
+
+        def flatten(self, order="C"):
+            if isinstance(order, int):
+                axis = order if order >= 0 else self._data.ndim + order
+                new_shape = self._data.shape[:axis] + (-1,)
+                return self.__class__(self._data.reshape(new_shape), dtype=self.dtype)
+            return self.__class__(self._data.flatten(order), dtype=self.dtype)
+
+        def __repr__(self):
+            return f"mx.array(shape={self.shape}, dtype={self.dtype})"
+
+        def __bool__(self):
+            return bool(self.item())
+
+        def __len__(self):
+            return len(self._data) if self.ndim > 0 else 0
+
+        def __iter__(self):
+            for item in self._data:
+                yield self.__class__(item)
+
+        def __getitem__(self, i):
+            return self.__class__(self._data[self._unwrap_index(i)])
+
+        def __setitem__(self, i, v):
+            self._data[self._unwrap_index(i)] = v._data if hasattr(v, "_data") else v
+
+        @staticmethod
+        def _unwrap_index(idx):
+            if hasattr(idx, "_data"):
+                return idx._data
+            if isinstance(idx, tuple):
+                return tuple(MockMLXLoader.array._unwrap_index(x) for x in idx)
+            return idx
+
+        @staticmethod
+        def _unwrap(other):
+            return other._data if hasattr(other, "_data") else other
+
+        def __add__(self, other):
+            return self.__class__(self._data + self._unwrap(other))
+
+        def __radd__(self, other):
+            return self.__class__(self._unwrap(other) + self._data)
+
+        def __sub__(self, other):
+            return self.__class__(self._data - self._unwrap(other))
+
+        def __rsub__(self, other):
+            return self.__class__(self._unwrap(other) - self._data)
+
+        def __mul__(self, other):
+            return self.__class__(self._data * self._unwrap(other))
+
+        def __rmul__(self, other):
+            return self.__class__(self._unwrap(other) * self._data)
+
+        def __truediv__(self, other):
+            return self.__class__(self._data / self._unwrap(other))
+
+        def __rtruediv__(self, other):
+            return self.__class__(self._unwrap(other) / self._data)
+
+        def __matmul__(self, other):
+            return self.__class__(self._data @ self._unwrap(other))
+
+        def __eq__(self, other):
+            return self.__class__(self._data == self._unwrap(other), dtype="bool_")
+
+        def __lt__(self, other):
+            return self.__class__(self._data < self._unwrap(other), dtype="bool_")
+
+        def __le__(self, other):
+            return self.__class__(self._data <= self._unwrap(other), dtype="bool_")
+
+        def __gt__(self, other):
+            return self.__class__(self._data > self._unwrap(other), dtype="bool_")
+
+        def __ge__(self, other):
+            return self.__class__(self._data >= self._unwrap(other), dtype="bool_")
+
+        def __and__(self, other):
+            return self.__class__(self._data & self._unwrap(other), dtype="bool_")
+
+        def __rand__(self, other):
+            return self.__class__(self._unwrap(other) & self._data, dtype="bool_")
+
+        def __or__(self, other):
+            return self.__class__(self._data | self._unwrap(other), dtype="bool_")
+
+        def __ror__(self, other):
+            return self.__class__(self._unwrap(other) | self._data, dtype="bool_")
+
+        def __neg__(self):
+            return self.__class__(-self._data)
+
+        def __pow__(self, other):
+            return self.__class__(self._data ** self._unwrap(other))
+
+        def __rpow__(self, other):
+            return self.__class__(self._unwrap(other) ** self._data)
+
+        def __array__(self, dtype=None):
+            return self._data.astype(dtype) if dtype else self._data
+
+        def __int__(self):
+            return int(self.item())
+
+        @property
+        def nbytes(self):
+            return self._data.nbytes
+
+        def __buffer__(self, flags):
+            return self._data.__buffer__(flags)
+
         @property
         def at(self):
-            """MLX scatter-update syntax: arr.at[idx].add(val) / arr.at[idx].set(val)."""
             outer = self
+
             class _AtIndexer:
-                def __init__(self, idx): self._idx = idx
-                def add(self, val):
-                    d = outer._data.copy()
-                    v = val._data if hasattr(val, "_data") else np.array(val)
-                    np.add.at(d, self._idx, v)
-                    return outer.__class__(d, dtype=outer.dtype)
-                def set(self, val):
-                    d = outer._data.copy()
-                    v = val._data if hasattr(val, "_data") else np.array(val)
-                    d[self._idx] = v
-                    return outer.__class__(d, dtype=outer.dtype)
-            class _At:
-                def __getitem__(self, idx): return _AtIndexer(idx)
-            return _At()
+                def __getitem__(self, idx):
+                    idx = MockMLXLoader.array._unwrap_index(idx)
+
+                    class _AtOp:
+                        def add(self, val):
+                            arr = outer._data.copy()
+                            arr[idx] += MockMLXLoader.array._unwrap(val)
+                            return outer.__class__(arr, dtype=outer.dtype)
+
+                        def set(self, val):
+                            arr = outer._data.copy()
+                            arr[idx] = MockMLXLoader.array._unwrap(val)
+                            return outer.__class__(arr, dtype=outer.dtype)
+
+                    return _AtOp()
+
+            return _AtIndexer()
+
         @property
-        def T(self): return self.__class__(self._data.T, dtype=self.dtype)
+        def T(self):
+            return self.__class__(self._data.T, dtype=self.dtype)
 
     def create_module(self, spec):
-        if spec.name in sys.modules: return sys.modules[spec.name]
+        if spec.name in sys.modules:
+            return sys.modules[spec.name]
         loader = self
+
         class MockModule(types.ModuleType):
             def __init__(self, name):
                 super().__init__(name)
                 self.__mock_items = {}
                 self.__spec__ = importlib.machinery.ModuleSpec(name, None)
+
             def __getattr__(self, name):
-                if name in ("__path__", "__file__", "__all__"): return None
+                if name in ("__path__", "__file__", "__all__"):
+                    return None
                 if name not in self.__mock_items:
                     if self.__name__ == "mlx.core":
-                        if name == "random": return loader.create_module(importlib.machinery.ModuleSpec("mlx.core.random", loader))
-                        if name == "linalg": return loader.create_module(importlib.machinery.ModuleSpec("mlx.core.linalg", loader))
-                        if name == "distributed": return loader.create_module(importlib.machinery.ModuleSpec("mlx.core.distributed", loader))
-                        if name == "fast":
-
-                            m = MockModule("mlx.core.fast")
-                            m.metal_kernel = lambda *a, **k: lambda *aa, **kk: [loader.array(np.zeros(kk.get("output_shapes", [(1,1)])[0]))]
-                            return m
+                        if name == "gpu":
+                            return type("Device", (), {})()
+                        if name == "cpu":
+                            return type("Device", (), {})()
                         if name == "metal":
                             m = MockModule("mlx.core.metal")
                             m.is_available = lambda: False
                             m.device_info = lambda: {"max_buffer_length": 1 << 30}
+                            m.clear_cache = lambda: None
                             return m
-                        if name == "device_info": return lambda: {"max_buffer_length": 1 << 30}
-                        if name == "compile": return lambda f=None, **k: (lambda f: f) if f is None else f
-                        if name == "quantize":
-                            def _quantize(w, group_size=64, bits=4, mode="affine"):
-                                w = loader.array(w)
-                                qw = loader.array(w._data, dtype=f"uint{bits}" if bits <= 8 else "uint32")
-                                s_shape = list(w.shape)
-                                s_shape[-1] = max(1, s_shape[-1] // group_size)
-                                scales = loader.array(np.zeros(s_shape), dtype="float16")
-                                if mode == "affine":
-                                    biases = loader.array(np.zeros(s_shape), dtype="float16")
-                                    return (qw, scales, biases)
-                                return (qw, scales)
-                            return _quantize
-                        if name == "dequantize":
-                            def _dequantize(qw, scales, biases=None, group_size=64, bits=4, mode="affine"):
-                                return loader.array(np.zeros(qw.shape), dtype="float32")
-                            return _dequantize
-                        if name == "argpartition":
-                            def _argpartition(a, kth, axis=-1):
-                                return loader.array(np.argpartition(loader.array(a)._data, kth, axis=axis), dtype="int32")
-                            return _argpartition
-                        if name == "take_along_axis":
-                            def _take_along_axis(a, i, axis):
-                                arr = loader.array(a)._data
-                                if arr.ndim == 0: arr = arr.reshape(1)
-                                idx = loader.array(i)._data.astype(int)
-                                if idx.ndim == 0: idx = idx.reshape(1)
-                                return loader.array(np.take_along_axis(arr, idx, axis=axis))
-                            return _take_along_axis
-                        if name == "put_along_axis":
-                            def _put(a, i, v, axis):
-                                d = loader.array(a)._data.copy()
-                                if d.ndim == 0: d = d.reshape(1)
-                                idx = loader.array(i)._data.astype(int)
-                                if idx.ndim == 0: idx = idx.reshape(1)
-                                val = loader.array(v)._data
-                                if val.ndim == 0: val = val.reshape(1)
-                                np.put_along_axis(d, idx, val, axis=axis)
-                                return loader.array(d)
-                            return _put
-                        if name in ("equal", "not_equal", "array_equal", "all", "any"):
-                            def _logic(*a, **k):
-                                res = getattr(np, name)(*[loader.array(x)._data if hasattr(x, "_data") else x for x in a], **k)
-                                return loader.array(res, dtype="bool_")
-                            return _logic
-                        if name == "load":
-                            def _load(path, return_metadata=False):
-                                if str(path).endswith(".safetensors"): return loader._load_safetensors_impl(path, return_metadata)
-                                return ({}, {"omlx_cache_format_version": "3", "format_version": "3"}) if return_metadata else {}
-                            return _load
-                        if name == "load_safetensors": return lambda p, rm=False: loader._load_safetensors_impl(p, rm)
-                        if name in ("save", "save_safetensors"):
-                            def _save(p, w, metadata=None, **k):
-                                return loader._save_safetensors_impl(p, w, metadata)
-                            return _save
-                        if name == "softmax":
-                            def _softmax(x, axis=-1):
-                                d = loader.array(x)._data
-                                if d.size == 0: return loader.array(d)
-                                a_max = np.max(d, axis=axis, keepdims=True)
-                                e_x = np.exp(d - a_max)
-                                return loader.array(e_x / e_x.sum(axis=axis, keepdims=True))
-                            return _softmax
-                        if name == "logsumexp":
-                            def _lse(a, axis=None, keepdims=False):
-                                d = loader.array(a)._data
-                                a_max = np.max(d, axis=axis, keepdims=True)
-                                lse = a_max + np.log(np.sum(np.exp(d - a_max), axis=axis, keepdims=keepdims))
-                                if not keepdims: lse = np.squeeze(lse, axis=axis)
-                                return loader.array(lse)
-                            return _lse
-                        if name == "allclose": return lambda a, b, **k: loader.array(np.allclose(loader.array(a)._data, loader.array(b)._data, **k), dtype="bool_")
-                        if name in ("concatenate", "stack"): return lambda arrays, axis=0: loader.array(getattr(np, name)([loader.array(a)._data for a in arrays], axis=axis))
-                        if name == "split": return lambda a, i, axis=0: [loader.array(x) for x in np.split(loader.array(a)._data, i, axis=axis)]
-                        if name in ("zeros", "ones"):
-                            return lambda shape, dtype=None, **k: loader.array(getattr(np, name)(shape, dtype=_map_dtype(dtype) or "float32"), dtype=dtype)
-                        if name == "full":
-                            return lambda shape, fill_value, dtype=None, **k: loader.array(np.full(shape, fill_value, dtype=_map_dtype(dtype) or "float32"), dtype=dtype)
-                        if name == "arange":
-                            return lambda *a, dtype=None, **k: loader.array(np.arange(*a, dtype=_map_dtype(dtype) or "float32"), dtype=dtype)
-                        if name in ("reshape", "transpose", "expand_dims", "squeeze", "broadcast_to", "argmax", "argmin", "zeros_like", "ones_like", "argsort"):
-                            return lambda a, *args, **kwargs: loader.array(getattr(np, name)(loader.array(a)._data, *args, **kwargs))
-                        if name == "matmul": return lambda a, b: loader.array(loader.array(a)._data @ loader.array(b)._data)
-                        if name in ("mean", "max", "min", "sum"): return lambda a, axis=None, keepdims=False: loader.array(getattr(np, name)(loader.array(a)._data, axis=axis, keepdims=keepdims))
-                        if name == "take": return lambda a, i, axis=None: loader.array(np.take(loader.array(a)._data, loader.array(i)._data.astype(int), axis=axis))
-                        if name == "einsum": return lambda sub, *operands: loader.array(np.einsum(sub, *[loader.array(o)._data for o in operands]))
-                        if name == "clip": return lambda a, a_min, a_max: loader.array(np.clip(loader.array(a)._data, a_min, a_max))
-                        if name in ("exp", "log", "abs", "sqrt", "round", "floor", "ceil", "sign", "cos", "sin", "tan", "tanh", "sigmoid"): return lambda a: loader.array(getattr(np, name)(loader.array(a)._data))
-                        if name == "cumsum":
-                            return lambda a, axis=None, **k: loader.array(np.cumsum(loader.array(a)._data, axis=axis))
-                        if name == "pad":
-                            return lambda a, pad_width, mode="constant", **k: loader.array(np.pad(loader.array(a)._data, pad_width, mode=mode, **{kk: vv for kk, vv in k.items() if kk == "constant_values"}))
-                        if name == "copy": return lambda a, **k: loader.array(loader.array(a)._data.copy())
+                        if name in ("random", "linalg", "distributed", "fast"):
+                            return loader.create_module(
+                                importlib.machinery.ModuleSpec(
+                                    f"mlx.core.{name}", loader
+                                )
+                            )
                         if name == "stream":
-                            import contextlib
-                            @contextlib.contextmanager
-                            def _stream_cm(*a, **k): yield
-                            return _stream_cm
-                        if name in ("maximum", "minimum", "where"): return lambda *a: loader.array(getattr(np, name)(*[loader.array(x)._data if hasattr(x, "_data") else x for x in a]))
-                        if name == "contiguous": return lambda a, **k: a
-                        if name in ("stop_gradient", "eval"): return lambda *a, **k: a[0] if a else None
-                        if name == "power": return lambda a, b: loader.array(np.power(loader.array(a)._data, loader.array(b)._data if hasattr(b, "_data") else b))
-                        if name == "from_fp8": return lambda a, dtype=None, **k: loader.array(loader.array(a)._data.astype(_map_dtype(dtype) or "float32"), dtype=dtype)
-                        if name in ("clear_cache", "new_thread_local_stream"): return lambda *a, **k: None
-                        if name == "default_device": return lambda *a, **k: "gpu"
-                        if name == "hadamard_transform":
-                            return lambda x, scale=1.0, **k: loader.array(loader.array(x)._data * scale)
+                            return lambda *a, **k: contextlib.nullcontext()
+                        if name == "contiguous":
+                            return lambda a, **k: a
+                        if name == "compile":
+                            return lambda f, *a, **k: f
+                        if name == "get_active_memory":
+                            return lambda: 0
+                        if name == "get_cache_memory":
+                            return lambda: 0
+                        if name == "softmax":
+                            return lambda x, axis=-1: loader.array(
+                                np.exp(loader.array(x)._data - np.max(loader.array(x)._data, axis=axis, keepdims=True))
+                                / np.sum(np.exp(loader.array(x)._data - np.max(loader.array(x)._data, axis=axis, keepdims=True)), axis=axis, keepdims=True)
+                            )
+                        if name == "logsumexp":
+                            return lambda a, axis=None, keepdims=False: loader.array(
+                                np.log(np.sum(np.exp(loader.array(a)._data), axis=axis, keepdims=keepdims))
+                            )
+                        if name == "matmul":
+                            return lambda a, b: loader.array(
+                                loader.array(a)._data @ loader.array(b)._data
+                            )
+                        if name == "power":
+                            return lambda a, b: loader.array(
+                                np.power(
+                                    loader.array(a)._data,
+                                    loader.array(b)._data if hasattr(b, "_data") else b,
+                                )
+                            )
+                        if name == "argmax":
+                            return lambda a, axis=None: loader.array(np.argmax(loader.array(a)._data, axis=axis))
+                        if name == "moveaxis":
+                            return lambda a, src, dst: loader.array(np.moveaxis(loader.array(a)._data, src, dst))
+                        if name == "unflatten":
+                            return lambda a, axis, shape: loader.array(np.reshape(loader.array(a)._data, loader.array(a)._data.shape[:axis] + tuple(shape) + loader.array(a)._data.shape[axis+1:]))
+                        if name == "put_along_axis":
+                            return lambda a, indices, values, axis=-1: loader.array((lambda arr: (np.put_along_axis(arr, loader.array(indices)._data.astype(int), loader.array(values)._data if hasattr(values, "_data") or isinstance(values, (list, tuple, np.ndarray)) else values, axis=axis), arr)[1])(loader.array(a)._data.copy()))
                         if name == "issubdtype":
-                            _float_dtypes = frozenset({"float32", "float16", "bfloat16", "float64"})
-                            _int_dtypes = frozenset({"int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64"})
-                            def _issubdtype(dt1, dt2, _fd=_float_dtypes, _id=_int_dtypes):
-                                s1 = dt1 if isinstance(dt1, str) else getattr(dt1, "__name__", str(dt1))
-                                s2 = dt2 if isinstance(dt2, str) else getattr(dt2, "__name__", str(dt2))
-                                if s2 in ("floating", "float64"): return s1 in _fd
-                                if s2 in ("integer", "signedinteger", "unsignedinteger"): return s1 in _id
-                                return s1 == s2
-                            return _issubdtype
+                            return lambda dt, kind: bool(np.issubdtype(np.dtype(_map_dtype(dt) or "float32"), np.floating if kind in ("floating", getattr(np, "floating", object())) else np.dtype(_map_dtype(kind) or "float32")))
+                        if name == "from_fp8":
+                            return lambda x, dtype=None, **k: loader.array(loader.array(x)._data, dtype=dtype)
+                        if name == "dequantize":
+                            return lambda qw, scales=None, biases=None, **k: loader.array(loader.array(qw)._data.astype(np.float32))
+                        if name == "quantize":
+                            return lambda w, group_size=64, bits=4, mode="affine", **k: (loader.array(np.round(loader.array(w)._data).astype(np.uint32), dtype="uint32"), loader.array(np.ones((loader.array(w).shape[0], max(1, loader.array(w).shape[1] // max(group_size, 1))), dtype=np.float32)), loader.array(np.zeros((loader.array(w).shape[0], max(1, loader.array(w).shape[1] // max(group_size, 1))), dtype=np.float32)))
+                        if name in ("mean", "max", "min", "sum", "all", "any"):
+                            return lambda a, axis=None, keepdims=False: loader.array(
+                                getattr(np, name)(
+                                    loader.array(a)._data,
+                                    axis=axis,
+                                    keepdims=keepdims,
+                                )
+                            )
+                        if name == "concatenate":
+                            return lambda arrays, axis=0: loader.array(
+                                np.concatenate(
+                                    [loader.array(a)._data for a in arrays], axis=axis
+                                )
+                            )
+                        if name == "stack":
+                            return lambda arrays, axis=0: loader.array(
+                                np.stack([loader.array(a)._data for a in arrays], axis=axis)
+                            )
+                        if name == "split":
+                            return lambda a, indices_or_sections, axis=0: [
+                                loader.array(x)
+                                for x in np.split(
+                                    loader.array(a)._data,
+                                    indices_or_sections,
+                                    axis=axis,
+                                )
+                            ]
+                        if name == "repeat":
+                            return lambda a, repeats, axis=None: loader.array(
+                                np.repeat(loader.array(a)._data, repeats, axis=axis)
+                            )
+                        if name in ("zeros", "ones"):
+                            return lambda s, dtype=None, **k: loader.array(
+                                getattr(np, name)(s), dtype=dtype
+                            )
+                        if name in ("zeros_like", "ones_like"):
+                            return lambda a, dtype=None: loader.array(
+                                getattr(np, name)(loader.array(a)._data),
+                                dtype=dtype or getattr(a, "dtype", None),
+                            )
+                        if name == "full":
+                            return lambda s, v, dtype=None, **k: loader.array(
+                                np.full(s, v), dtype=dtype
+                            )
+                        if name == "arange":
+                            return lambda *a, dtype=None, **k: loader.array(
+                                np.arange(*a), dtype=dtype
+                            )
+                        if name in (
+                            "reshape",
+                            "transpose",
+                            "expand_dims",
+                            "squeeze",
+                            "broadcast_to",
+                            "argsort",
+                            "argpartition",
+                            "cumsum",
+                            "cos",
+                            "sin",
+                        ):
+                            np_name = {
+                                "expand_dims": "expand_dims",
+                                "cumsum": "cumsum",
+                                "cos": "cos",
+                                "sin": "sin",
+                            }.get(name, name)
+                            return lambda a, *args, **kwargs: loader.array(
+                                getattr(np, np_name)(
+                                    loader.array(a)._data, *args, **kwargs
+                                )
+                            )
+                        if name in ("equal", "array_equal", "allclose"):
+                            return lambda a, b, **k: loader.array(
+                                np.array_equal(
+                                    loader.array(a)._data, loader.array(b)._data
+                                )
+                                if name != "allclose"
+                                else np.allclose(
+                                    loader.array(a)._data,
+                                    loader.array(b)._data,
+                                    **k,
+                                ),
+                                dtype="bool_",
+                            )
+                        if name == "maximum":
+                            return lambda a, b: loader.array(
+                                np.maximum(
+                                    loader.array(a)._data,
+                                    loader.array(b)._data if hasattr(b, "_data") or isinstance(b, (list, tuple, np.ndarray)) else b,
+                                )
+                            )
+                        if name == "where":
+                            def _where(cond, *rest):
+                                cond_arr = loader.array(cond)._data
+                                if not rest:
+                                    return np.where(cond_arr)
+                                if len(rest) != 2:
+                                    raise TypeError("where() expects condition[, x, y]")
+                                x, y = rest
+                                x_arr = loader.array(x)._data if hasattr(x, "_data") or isinstance(x, (list, tuple, np.ndarray)) else x
+                                y_arr = loader.array(y)._data if hasattr(y, "_data") or isinstance(y, (list, tuple, np.ndarray)) else y
+                                return loader.array(np.where(cond_arr, x_arr, y_arr))
+                            return _where
+                        if name in ("exp", "log", "abs", "sqrt", "pad"):
+                            return lambda a, *args, **kwargs: loader.array(
+                                getattr(np, name)(loader.array(a)._data, *args, **kwargs)
+                            )
+                        if name == "load":
+                            def _load(path, return_metadata=False, rm=False):
+                                import struct
 
-                    _captured_name = name
-                    def _default_func(*args, _n=_captured_name, **kwargs):
-                        raise NotImplementedError(f"mlx.{_n}() is not implemented in the MLX mock. Add it to omlx/utils/mlx_mock.py.")
-                    self.__mock_items[name] = _default_func
+                                with open(path, "rb") as f:
+                                    header_len = struct.unpack("<Q", f.read(8))[0]
+                                    header = json.loads(f.read(header_len).decode("utf-8"))
+                                    base = 8 + header_len
+                                    tensors = {}
+                                    metadata = dict(header.get("__metadata__") or {})
+                                    dtype_map = {
+                                        "F16": np.float16,
+                                        "F32": np.float32,
+                                        "BF16": np.uint16,
+                                        "I8": np.int8,
+                                        "I16": np.int16,
+                                        "I32": np.int32,
+                                        "I64": np.int64,
+                                        "U8": np.uint8,
+                                        "U16": np.uint16,
+                                        "U32": np.uint32,
+                                        "U64": np.uint64,
+                                        "BOOL": np.bool_,
+                                    }
+                                    for key, info in header.items():
+                                        if key == "__metadata__":
+                                            continue
+                                        start, end = info["data_offsets"]
+                                        f.seek(base + start)
+                                        buf = f.read(end - start)
+                                        arr = np.frombuffer(buf, dtype=dtype_map[info["dtype"]]).reshape(info["shape"])
+                                        tensors[key] = loader.array(arr).view("bfloat16") if info["dtype"] in ("BF16", "U16") else loader.array(arr)
+                                if rm or return_metadata:
+                                    return tensors, metadata
+                                return tensors
+
+                            return _load
+                        if name == "save_safetensors":
+                            def _save_safetensors(path, tensors, metadata=None):
+                                from safetensors.numpy import save_file
+
+                                save_file(
+                                    {
+                                        k: (
+                                            np.array(v.view("uint16")._data)
+                                            if hasattr(v, "dtype") and getattr(v, "dtype", None) == "bfloat16"
+                                            else np.array(v._data if hasattr(v, "_data") else v)
+                                        )
+                                        for k, v in tensors.items()
+                                    },
+                                    str(path),
+                                    metadata=metadata,
+                                )
+                                return None
+
+                            return _save_safetensors
+                        if name in ("eval", "async_eval", "synchronize"):
+                            return lambda *a, **k: None
+                        if name == "default_device":
+                            return lambda: type("Device", (), {})()
+                        if name == "new_thread_local_stream":
+                            return lambda d: type("Stream", (), {})()
+                        if name == "clear_cache":
+                            return lambda: None
+                        if name == "get_message_json":
+                            return lambda *a, **k: ""
+                        if name == "take_along_axis":
+                            return lambda a, i, axis=None: loader.array(
+                                np.take_along_axis(
+                                    loader.array(a)._data,
+                                    loader.array(i)._data.astype(int),
+                                    axis=axis,
+                                )
+                            )
+                        if name == "tree_flatten":
+                            return lambda a, **k: list(a.items()) if hasattr(a, "items") else list(a)
+                        if name == "stop_gradient":
+                            return lambda a: a
+                        if name == "load_tool_module":
+                            return lambda *a, **k: _make_tool_module()
+
+                    if self.__name__ in ("mlx_lm.models", "mlx_vlm.models") and name and name[0].islower():
+                        mod = loader.create_module(
+                            importlib.machinery.ModuleSpec(f"{self.__name__}.{name}", loader)
+                        )
+                        self.__mock_items[name] = mod
+                        return mod
+
+                    if self.__name__ in ("dflash_mlx.engine", "dflash_mlx.runtime") and name and name[0].islower():
+                        mod = loader.create_module(
+                            importlib.machinery.ModuleSpec(f"{self.__name__}.{name}", loader)
+                        )
+                        self.__mock_items[name] = mod
+                        return mod
+
+                    if name and name[0].isupper():
+                        class MockClass:
+                            def __init__(self, *a, **k):
+                                self.keys = None
+                                self.values = None
+                                self.offset = 0
+                                for key, val in k.items():
+                                    setattr(self, key, val)
+
+                            def __call__(self, *a, **k):
+                                return loader.array(np.zeros((1, 1)))
+
+                            @classmethod
+                            def from_dict(cls, d):
+                                return cls(**d)
+
+                            @classmethod
+                            def from_cache(cls, *a, **k):
+                                return cls()
+
+                            def prompt(self, *a, **k):
+                                return None
+
+                            def _step(self, *a, **k):
+                                pass
+
+                            def next(self, *a, **k):
+                                return None
+
+                            def filter(self, *a, **k):
+                                pass
+
+                            def extend(self, *a, **k):
+                                pass
+
+                            def update_and_fetch(self, k, v):
+                                self.keys, self.values = k, v
+                                self.offset = getattr(k, "shape", (0, 0, 0, 0))[2] if hasattr(k, "shape") and len(k.shape) > 2 else 0
+                                return k, v
+
+                            @property
+                            def state(self):
+                                return (self.keys, self.values)
+
+                            @state.setter
+                            def state(self, s):
+                                if s and len(s) >= 2:
+                                    self.keys, self.values = s[:2]
+
+                            def dequantize(self, *a, **k):
+                                return (
+                                    loader.array(np.zeros((1, 1))),
+                                    loader.array(np.zeros((1, 1))),
+                                )
+
+                        MockClass.__name__ = name
+                        MockClass.__module__ = self.__name__
+                        self.__mock_items[name] = MockClass
+                        return MockClass
+
+                    if self.__name__.startswith(("mlx", "dflash_mlx", "openai_harmony")):
+                        _captured_name = name
+
+                        def _default_func(*args, _n=_captured_name, **kwargs):
+                            if _n == "is_applied":
+                                return False
+                            if _n == "is_mtp_active":
+                                return False
+                            if _n == "_infer_tool_parser":
+                                return "json"
+                            if _n == "extract_text_from_content":
+                                return _extract_text_from_content(args[0] if args else None)
+                            if _n == "get_message_json":
+                                return _get_message_json(*args, **kwargs)
+                            if _n == "load_tool_module":
+                                return _make_tool_module()
+                            if _n == "tree_flatten":
+                                return list(args[0].items()) if args and hasattr(args[0], "items") else list(args[0])
+                            if _n == "load_config":
+                                return {"model_type": "test"}
+                            if _n == "load_chat_template":
+                                return None
+                            if _n == "make_logits_processors":
+                                return []
+                            if _n == "runtime_config_from_defaults":
+                                from types import SimpleNamespace
+                                defaults = {"draft_window_size": 1024, "draft_sink_size": 64, "verify_mode": "adaptive"}
+                                defaults.update({k: v for k, v in kwargs.items() if v is not None})
+                                return SimpleNamespace(**defaults)
+                            raise NotImplementedError(
+                                f"mlx.{_n}() is not implemented in the MLX mock. Add it to omlx/utils/mlx_mock.py."
+                            )
+
+                        self.__mock_items[name] = _default_func
+                    else:
+                        self.__mock_items[name] = MockModule(f"{self.__name__}.{name}")
                 return self.__mock_items[name]
 
-        if spec.name == "mlx.utils":
-            m = MockModule(spec.name)
-            def _tree_flatten(tree):
-                if isinstance(tree, dict): return list(tree.items())
-                if isinstance(tree, (list, tuple)): return [(str(i), v) for i, v in enumerate(tree)]
-                return [("", tree)]
-            m.tree_flatten = _tree_flatten
-            sys.modules[spec.name] = m; return m
-        if spec.name == "mlx.core.random":
-            m = MockModule(spec.name)
-            m.state = loader.array([0, 0], dtype="uint32")
-            def _advance():
-                try: m.state._data[0] += 1
-                except Exception: pass
-            m.uniform = lambda l=0, h=1, s=None, **k: (_advance() or loader.array(np.random.uniform(l, h, size=s if s is not None else k.get("shape", ()))))
-            m.normal = lambda s=None, **k: (_advance() or loader.array(np.random.normal(size=s if s is not None else k.get("shape", ()))))
-            m.categorical = lambda l, n=1, a=-1, **k: (_advance() or loader.array(np.random.randint(0, loader.array(l).shape[a] if loader.array(l).ndim > abs(a) else 1, size=loader.array(l).shape[:a] if n == 1 else (n,)), dtype="int32"))
-            m.seed = lambda s: None; sys.modules[spec.name] = m; return m
-        if spec.name == "mlx.core.linalg":
-            m = MockModule(spec.name)
-            m.norm = lambda a, ord=None, axis=None, keepdims=False: loader.array(np.linalg.norm(loader.array(a)._data, ord=ord, axis=axis, keepdims=keepdims))
-            sys.modules[spec.name] = m; return m
-        if spec.name == "mlx.core.distributed":
-            m = MockModule(spec.name)
-            m.Group = type("Group", (), {})
-            m.is_available = lambda: False
-            m.init = lambda: None
-            sys.modules[spec.name] = m; return m
+        def _extract_text_from_content(content):
+            if isinstance(content, list):
+                parts = []
+                for item in content:
+                    if isinstance(item, str):
+                        parts.append(item)
+                    elif isinstance(item, dict):
+                        if item.get("type") in ("text", "input_text"):
+                            parts.append(item.get("text", ""))
+                return " ".join(p for p in parts if p)
+            if content is None:
+                return ""
+            return content
+
+        def _get_message_json(
+            model_type,
+            content,
+            role,
+            skip_image_token=True,
+            skip_audio_token=True,
+            num_images=0,
+            num_audios=0,
+            **kwargs,
+        ):
+            text = _extract_text_from_content(content)
+            if role == "user" and not skip_image_token and num_images > 0:
+                parts = []
+                if text:
+                    parts.append({"type": "text", "text": text})
+                parts.extend({"type": "image"} for _ in range(num_images))
+                return {"role": role, "content": parts}
+            return {"role": role, "content": text if isinstance(text, str) else str(text)}
+
+        def _infer_tool_parser(template):
+            if not template:
+                return None
+            if "<tool_call>" in template and "<function=" in template:
+                return "qwen3_coder"
+            if "<tool_call>" in template or "tool_call.name" in template:
+                return "json_tools"
+            return None
+
+        def _make_tool_module():
+            m = MockModule("tool_module")
+            m.tool_call_start = "<tool_call>"
+            m.tool_call_end = "</tool_call>"
+            m.parse_tool_call = lambda *a, **k: {}
+            return m
+
         if spec.name == "mlx.nn":
             m = MockModule(spec.name)
+
             class Module:
-                def __init__(self, *args, **kwargs): self._parameters = {}
+                def __init__(self, *args, **kwargs):
+                    super().__setattr__("_parameters", {})
+                    super().__setattr__("_modules", {})
+                    super().__setattr__("_module_lists", {})
+
                 def __setattr__(self, name, value):
                     super().__setattr__(name, value)
-                    if hasattr(value, "parameters"):
-                        for k, v in value.parameters().items(): self._parameters[f"{name}.{k}" if k else name] = v
-                    elif isinstance(value, loader.array): self._parameters[name] = value
+                    if isinstance(value, loader.array):
+                        self._parameters[name] = value
+                    elif hasattr(value, "parameters"):
+                        self._modules[name] = value
+                    elif isinstance(value, (list, tuple)) and any(hasattr(v, "parameters") for v in value):
+                        self._module_lists[name] = list(value)
+
                 def __call__(self, *args, **kwargs):
-                    if args and hasattr(args[0], "shape"): return args[0]
-                    return loader.array(np.zeros((1, 1)))
-                def load_weights(self, *args, **kwargs): pass
-                def parameters(self): return self._parameters
-                def update(self, *args, **kwargs): pass
-                def __getattr__(self, name): return lambda *a, **k: loader.array(np.zeros((1, 1)))
+                    return args[0] if args else loader.array(np.zeros((1, 1)))
+
+                def parameters(self, prefix=""):
+                    params = {f"{prefix}{name}": value for name, value in self._parameters.items()}
+                    for name, module in self._modules.items():
+                        params.update(module.parameters(prefix=f"{prefix}{name}."))
+                    for name, modules in self._module_lists.items():
+                        for idx, module in enumerate(modules):
+                            params.update(module.parameters(prefix=f"{prefix}{name}.{idx}."))
+                    return params
+
+                def load_weights(self, weights, strict=True):
+                    for name, value in weights:
+                        target = self
+                        parts = name.split(".")
+                        for part in parts[:-1]:
+                            if part.isdigit():
+                                target = target[int(part)]
+                            else:
+                                target = getattr(target, part)
+                        setattr(target, parts[-1], loader.array(value))
+
+            class Linear(Module):
+                def __init__(self, in_features, out_features, bias=True, *args, **kwargs):
+                    super().__init__()
+                    self.weight = loader.array(np.zeros((out_features, in_features), dtype=np.float32))
+                    if bias:
+                        self.bias = loader.array(np.zeros((out_features,), dtype=np.float32))
+
+            class Embedding(Module):
+                def __init__(self, num_embeddings, embedding_dim, *args, **kwargs):
+                    super().__init__()
+                    self.weight = loader.array(np.zeros((num_embeddings, embedding_dim), dtype=np.float32))
+
+            class LayerNorm(Module):
+                def __init__(self, normalized_shape, eps=1e-5, *args, **kwargs):
+                    super().__init__()
+                    size = normalized_shape if isinstance(normalized_shape, int) else normalized_shape[-1]
+                    self.weight = loader.array(np.ones((size,), dtype=np.float32))
+                    self.bias = loader.array(np.zeros((size,), dtype=np.float32))
+                    self.eps = eps
+
+            class RMSNorm(Module):
+                def __init__(self, normalized_shape, eps=1e-5, *args, **kwargs):
+                    super().__init__()
+                    size = normalized_shape if isinstance(normalized_shape, int) else normalized_shape[-1]
+                    self.weight = loader.array(np.ones((size,), dtype=np.float32))
+                    self.eps = eps
+
+            class Dropout(Module):
+                pass
+
+            class Tanh(Module):
+                pass
+
             m.Module = Module
-            for name in ("Linear", "LayerNorm", "RMSNorm", "Embedding", "Dropout", "SiLU", "GELU", "ReLU", "Tanh", "Softmax"):
-                if name == "Linear": m.Linear = type("Linear", (Module,), {"__init__": lambda s, i, o, **k: super(type(s), s).__init__(**k) or setattr(s, "weight", loader.array(np.zeros((o, i))))})
-                elif name == "Embedding": m.Embedding = type("Embedding", (Module,), {"__init__": lambda s, n, d, **k: super(type(s), s).__init__(**k) or setattr(s, "weight", loader.array(np.zeros((n, d))))})
-                elif name in ("LayerNorm", "RMSNorm"): setattr(m, name, type(name, (Module,), {"__init__": lambda s, d, **k: super(type(s), s).__init__(**k) or setattr(s, "weight", loader.array(np.zeros((d,))))}))
-                else: setattr(m, name, Module)
-            sys.modules[spec.name] = m; return m
+            m.Linear = Linear
+            m.Embedding = Embedding
+            m.LayerNorm = LayerNorm
+            m.RMSNorm = RMSNorm
+            m.Dropout = Dropout
+            m.Tanh = Tanh
+            sys.modules[spec.name] = m
+            return m
+
+        if spec.name.startswith("mlx_lm.models.cache"):
+            m = MockModule(spec.name)
+
+            class _BaseCache:
+                def __init__(self, *a, **k):
+                    pass
+
+                @property
+                def meta_state(self):
+                    return ""
+
+                @meta_state.setter
+                def meta_state(self, value):
+                    pass
+
+            class KVCache(_BaseCache):
+                def __init__(self, *args, **kwargs):
+                    self.keys = self.values = loader.array(np.zeros((1, 32, 0, 128)))
+                    self.bits = 4.0
+                    self.max_size = kwargs.get("max_size", 0)
+                    self.keep = kwargs.get("keep", 0)
+                    self.offset = kwargs.get("offset", 0)
+                    self._idx = kwargs.get("idx", 0)
+
+                def update_and_fetch(self, k, v):
+                    self.keys, self.values = k, v
+                    self.offset = k.shape[2] if hasattr(k, "shape") and len(k.shape) > 2 else self.offset
+                    self._idx = self.keys.shape[2] if self.keys is not None else 0
+                    return k, v
+
+                @property
+                def state(self):
+                    return (self.keys, self.values)
+
+                @state.setter
+                def state(self, s):
+                    self.keys, self.values = s[:2]
+
+                def size(self):
+                    return self.keys.shape[2] if self.keys is not None else 0
+
+                @classmethod
+                def from_state(cls, state, meta_state=""):
+                    inst = cls()
+                    inst.state = state
+                    if isinstance(meta_state, (list, tuple)) and meta_state:
+                        try:
+                            inst.offset = int(meta_state[0])
+                        except Exception:
+                            pass
+                    return inst
+
+            class RotatingKVCache(KVCache):
+                def size(self):
+                    if self.keys is None:
+                        return 0
+                    return min(int(self.offset), int(self.max_size or self.keys.shape[2]))
+
+                def empty(self):
+                    return self.keys is None
+
+                def _temporal_order(self, value):
+                    return value
+
+                @property
+                def meta_state(self):
+                    return (self.keep, self.max_size, self.offset, self._idx)
+
+                @meta_state.setter
+                def meta_state(self, value):
+                    if value and len(value) >= 4:
+                        self.keep, self.max_size, self.offset, self._idx = map(int, value[:4])
+
+            class BatchRotatingKVCache(RotatingKVCache):
+                def __init__(self, max_size, left_padding):
+                    super().__init__(max_size=max_size, keep=0)
+                    self.left_padding = loader.array(left_padding)
+                    self.offset = loader.array([0 for _ in left_padding]) if len(left_padding) > 1 else 0
+
+                @classmethod
+                def merge(cls, caches):
+                    if not caches:
+                        return cls(0, [])
+                    non_empty = next((c for c in caches if getattr(c, "keys", None) is not None), None)
+                    max_size = max(int(getattr(c, "max_size", 0)) for c in caches)
+                    lengths = [c.size() if hasattr(c, "size") else 0 for c in caches]
+                    for c, length in zip(caches, lengths):
+                        if getattr(c, "keys", None) is not None and length > c.keys.shape[2]:
+                            raise ValueError("oversized rotating cache buffer")
+                    max_len = max(lengths) if lengths else 0
+                    batch = cls(max_size, [max_len - l for l in lengths])
+                    if non_empty is None:
+                        batch.keys = batch.values = None
+                        return batch
+                    B, H, D = len(caches), non_empty.keys.shape[1], non_empty.keys.shape[3]
+                    dtype = non_empty.keys._data.dtype
+                    batch.keys = loader.array(np.zeros((B, H, max_len, D), dtype=dtype))
+                    batch.values = loader.array(np.zeros((B, H, max_len, D), dtype=dtype))
+                    offsets = []
+                    for i, (c, length) in enumerate(zip(caches, lengths)):
+                        pad = max_len - length
+                        offsets.append(int(getattr(c, "offset", length) if not hasattr(getattr(c, "offset", None), "tolist") else loader.array(c.offset[i]).item() if hasattr(c.offset, "shape") else length))
+                        if length > 0 and getattr(c, "keys", None) is not None:
+                            ordered_k = c._temporal_order(c.keys) if hasattr(c, "_temporal_order") else c.keys
+                            ordered_v = c._temporal_order(c.values) if hasattr(c, "_temporal_order") else c.values
+                            batch.keys._data[i, :, pad:pad+length, :] = loader.array(ordered_k)._data[..., -length:, :]
+                            batch.values._data[i, :, pad:pad+length, :] = loader.array(ordered_v)._data[..., -length:, :]
+                    batch.left_padding = loader.array([max_len - l for l in lengths])
+                    batch.offset = loader.array(offsets) if len(offsets) > 1 else offsets[0]
+                    return batch
+
+            class CacheList(list):
+                def __init__(self, *args):
+                    vals = args[0] if len(args) == 1 and isinstance(args[0], (list, tuple)) else args
+                    super().__init__(vals)
+                    self.caches = tuple(self)
+
+                @classmethod
+                def from_state(cls, sub_states, meta):
+                    class_names, sub_meta_states = meta
+                    cache_mod = sys.modules.get("mlx_lm.models.cache")
+                    subs = []
+                    for st, name, sub_meta in zip(sub_states, class_names, sub_meta_states):
+                        cache_cls = getattr(cache_mod, name)
+                        if name in ("KVCache", "RotatingKVCache"):
+                            subs.append(cache_cls.from_state(st, sub_meta))
+                        elif name == "ArraysCache":
+                            c = cache_cls()
+                            c.cache = list(st)
+                            subs.append(c)
+                        else:
+                            c = cache_cls()
+                            if hasattr(c, "state"):
+                                c.state = tuple(st) if isinstance(st, (list, tuple)) else st
+                            if sub_meta not in ("", None, ()): 
+                                try:
+                                    c.meta_state = sub_meta
+                                except Exception:
+                                    pass
+                            subs.append(c)
+                    return cls(*subs)
+
+            class ArraysCache(KVCache):
+                def __init__(self, *a, **k):
+                    size = int(k.pop("size", 0) or 0)
+                    super().__init__(*a, **k)
+                    self.cache = [None] * size
+
+                @property
+                def state(self):
+                    return tuple(self.cache)
+
+                @state.setter
+                def state(self, s):
+                    self.cache = list(s) if s is not None else []
+
+            class PoolingCache(_BaseCache):
+                def __init__(self, ratio=1, *a, **k):
+                    self.ratio = ratio
+                    self.buf_kv = None
+                    self.buf_gate = None
+                    self.remainder = 0
+                    self.pooled = None
+
+                @property
+                def offset(self):
+                    return 0 if self.pooled is None else self.pooled.shape[1]
+
+                @property
+                def state(self):
+                    return (self.buf_kv, self.buf_gate, self.pooled)
+
+                @state.setter
+                def state(self, s):
+                    if s is None:
+                        return
+                    vals = list(s)
+                    while len(vals) < 3:
+                        vals.append(None)
+                    self.buf_kv, self.buf_gate, self.pooled = vals[:3]
+
+                def empty(self):
+                    return self.offset == 0 and self.remainder == 0
+
+                def size(self):
+                    return self.offset
+
+                @property
+                def meta_state(self):
+                    return self.ratio
+
+                @meta_state.setter
+                def meta_state(self, v):
+                    self.ratio = int(v) if v not in (None, "") else 1
+
+            class BatchPoolingCache(PoolingCache):
+                def __init__(self, ratio=1, left_padding=None):
+                    super().__init__(ratio)
+                    left_padding = left_padding or [0]
+                    self.left_padding = loader.array(left_padding)
+                    self.remainder = [0] * len(left_padding)
+                    self._pool_lengths = [0] * len(left_padding)
+                    self._processed = [0] * len(left_padding)
+
+                @property
+                def meta_state(self):
+                    return (self.ratio, self.remainder, self._pool_lengths, self._processed)
+
+                @meta_state.setter
+                def meta_state(self, v):
+                    if v and len(v) >= 4:
+                        self.ratio, self.remainder, self._pool_lengths, self._processed = v
+
+            for cls in (_BaseCache, KVCache, RotatingKVCache, BatchRotatingKVCache, CacheList, ArraysCache, PoolingCache, BatchPoolingCache):
+                cls.__module__ = spec.name
+
+            m._BaseCache = _BaseCache
+            m.KVCache = KVCache
+            m.RotatingKVCache = RotatingKVCache
+            m.BatchRotatingKVCache = BatchRotatingKVCache
+            m.ArraysCache = ArraysCache
+            m.CacheList = CacheList
+            m.PoolingCache = PoolingCache
+            m.BatchPoolingCache = BatchPoolingCache
+            m.make_prompt_cache = lambda *a, **k: []
+            m.create_attention_mask = lambda *a, **k: loader.array(np.zeros((1, 1, 1, 1)))
+            m.create_causal_mask = lambda *a, **k: loader.array(np.zeros((1, 1, 1, 1)))
+            m.dynamic_roll = lambda a, shift, axis=-2: loader.array(
+                np.roll(loader.array(a)._data, shift, axis=axis)
+            )
+            sys.modules[spec.name] = m
+            return m
+
+        if spec.name in ("mlx_lm.models.base", "mlx_vlm.models.base"):
+            m = MockModule(spec.name)
+            m.scaled_dot_product_attention = lambda queries, *a, **k: loader.array(
+                np.zeros(loader.array(queries).shape, dtype=loader.array(queries)._data.dtype)
+            )
+            sys.modules[spec.name] = m
+            return m
+
+        if spec.name == "mlx_lm.models.qwen3_5":
+            m = MockModule(spec.name)
+            TextModel_cls = type(
+                "TextModel",
+                (),
+                {
+                    "__init__": lambda self, *a, **k: None,
+                    "__call__": lambda self, *a, **k: loader.array(np.zeros((1, 1))),
+                    "norm": None,
+                },
+            )
+            m.TextModel = TextModel_cls
+            m.TextModelArgs = type(
+                "TextModelArgs",
+                (),
+                {
+                    "from_dict": classmethod(lambda cls, d: cls()),
+                    "__init__": lambda self, *a, **k: None,
+                },
+            )
+            m.Qwen3_5TextModel = type(
+                "Qwen3_5TextModel",
+                (),
+                {
+                    "__init__": lambda self, *a, **k: None,
+                    "__call__": lambda self, *a, **k: loader.array(np.zeros((1, 1))),
+                },
+            )
+            sys.modules[spec.name] = m
+            return m
+
+        if spec.name == "mlx_lm.utils":
+            m = MockModule(spec.name)
+            def _get_classes(config, *a, **k):
+                model_type = config.get("model_type", "mock") if isinstance(config, dict) else getattr(config, "model_type", "mock")
+                mod_name = f"mlx_lm.models.{model_type}"
+                mod = sys.modules.get(mod_name)
+                if mod is None:
+                    mod = loader.create_module(importlib.machinery.ModuleSpec(mod_name, loader))
+                model_cls = getattr(mod, "Model", None) or getattr(mod, "TextModel", None) or type("Model", (), {})
+                args_cls = getattr(mod, "ModelArgs", None) or getattr(mod, "TextModelArgs", None) or type("Args", (), {})
+                return model_cls, args_cls
+            m._get_classes = _get_classes
+            m.load_config = lambda *a, **k: {"model_type": "test"}
+            sys.modules[spec.name] = m
+            return m
+
+        if spec.name == "mlx_vlm.utils":
+            m = MockModule(spec.name)
+
+            def _load_config(path, **kwargs):
+                p = Path(path)
+                cfg = p / "config.json"
+                if cfg.exists():
+                    return json.loads(cfg.read_text())
+                return {"model_type": "test"}
+
+            m.load_config = _load_config
+            m.prepare_inputs = lambda *a, **k: {
+                "input_ids": loader.array([[1]]),
+                "pixel_values": None,
+            }
+            sys.modules[spec.name] = m
+            return m
+
+        if spec.name == "mlx_vlm.prompt_utils":
+            m = MockModule(spec.name)
+            m.extract_text_from_content = _extract_text_from_content
+            m.get_message_json = _get_message_json
+            m.apply_chat_template = lambda *a, **k: a[0] if a else []
+            sys.modules[spec.name] = m
+            return m
+
+        if spec.name == "mlx_vlm.tool_parsers":
+            m = MockModule(spec.name)
+            m._infer_tool_parser = _infer_tool_parser
+            m.load_tool_module = lambda *a, **k: _make_tool_module()
+            sys.modules[spec.name] = m
+            return m
+
+        if spec.name == "mlx_lm.generate":
+            m = MockModule(spec.name)
+
+            class GenerationBatch:
+                def __init__(self, *a, **k):
+                    self.uids = [0]
+
+                def prompt(self, *a, **k):
+                    return None
+
+                def _step(self, *a, **k):
+                    pass
+
+                def next(self, *a, **k):
+                    return None
+
+                def filter(self, *a, **k):
+                    pass
+
+                def extend(self, *a, **k):
+                    pass
+
+            class PromptProcessingBatch:
+                def __init__(self, *a, **k):
+                    self.uids = [0]
+
+                def prompt(self, *a, **k):
+                    return None
+
+                def _step(self, *a, **k):
+                    pass
+
+                def next(self, *a, **k):
+                    return None
+
+                def filter(self, *a, **k):
+                    pass
+
+                def extend(self, *a, **k):
+                    pass
+
+            class SequenceStateMachine:
+                def __init__(self, transitions=None, initial="normal"):
+                    self._initial = initial
+                    self.state = initial
+                    self._states = {}
+                    for state_name, rules in (transitions or {}).items():
+                        trie = {}
+                        for seq, value in rules:
+                            node = trie
+                            for tok in seq:
+                                node = node.setdefault(tok, {})
+                            node["__match__"] = value
+                        self._states[state_name] = [trie, None]
+
+                def reset(self):
+                    self.state = self._initial
+
+                def __call__(self, token_id):
+                    return self.state
+
+            m.GenerationBatch = GenerationBatch
+            m.PromptProcessingBatch = PromptProcessingBatch
+            m.SequenceStateMachine = SequenceStateMachine
+            m.BatchGenerator = type("BatchGenerator", (), {"__init__": lambda *a, **k: None})
+            if not hasattr(loader, "_generation_stream"):
+                loader._generation_stream = type("Stream", (), {})()
+            m.generation_stream = loader._generation_stream
+            sys.modules[spec.name] = m
+            return m
+
+        if spec.name == "mlx_vlm.turboquant":
+            m = MockModule(spec.name)
+
+            class TurboQuantMSEState:
+                def __init__(self, norms, indices):
+                    self.norms = norms
+                    self.indices = indices
+
+            class TurboQuantProdState:
+                def __init__(self, norms, mse_indices, residual_norms, qjl_signs):
+                    self.norms = norms
+                    self.mse_indices = mse_indices
+                    self.residual_norms = residual_norms
+                    self.qjl_signs = qjl_signs
+
+            class TurboQuantPolarState:
+                def __init__(self, radii, level_indices):
+                    self.radii = radii
+                    self.level_indices = level_indices
+
+            class TurboQuantPolarProdState:
+                def __init__(self, norms, polar_state, residual_norms, qjl_signs):
+                    self.norms = norms
+                    self.polar_state = polar_state
+                    self.residual_norms = residual_norms
+                    self.qjl_signs = qjl_signs
+
+            class TurboQuantSplitState:
+                def __init__(self, low, high):
+                    self.low = low
+                    self.high = high
+
+            class _QuantizedStateProxy:
+                def __init__(self, state):
+                    self._state = state
+
+            def _state_length(state):
+                if isinstance(state, TurboQuantMSEState):
+                    return state.norms.shape[2]
+                if isinstance(state, TurboQuantProdState):
+                    return state.norms.shape[2]
+                if isinstance(state, TurboQuantPolarState):
+                    return state.radii.shape[2]
+                if isinstance(state, TurboQuantPolarProdState):
+                    return state.norms.shape[2]
+                if isinstance(state, TurboQuantSplitState):
+                    return _state_length(state.low)
+                return 0
+
+            def _packed_width(state, bits):
+                dim = state.shape[-1]
+                return max(1, math.ceil(dim * bits / 32))
+
+            class _Codec:
+                def __init__(self, head_dim, bits, mode="mse", seed=0):
+                    self.head_dim = head_dim
+                    self.bits = bits
+                    self.mode = mode
+                    self.seed = seed
+
+                def quantize(self, arr):
+                    arr = loader.array(arr)
+                    packed = _packed_width(arr, max(int(math.ceil(self.bits)), 1))
+                    dummy = loader.array(np.zeros(arr.shape[:-1] + (packed,), dtype=np.uint32))
+                    if self.mode == "mse":
+                        return TurboQuantMSEState(arr, dummy)
+                    return TurboQuantProdState(arr, dummy, loader.array(np.zeros(arr.shape[:-1] + (1,))), loader.array(np.zeros(arr.shape[:-1] + (1,), dtype=np.uint32)))
+
+                def dequantize(self, state):
+                    if isinstance(state, TurboQuantMSEState):
+                        return state.norms
+                    if isinstance(state, TurboQuantProdState):
+                        return state.norms
+                    return loader.array(np.zeros((1, 1, 1, self.head_dim)))
+
+            def _build_codec(arr, bits, mode="mse", seed=0):
+                head_dim = loader.array(arr).shape[-1]
+                return _Codec(head_dim, bits, mode=mode, seed=seed)
+
+            def _slice_state(state, length):
+                return _slice_state_range(state, 0, length)
+
+            def _slice_state_range(state, start, end):
+                if isinstance(state, TurboQuantMSEState):
+                    return TurboQuantMSEState(
+                        state.norms[..., start:end, :],
+                        state.indices[..., start:end, :],
+                    )
+                if isinstance(state, TurboQuantProdState):
+                    return TurboQuantProdState(
+                        state.norms[..., start:end, :],
+                        state.mse_indices[..., start:end, :],
+                        state.residual_norms[..., start:end, :],
+                        state.qjl_signs[..., start:end, :],
+                    )
+                if isinstance(state, TurboQuantPolarState):
+                    return TurboQuantPolarState(
+                        state.radii[..., start:end, :],
+                        tuple(level[..., start:end, :] for level in state.level_indices),
+                    )
+                if isinstance(state, TurboQuantPolarProdState):
+                    return TurboQuantPolarProdState(
+                        state.norms[..., start:end, :],
+                        _slice_state_range(state.polar_state, start, end),
+                        state.residual_norms[..., start:end, :],
+                        state.qjl_signs[..., start:end, :],
+                    )
+                if isinstance(state, TurboQuantSplitState):
+                    return TurboQuantSplitState(
+                        _slice_state_range(state.low, start, end),
+                        _slice_state_range(state.high, start, end),
+                    )
+                return state
+
+            def _concat_state(a, b):
+                if isinstance(a, TurboQuantMSEState):
+                    return TurboQuantMSEState(
+                        loader.create_module(importlib.machinery.ModuleSpec("mlx.core", loader)).concatenate([a.norms, b.norms], axis=2),
+                        loader.create_module(importlib.machinery.ModuleSpec("mlx.core", loader)).concatenate([a.indices, b.indices], axis=2),
+                    )
+                if isinstance(a, TurboQuantProdState):
+                    mx_core = loader.create_module(importlib.machinery.ModuleSpec("mlx.core", loader))
+                    return TurboQuantProdState(
+                        mx_core.concatenate([a.norms, b.norms], axis=2),
+                        mx_core.concatenate([a.mse_indices, b.mse_indices], axis=2),
+                        mx_core.concatenate([a.residual_norms, b.residual_norms], axis=2),
+                        mx_core.concatenate([a.qjl_signs, b.qjl_signs], axis=2),
+                    )
+                return b
+
+            def _allocate_state_like(state, length):
+                if isinstance(state, TurboQuantMSEState):
+                    packed = state.indices.shape[-1]
+                    return TurboQuantMSEState(
+                        loader.array(np.zeros(state.norms.shape[:2] + (length, state.norms.shape[-1]))),
+                        loader.array(np.zeros(state.indices.shape[:2] + (length, packed), dtype=np.uint32)),
+                    )
+                if isinstance(state, TurboQuantProdState):
+                    packed = state.mse_indices.shape[-1]
+                    shape = state.norms.shape[:2] + (length, state.norms.shape[-1])
+                    return TurboQuantProdState(
+                        loader.array(np.zeros(shape)),
+                        loader.array(np.zeros(state.mse_indices.shape[:2] + (length, packed), dtype=np.uint32)),
+                        loader.array(np.zeros(shape[:-1] + (1,))),
+                        loader.array(np.zeros(shape[:-1] + (1,), dtype=np.uint32)),
+                    )
+                return state
+
+            def _state_nbytes(state):
+                if isinstance(state, TurboQuantMSEState):
+                    return state.norms.nbytes + state.indices.nbytes
+                if isinstance(state, TurboQuantProdState):
+                    return state.norms.nbytes + state.mse_indices.nbytes
+                return 0
+
+            def _write_state(dst, start, src):
+                return src
+
+            def _reserve_state_capacity(state, capacity):
+                return state
+
+            def _validate_bits(bits):
+                return bits
+
+            def turboquant_enabled(bits):
+                return not float(bits).is_integer()
+
+            class TurboQuantKVCache:
+                def __init__(self, bits=4.0, seed=0):
+                    self.bits = bits
+                    self.seed = seed
+                    self.keys = None
+                    self.values = None
+                    self.offset = 0
+                    self.key_codec = None
+                    self.value_codec = None
+                    self._cached_state = None
+                    self._cached_state_offset = -1
+
+                @property
+                def nbytes(self):
+                    return _state_nbytes(self.keys) + _state_nbytes(self.values)
+
+                def _ensure_codecs(self, keys, values):
+                    if self.key_codec is None:
+                        key_bits = int(math.floor(self.bits) if not math.isclose(self.bits, round(self.bits), abs_tol=1e-6) else self.bits)
+                        val_bits = int(math.ceil(self.bits) if not math.isclose(self.bits, round(self.bits), abs_tol=1e-6) else self.bits)
+                        self.key_codec = _build_codec(keys, key_bits, mode="mse", seed=self.seed)
+                        self.value_codec = _build_codec(values, val_bits, mode="mse", seed=self.seed + 1)
+
+                def update_and_fetch(self, keys, values):
+                    keys = loader.array(keys)
+                    values = loader.array(values)
+                    self._ensure_codecs(keys, values)
+                    if self.keys is None:
+                        fp_keys, fp_values = keys, values
+                    else:
+                        old_k, old_v = self.dequantize()
+                        fp_keys = loader.create_module(importlib.machinery.ModuleSpec("mlx.core", loader)).concatenate([old_k, keys], axis=2)
+                        fp_values = loader.create_module(importlib.machinery.ModuleSpec("mlx.core", loader)).concatenate([old_v, values], axis=2)
+                    self.keys = self.key_codec.quantize(fp_keys)
+                    self.values = self.value_codec.quantize(fp_values)
+                    self.offset = fp_keys.shape[2]
+                    return keys, values
+
+                @classmethod
+                def from_cache(cls, cache, bits=4.0, seed=0):
+                    inst = cls(bits=bits, seed=seed)
+                    if getattr(cache, "keys", None) is not None and getattr(cache, "values", None) is not None:
+                        inst.update_and_fetch(cache.keys, cache.values)
+                    return inst
+
+                @property
+                def state(self):
+                    if self.keys is None:
+                        return (None, None)
+                    return (_slice_state(self.keys, self.offset), _slice_state(self.values, self.offset))
+
+                @state.setter
+                def state(self, value):
+                    self.keys, self.values = value[:2]
+
+                @property
+                def meta_state(self):
+                    return (str(self.bits), str(self.seed))
+
+                @meta_state.setter
+                def meta_state(self, value):
+                    if value and len(value) >= 2:
+                        self.bits = float(value[0])
+                        self.seed = int(value[1])
+
+                def dequantize(self):
+                    if self.keys is None:
+                        empty = loader.array(np.zeros((1, 1, 0, 1)))
+                        return empty, empty
+                    return self.key_codec.dequantize(self.keys), self.value_codec.dequantize(self.values)
+
+                def decode_attention(self, queries, **kwargs):
+                    return loader.array(np.zeros(loader.array(queries).shape))
+
+                def prefill_attention(self, queries, **kwargs):
+                    return None
+
+            m.TurboQuantKVCache = TurboQuantKVCache
+            m.TurboQuantMSEState = TurboQuantMSEState
+            m.TurboQuantProdState = TurboQuantProdState
+            m.TurboQuantPolarState = TurboQuantPolarState
+            m.TurboQuantPolarProdState = TurboQuantPolarProdState
+            m.TurboQuantSplitState = TurboQuantSplitState
+            m._build_codec = _build_codec
+            m._concat_state = _concat_state
+            m._slice_state = _slice_state
+            m._slice_state_range = _slice_state_range
+            m._state_length = _state_length
+            m._state_nbytes = _state_nbytes
+            m._allocate_state_like = _allocate_state_like
+            m._write_state = _write_state
+            m._reserve_state_capacity = _reserve_state_capacity
+            m._QuantizedStateProxy = _QuantizedStateProxy
+            m._validate_bits = _validate_bits
+            m.turboquant_enabled = turboquant_enabled
+            sys.modules[spec.name] = m
+            return m
+
+        if spec.name in ("dflash_mlx.engine.target_qwen_gdn", "dflash_mlx.engine.target_gemma4"):
+            m = MockModule(spec.name)
+            m._install_speculative_linear_cache_hook = lambda linear_attn: None
+            m._install_split_full_attention_hook = lambda linear_attn: None
+            m._install_full_attention_gqa_hook = lambda linear_attn: None
+            sys.modules[spec.name] = m
+            return m
+
+        if spec.name == "dflash_mlx.runtime.config":
+            m = MockModule(spec.name)
+            from types import SimpleNamespace
+            def _runtime_config_from_defaults(**kwargs):
+                defaults = {"draft_window_size": 1024, "draft_sink_size": 64, "verify_mode": "adaptive"}
+                defaults.update({k: v for k, v in kwargs.items() if v is not None})
+                return SimpleNamespace(**defaults)
+            m.runtime_config_from_defaults = _runtime_config_from_defaults
+            sys.modules[spec.name] = m
+            return m
+
+        if spec.name == "dflash_mlx.runtime.context":
+            m = MockModule(spec.name)
+            from types import SimpleNamespace
+            m.build_runtime_context = lambda runtime: SimpleNamespace(runtime=runtime)
+            sys.modules[spec.name] = m
+            return m
+
+        if spec.name in ("mlx.core.random", "mlx.core.linalg", "mlx.core.distributed", "mlx.core.fast"):
+            m = MockModule(spec.name)
+            if spec.name == "mlx.core.random":
+                m._rng = np.random.default_rng(0)
+                m.state = loader.array([0], dtype="uint32")
+
+                def _advance_state():
+                    m.state = loader.array([(int(loader.array(m.state).item()) + 1) & 0xFFFFFFFF], dtype="uint32")
+
+                def _resolve_shape(*a, **k):
+                    if "shape" in k:
+                        return k["shape"]
+                    if len(a) >= 2 and all(isinstance(x, (int, float)) for x in a[:2]):
+                        return ()
+                    return a[0] if a else (1,)
+
+                def _uniform(*a, **k):
+                    low = a[0] if len(a) > 0 and isinstance(a[0], (int, float)) else 0.0
+                    high = a[1] if len(a) > 1 and isinstance(a[1], (int, float)) else 1.0
+                    out = loader.array(m._rng.uniform(low, high, size=_resolve_shape(*a, **k)))
+                    _advance_state()
+                    return out
+
+                def _normal(*a, **k):
+                    out = loader.array(m._rng.normal(size=_resolve_shape(*a, **k)))
+                    _advance_state()
+                    return out
+
+                def _categorical(logits):
+                    arr = loader.array(logits)._data
+                    if arr.ndim == 1:
+                        arr = arr.reshape(1, -1)
+                    shifted = arr - np.max(arr, axis=-1, keepdims=True)
+                    probs = np.exp(shifted)
+                    probs = probs / np.sum(probs, axis=-1, keepdims=True)
+                    samples = [m._rng.choice(arr.shape[-1], p=row) for row in probs]
+                    _advance_state()
+                    return loader.array(samples, dtype="uint32")
+
+                def _seed(s):
+                    seed = int(s)
+                    m._rng = np.random.default_rng(seed)
+                    m.state = loader.array([seed & 0xFFFFFFFF], dtype="uint32")
+
+                m.uniform = _uniform
+                m.normal = _normal
+                m.categorical = _categorical
+                m.seed = _seed
+            if spec.name == "mlx.core.linalg":
+                m.norm = lambda a, **k: loader.array(
+                    np.linalg.norm(loader.array(a)._data, **k)
+                )
+            if spec.name == "mlx.core.fast":
+                m.scaled_dot_product_attention = lambda queries, *a, **k: loader.array(
+                    np.zeros(loader.array(queries).shape, dtype=loader.array(queries)._data.dtype)
+                )
+            sys.modules[spec.name] = m
+            return m
+
         m = MockModule(spec.name)
         sys.modules[spec.name] = m
         return m
 
     def exec_module(self, module):
         if module.__name__ == "mlx.core":
-            for x in ["float32", "float16", "bfloat16", "int32", "int64", "uint64", "bool_", "floating", "integer", "uint32", "uint16", "uint8", "int8"]: setattr(module, x, x)
-            module.inf, module.nan, module.array = float("inf"), float("nan"), self.array
-            module.get_active_memory, module.get_peak_memory, module.eval = (lambda: 0), (lambda: 0), (lambda *a: None)
-            module.compile = lambda f=None, **k: (lambda f: f) if f is None else f
-            module.synchronize = lambda *a: None
-            module.cpu = "cpu"
-            module.gpu = "gpu"
-            module.metal = type("Metal", (), {"is_available": lambda *a, **k: False, "device_info": lambda *a, **k: {"max_buffer_length": 1 << 30}})()
+            for x in [
+                "float32",
+                "float16",
+                "bfloat16",
+                "int8",
+                "int32",
+                "int64",
+                "uint8",
+                "uint16",
+                "uint32",
+                "bool_",
+                "floating",
+            ]:
+                setattr(module, x, x)
+            module.inf = float("inf")
+            module.array = self.array
+            module.eval = lambda *a: None
+
 
 class MockMLXFinder(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path, target=None):
-        if fullname == "mlx" or fullname.startswith("mlx."):
+        if any(
+            fullname == m or fullname.startswith(m + ".")
+            for m in [
+                "mlx",
+                "mlx_lm",
+                "mlx_vlm",
+                "mlx_embeddings",
+                "openai_harmony",
+                "dflash_mlx",
+            ]
+        ):
             return importlib.machinery.ModuleSpec(fullname, MockMLXLoader())
         return None
 
+
 def install_mock():
-    import platform, sys
+    import platform
+    import sys
+
     if platform.system() != "Darwin":
         if not any(isinstance(f, MockMLXFinder) for f in sys.meta_path):
             sys.meta_path.insert(0, MockMLXFinder())
             for m in list(sys.modules.keys()):
-                if m == "mlx" or m.startswith("mlx."): del sys.modules[m]
+                if any(
+                    m == x or m.startswith(x + ".")
+                    for x in [
+                        "mlx",
+                        "mlx_lm",
+                        "mlx_vlm",
+                        "mlx_embeddings",
+                        "openai_harmony",
+                        "dflash_mlx",
+                    ]
+                ):
+                    del sys.modules[m]

@@ -2,10 +2,66 @@
 
 oMLX is a production-ready LLM inference server optimized for Apple Silicon (M1/M2/M3/M4) Macs. It provides high-performance serving with features like continuous batching, tiered KV caching, and multi-model support.
 
+---
+
+## ⚡ Canonical Workflow (Start Here — Always)
+
+This is the single authoritative procedure for any task: fixing bugs, auditing, or verifying the repo. **Follow these steps in order every time.**
+
+```bash
+# ── Step 1: Activate the venv (it is always at .venv/) ──────────────────────
+source .venv/bin/activate
+
+# ── Step 2: Install dependencies — NO audio extra on Linux/CI ───────────────
+# The [audio] extra (mlx-audio) conflicts with mlx-lm > 0.31.2 on non-macOS.
+# NEVER run: pip install -e ".[dev,mcp,audio,grammar]"  ← breaks on Linux
+pip install -e ".[dev,mcp,grammar]"
+
+# ── Step 3: Compliance gate — run FIRST, takes ~1 second ────────────────────
+# Checks: settings.py security defaults, README.md privacy sections,
+# Apache-2.0 license headers on every .py file.
+PYTHONPATH=. python scripts/compliance_check.py
+# Expected: "ALL CHECKS PASSED. Project is compliant with Security Audit v1.0."
+# If it fails: fix reported issues BEFORE doing anything else.
+
+# ── Step 4: Run the fast test suite ─────────────────────────────────────────
+# PYTHONPATH=. is required so that `import omlx` resolves to the local repo,
+# which triggers the MLX mock installation before any mlx.* import runs.
+# pytest.ini already sets: addopts = -m "not slow and not integration"
+# so the -m flag below is redundant but is kept for clarity.
+PYTHONPATH=. pytest -m "not slow" --tb=short -q 2>&1 | tee /tmp/test_output.txt
+
+# ── Step 5: Triage failures (if any) ────────────────────────────────────────
+grep "^FAILED\|^ERROR" /tmp/test_output.txt | sed 's/ - .*//' | sort | uniq -c | sort -rn
+# Root-cause decision table:
+#   "NotImplementedError: mlx.foo()"   → add foo to omlx/utils/mlx_mock.py
+#   "vocab file / HarmonyGptOss"       → add pytest.skip() in test fixture
+#   numerical precision assertion      → mark test @pytest.mark.slow
+#   anything else                      → fix the logic bug
+
+# ── Step 6: Iterate until zero failures ─────────────────────────────────────
+PYTHONPATH=. pytest -m "not slow" --tb=no -q 2>&1 | tail -3
+# Target line: "N passed, M skipped, K deselected"  (zero "failed")
+
+# ── Step 7: Compliance gate again ───────────────────────────────────────────
+PYTHONPATH=. python scripts/compliance_check.py
+
+# ── Step 8: Commit ───────────────────────────────────────────────────────────
+git add -A
+git restore --staged "oMLX.*.app"   # ← exclude macOS build artifact (hundreds of files)
+git commit -m "fix: ..."
+```
+
+> **⚠️ Build artifact warning:** `oMLX.0.3.x.app/` is a macOS `.app` bundle that may appear as
+> hundreds of staged files. Always run `git restore --staged "oMLX.*.app"` before committing.
+
+---
+
 ## Project Overview
 
 - **Purpose:** Efficient LLM and VLM inference on macOS, compatible with OpenAI and Anthropic APIs.
 - **Core Stack:** Python 3.10+, MLX, FastAPI, uvicorn, PyObjC (for menubar app).
+- **Venv location:** `.venv/` (always `source .venv/bin/activate` first).
 - **Key Features:**
     - **Continuous Batching:** High-throughput request processing.
     - **Tiered KV Cache:** Hot (RAM) and Cold (SSD) tiers for persistent context.
@@ -16,265 +72,148 @@ oMLX is a production-ready LLM inference server optimized for Apple Silicon (M1/
 
 ## Architecture
 
-The system is organized into several key layers:
+1. **API Layer** (`omlx/server.py`, `omlx/api/`): FastAPI — OpenAI and Anthropic compatible endpoints.
+2. **Engine Pool** (`omlx/engine_pool.py`): Model lifecycle — load/unload/LRU/memory limits.
+3. **Inference Engines** (`omlx/engine/`): `BatchedEngine` (LLM), `VLMBatchedEngine`, `EmbeddingEngine`, `RerankerEngine`, `STTEngine`, `TTSEngine`, `STSEngine`.
+4. **Scheduler** (`omlx/scheduler.py`): FCFS scheduling integrated with `mlx-lm` BatchGenerator.
+5. **Cache Stack** (`omlx/cache/`): `PagedCacheManager` (hot, RAM) + `PagedSSDCacheManager` (cold, SSD).
+6. **Admin UI** (`omlx/admin/`): Vendored frontend for offline management.
 
-1.  **API Layer (`omlx/server.py`, `omlx/api/`):** FastAPI implementation of OpenAI and Anthropic compatible endpoints.
-2.  **Engine Pool (`omlx/engine_pool.py`):** Manages multiple model engines, handles loading/unloading, and enforces memory limits.
-3.  **Inference Engines (`omlx/engine/`):**
-    - `BatchedEngine`: Text LLM inference with continuous batching.
-    - `VLMBatchedEngine`: Vision-Language Model support.
-    - `EmbeddingEngine` / `RerankerEngine`: Specialized task engines.
-    - `STTEngine` / `TTSEngine` / `STSEngine`: Audio processing.
-4.  **Scheduler (`omlx/scheduler.py`):** FCFS request scheduling integrated with `mlx-lm` BatchGenerator.
-5.  **Cache Stack (`omlx/cache/`):**
-    - `PagedCacheManager`: Block-based KV cache with prefix sharing.
-    - `PagedSSDCacheManager`: Cold storage tier for KV blocks.
-6.  **Admin UI (`omlx/admin/`):** Vendored frontend for offline management.
+## Key Source Files
 
-## Building and Running
-
-### Installation
-
-```bash
-# Install core dependencies
-pip install -e .
-
-# Install with optional components
-pip install -e ".[dev,mcp,audio,grammar]"
-```
-
-### Running the Server
-
-```bash
-# Start server with models directory
-omlx serve --model-dir ~/models
-
-# Common flags
---port 8000
---max-model-memory 32GB
---paged-ssd-cache-dir ~/.omlx/cache
---mcp-config mcp.json
---check-updates         # Check for oMLX updates (default: disabled)
---check-statuskit      # Check menubar icon visibility (Tahoe, default: disabled)
-```
-
-### Testing
-
-```bash
-# Run all fast tests
-pytest -m "not slow"
-
-# Run a specific test
-pytest tests/test_config.py
-
-# Run slow tests (requires models)
-pytest -m slow
-```
+| File | Purpose |
+|------|---------|
+| `omlx/cli.py` | CLI entry point (`omlx serve ...`) |
+| `omlx/server.py` | FastAPI server setup and routes |
+| `omlx/engine_pool.py` | Model lifecycle management |
+| `omlx/scheduler.py` | Request scheduling (FCFS + chunked prefill) |
+| `omlx/settings.py` | Global/per-model settings — **security-sensitive defaults** |
+| `omlx/utils/mlx_mock.py` | **The MLX mock — single source of truth for Linux/CI testing** |
+| `scripts/compliance_check.py` | Automated security/license compliance gate |
+| `tests/` | ~4600+ fast tests, ~10 slow (Apple Silicon only) |
+| `packaging/` | macOS `.app` and `.dmg` build scripts |
 
 ## Development Conventions
 
-- **Python Version:** 3.10+ (3.11+ recommended for macOS app).
-- **License Header:** Every source file must start with `# SPDX-License-Identifier: Apache-2.0`.
-- **Formatting:** Adhere to `black` (line-length 88) and `ruff` standards.
-- **Type Safety:** Use type hints and run `mypy` for verification.
-- **Testing:**
-    - Test files should follow the pattern `tests/test_<module_name>.py`.
-    - Use `@pytest.mark.slow` for tests requiring model loading.
-    - Use `@pytest.mark.integration` for tests requiring a running server.
-- **Documentation:** Maintain `README.md` and document new features in the `docs/` directory.
-- **Pull Requests:** Ensure all tests pass (`pytest -m "not slow"`) and formatting is correct before submission.
+- **Python:** 3.10+ (3.11+ recommended for macOS app).
+- **License header:** Every `.py` file must begin with exactly: `# SPDX-License-Identifier: Apache-2.0`
+- **Formatting:** `black` (line-length 88) + `ruff`.
+- **Type safety:** type hints throughout; verify with `mypy`.
+- **Test naming:** `tests/test_<module_name>.py`.
+- **PR gate:** `PYTHONPATH=. pytest -m "not slow"` must pass with zero failures.
 
-## Known Platform Limitations
+## Running the Server (macOS only)
 
-- **Non-macOS Environments:** Since oMLX is optimized for Apple Silicon, `mlx` is unavailable on Linux/Windows. The MLX mock (`omlx/utils/mlx_mock.py`) provides a NumPy-backed stub that is automatically installed on non-macOS. See the **MLX Mock Architecture** section below for full details.
-- **Dependency Conflicts:** The `[audio]` extra (specifically `mlx-audio`) may have version conflicts with `mlx-lm > 0.31.2`. On non-macOS environments or when using newer `mlx-lm` versions, always install **without** the audio extra:
-  ```bash
-  pip install -e ".[dev,mcp,grammar]"
-  ```
-  Never add `audio` to the install command in CI or on Linux — it will break the install.
+```bash
+omlx serve --model-dir ~/models [--port 8000] [--max-model-memory 32GB] \
+           [--paged-ssd-cache-dir ~/.omlx/cache] [--mcp-config mcp.json]
+# check-updates and check-statuskit default to disabled — do not enable without user consent
+```
 
 ---
 
-## AI Agent Optimization & Audit Guide
+## MLX Mock Architecture
 
-To minimize token usage and turns during audits or verification, use these optimized workflows:
+### Why it exists
 
-### 1. Environment Setup (Linux/CI)
-When running in a non-macOS environment, always install without the `audio` extra and always set `PYTHONPATH=.` so that `import omlx` resolves to the local repo (which triggers mock installation before `mlx` is imported):
-```bash
-# Install — no audio extra
-pip install -e ".[dev,mcp,grammar]"
+`mlx` is an Apple-Silicon-only C++ framework unavailable on Linux/CI. The mock (`omlx/utils/mlx_mock.py`) is a NumPy-backed `importlib` hook that intercepts every `import mlx.*` and returns a structurally correct fake module. Tests verify logic and data flow; numerical precision is left to `@pytest.mark.slow` tests on real hardware.
 
-# Run all fast tests
-PYTHONPATH=. pytest -m "not slow"
-```
-`pytest.ini` already contains `addopts = -m "not slow and not integration"` so the `-m "not slow"` flag is redundant but harmless. Never run the full suite without `-m "not slow"` unless you have real Apple Silicon hardware.
+### File roles — strict rule
 
-### 2. Programmatic Compliance Audit
-**Always run this first** before any manual inspection. It checks `settings.py` defaults, `README.md` privacy sections, and Apache-2.0 license headers on all 300+ Python files in one pass:
-```bash
-python scripts/compliance_check.py
-```
-Expected output: `ALL CHECKS PASSED. Project is compliant with Security Audit v1.0.`
+| File | Role | May be edited? |
+|------|------|---------------|
+| `omlx/utils/mlx_mock.py` | **The only real mock.** All logic lives here. | ✅ Yes |
+| `tests/mlx_mock.py` | **5-line compatibility shim only.** Re-exports from the utils mock. | ❌ Never |
 
-If it fails, fix the reported issues **before** touching anything else. License headers are mandatory on every `.py` file — the format is exactly `# SPDX-License-Identifier: Apache-2.0` as the first line.
-
-### 3. MLX Mock Architecture — Single Source of Truth
-
-#### The Problem This Solves
-`mlx` is an Apple-Silicon-only C++ framework. On Linux/CI it cannot be installed. All tests must still run. The solution is a pure-Python/NumPy import-hook mock that intercepts `import mlx.core` and returns a fake module backed by NumPy arrays.
-
-#### File Locations and Roles
-| File | Role | Edit? |
-|---|---|---|
-| `omlx/utils/mlx_mock.py` | **The only real mock file.** Contains all mock logic. | ✅ Yes |
-| `tests/mlx_mock.py` | **Compatibility shim only.** 5 lines. Re-exports everything from the utils mock. | ❌ Never edit directly |
-
-**Critical rule: never edit `tests/mlx_mock.py` directly.** It is a shim:
+`tests/mlx_mock.py` must always contain exactly:
 ```python
 from omlx.utils.mlx_mock import *  # noqa: F401, F403
 from omlx.utils.mlx_mock import MockMLXLoader, MockMLXFinder, install_mock, _map_dtype
 ```
-All changes go to `omlx/utils/mlx_mock.py`. The shim exists only as a compatibility alias in case anything ever imports it directly.
+If a merge ever reverts it to a 400+ line duplicate, restore the shim immediately. Two diverging mock files caused silent test failures before the consolidation commit `fe6066a` (May 2026).
 
-**History note:** Before May 2026, there were two nearly-identical 430-line files. They diverged silently over time, causing hard-to-diagnose test failures. The consolidation commit (`fe6066a`) eliminated this. Do not re-introduce the two-file pattern.
+### How the mock is loaded
 
-#### How the Mock Is Loaded (The Loading Chain)
 ```
 PYTHONPATH=. pytest
   └─ tests/conftest.py
-       └─ import omlx                        ← triggers __init__.py
-            └─ omlx/__init__.py (line 21-36) ← detects platform != Darwin
-                 └─ loads omlx/utils/mlx_mock.py via importlib.util
-                      └─ calls install_mock()
-                           └─ inserts MockMLXFinder into sys.meta_path[0]
-                                └─ all subsequent `import mlx.*` → mock
-```
-After `import omlx`, any `import mlx.core as mx` in any module returns the mock. This happens **before** any test module is loaded because `conftest.py` runs first.
-
-#### How the Mock Works Internally
-`MockMLXLoader` is a Python import-hook (`importlib.abc.Loader`). It intercepts module creation for `mlx`, `mlx.core`, `mlx.core.random`, `mlx.core.linalg`, `mlx.core.distributed`, `mlx.nn`, `mlx.utils`, and `mlx_lm`.
-
-The `array` class inside the mock wraps a `numpy.ndarray` (`self._data`). All arithmetic operations (`+`, `-`, `*`, `/`, `@`, `**`, bitwise ops) delegate to NumPy. dtype constants (`mx.float32`, `mx.bfloat16`, etc.) are Python strings. `bfloat16` is mapped to `float16` internally since NumPy has no bfloat16.
-
-Named functions (like `mx.zeros`, `mx.concatenate`, `mx.pad`, etc.) are explicitly registered as lambdas in `MockModule.__getattr__`. **Unknown function names** now raise:
-```
-NotImplementedError: mlx.<name>() is not implemented in the MLX mock.
-Add it to omlx/utils/mlx_mock.py.
+       └─ import omlx                        ← triggers omlx/__init__.py
+            └─ platform.system() != "Darwin" ← guard: mock only on non-macOS
+                 └─ install_mock()
+                      └─ sys.meta_path.insert(0, MockMLXFinder())
+                           └─ all subsequent `import mlx.*` → mock
 ```
 
-#### How to Add a Missing MLX Function
-When a test fails with `NotImplementedError: mlx.foo() is not implemented...`, open `omlx/utils/mlx_mock.py` and find the block of `if name == ...` handlers inside `MockModule.__getattr__` (around line 290–345). Add a line using the existing patterns:
+**The mock is active for the entire test process.** It cannot activate on macOS (production). `PYTHONPATH=.` is mandatory so `import omlx` resolves to the local repo, not an installed package.
+
+### Adding a missing MLX function
+
+When a test fails with `NotImplementedError: mlx.foo() is not implemented in the MLX mock`, add `foo` to the `if self.__name__ == "mlx.core":` block inside `MockModule.__getattr__` in `omlx/utils/mlx_mock.py`:
 
 ```python
-# Simple passthrough (no-op)
+# No-op / passthrough
 if name == "contiguous": return lambda a, **k: a
+if name == "compile":    return lambda f, *a, **k: f   # identity — handles @mx.compile
 
-# NumPy delegation (element-wise)
-if name == "power": return lambda a, b: loader.array(
-    np.power(loader.array(a)._data, loader.array(b)._data if hasattr(b, "_data") else b))
+# NumPy delegation
+if name == "power":
+    return lambda a, b: loader.array(
+        np.power(loader.array(a)._data, loader.array(b)._data if hasattr(b, "_data") else b))
 
-# Shape-reducing operation
+# Shape-reducing
 if name in ("mean", "max", "min", "sum"):
     return lambda a, axis=None, keepdims=False: loader.array(
         getattr(np, name)(loader.array(a)._data, axis=axis, keepdims=keepdims))
 ```
 
-**Never use `_default_func` intentionally.** It exists only as a last-resort backstop that raises `NotImplementedError`. If `_default_func` triggers during a test, it means a new MLX function was used in production code without a mock entry — fix it.
+> **⚠️ Anti-pattern — double-lambda bug:** `_default_func` is called when the attribute is **invoked**
+> (e.g., `make_logits_processors(...)`). Return the **value**, not a lambda wrapping the value:
+> ```python
+> # WRONG — returns a lambda, not the list:
+> if _n == "make_logits_processors": return lambda *a, **k: []
+> # CORRECT — returns the list directly:
+> if _n == "make_logits_processors": return []
+> ```
 
-#### Tests That Cannot Be Mocked: `@pytest.mark.slow`
-Some tests require the **actual numerical output** of MLX operations, which NumPy cannot faithfully replicate (different precision, different rounding, different FP8/bfloat16 semantics). These tests are marked `@pytest.mark.slow` and skipped in CI:
+**Fail-loud policy:** `_default_func` must always raise `NotImplementedError` for unknown names. Never make it return a default value silently — that masks bugs.
 
-```python
-@pytest.mark.slow
-def test_embed_produces_normalized_vectors(self):
-    """Requires real MLX model forward pass for numerical correctness."""
-```
+### Test marking rules
 
-**Rule:** Mark a test `@pytest.mark.slow` when it:
-1. Requires loading a real model from disk, **OR**
-2. Asserts numerical precision that depends on real MLX hardware (e.g., turboquant MSE thresholds, FP8 dequant exact values).
+| Situation | Action | Reason |
+|-----------|--------|--------|
+| Test requires a real model on disk | `@pytest.mark.slow` | Cannot run in CI |
+| Test asserts hardware-dependent numerical precision | `@pytest.mark.slow` | NumPy != MLX numerics |
+| Test needs a vocab/external file not in repo | `pytest.skip()` in fixture | Offline CI must not fail |
+| Test uses `mlx` for structural logic only | No special mark needed | Mock handles it |
 
-Do **not** mark a test slow just because it uses `mlx` — the mock handles structural correctness tests fine.
-
-#### Tests That Require External Data: `pytest.skip`
-Tests that require downloading a vocabulary file, external model, or any network resource use `pytest.importorskip` or inline `pytest.skip`:
-
-```python
-try:
-    encoding = load_harmony_encoding("HarmonyGptOss")
-except Exception:
-    pytest.skip("HarmonyGptOss vocabulary file unavailable in this environment")
-```
-
-This pattern is used in `tests/test_harmony.py`, `tests/test_harmony_parser.py`, and `tests/test_output_parser.py`.
+`pytest.ini` enforces `addopts = -m "not slow and not integration"` — the default CI run skips both marks automatically.
 
 ---
 
-### 4. Merge Conflict Resolution Strategy
+## Merge Conflict Resolution
 
-When resolving merge conflicts in this repo, follow this priority order:
+> **Scope conflict scans to project files only:**
+> ```bash
+> # CORRECT — only scans omlx/ and tests/
+> grep -rl "<<<<<<" omlx/ tests/
+> # WRONG — scans packaging/_export/ (thousands of vendored stdlib files → false positives)
+> grep -rl "<<<<<<" .
+> ```
 
-1. **`omlx/_version.py`** — Always keep the Apache-2.0 license header AND the higher version number. The license header was added by one branch; the version bump by another. Both must survive.
+Priority order when resolving conflicts:
+
+1. **`omlx/_version.py`** — Keep the Apache-2.0 header AND the higher version number. Both must survive.
    ```python
    # SPDX-License-Identifier: Apache-2.0
-   __version__ = "0.3.9"   # keep the higher of the two conflicting versions
+   __version__ = "0.3.12"   # always keep the higher of the two conflicting versions
    ```
 
-2. **`omlx/utils/mlx_mock.py`** — The utils mock is the single source of truth. Never let a merge revert it to an older state. After any merge, immediately run `PYTHONPATH=. pytest -m "not slow"` to verify.
+2. **`omlx/settings.py`** — Run `PYTHONPATH=. python scripts/compliance_check.py` after resolving to confirm security defaults were not accidentally changed.
 
-3. **`tests/mlx_mock.py`** — This file must remain a shim. If a merge overwrites it with the old 430-line duplicate, replace its content with the 5-line re-export shown above.
+3. **`omlx/utils/mlx_mock.py`** — Single source of truth. Never let a merge revert it to an older state.
 
-4. **General conflict rule:** When HEAD and origin/main add different features to the same file, keep both. Only discard a change if it is a direct logical contradiction.
+4. **`tests/mlx_mock.py`** — Must remain the 5-line shim shown above.
 
----
+5. **`tests/conftest.py`** — Must `import omlx` before any `import mlx.*`.
 
-### 5. Full "Fix, Compile, Pass Tests, Comply" Workflow
-
-This is the complete ordered procedure for bringing the repo to a clean state after a merge or after receiving a broken branch:
-
-```bash
-# Step 0: Install (no audio on non-macOS)
-pip install -e ".[dev,mcp,grammar]"
-
-# Step 1: Compliance check first — fast, catches license/settings issues
-python scripts/compliance_check.py
-
-# Step 2: Run all fast tests and capture failures
-PYTHONPATH=. pytest -m "not slow" --tb=short -q 2>&1 | grep "FAILED\|ERROR"
-
-# Step 3: For each failure, determine root cause:
-#   - NotImplementedError: mlx.foo() → add foo to omlx/utils/mlx_mock.py
-#   - Harmony/vocab not found → add pytest.skip() to fixture
-#   - Numerical precision → mark @pytest.mark.slow
-#   - Logic bug → fix the bug
-
-# Step 4: Re-run until zero failures
-PYTHONPATH=. pytest -m "not slow" --tb=no 2>&1 | grep "FAILED" | wc -l
-# Must be 0
-
-# Step 5: Compliance check again (confirms no license headers were removed)
-python scripts/compliance_check.py
-
-# Step 6: Commit
-git add -A
-# IMPORTANT: exclude build artifacts like oMLX.*.app/ from staging
-git restore --staged "oMLX.*.app"
-git commit -m "fix: ..."
-```
-
-**Important:** The `.app` bundle (`oMLX.0.3.x.app/`) is a macOS build artifact with hundreds of files. Always unstage it before committing: `git restore --staged "oMLX.*.app"`. It should be added to `.gitignore` if not already.
-
----
-
-### 6. Key Source Files Reference
-
-- `omlx/cli.py`: CLI entry point (`omlx serve ...`).
-- `omlx/server.py`: FastAPI server setup and routes.
-- `omlx/engine_pool.py`: Model lifecycle management (load/unload/LRU).
-- `omlx/scheduler.py`: Request scheduling logic (FCFS + chunked prefill).
-- `omlx/settings.py`: Global and per-model settings — **security-sensitive defaults live here**.
-- `omlx/utils/mlx_mock.py`: **The MLX mock — single source of truth for non-macOS testing.**
-- `scripts/compliance_check.py`: Automated security/license compliance verifier.
-- `packaging/`: Scripts and config for the macOS `.app` and `.dmg` builds.
-- `tests/`: Comprehensive test suite (~2950+ fast tests, ~10 slow tests).
+6. **General rule:** When both branches add different features to the same file, keep both. Only discard a change if it is a direct logical contradiction.

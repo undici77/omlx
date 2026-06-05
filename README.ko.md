@@ -242,6 +242,11 @@ mlx-lm에서 사용 가능한 모든 함수 호출 형식, JSON 스키마 검증
 ## CLI 설정
 
 ```bash
+# 관리형 백그라운드 서버 (macOS 앱 또는 Homebrew 설치)
+omlx start
+omlx stop
+omlx restart
+
 # 로드된 모델의 메모리 제한
 omlx serve --model-dir ~/models --max-model-memory 32GB
 

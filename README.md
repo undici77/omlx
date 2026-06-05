@@ -115,7 +115,6 @@ If you want to use the CLI, the `omlx` command is available inside the applicati
 # Example if running from source directory after build_tahoe.sh
 ./.build_venv/bin/omlx serve --model-dir ~/models
 ```
-
 ## Features
 
 Supports text LLMs, vision-language models (VLM), OCR models, embeddings, and rerankers on Apple Silicon.
@@ -269,6 +268,11 @@ Models are auto-detected by type. You can also download models directly from the
 ## CLI Reference
 
 ```bash
+# Managed background server (macOS app or Homebrew install)
+omlx start
+omlx stop
+omlx restart
+
 # Start with default settings (memory guard tier = balanced, manage via admin UI)
 omlx serve --model-dir ~/models
 

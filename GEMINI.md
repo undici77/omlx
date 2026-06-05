@@ -60,7 +60,7 @@ git commit -m "fix: ..."
 ## Project Overview
 
 - **Purpose:** Efficient LLM and VLM inference on macOS, compatible with OpenAI and Anthropic APIs.
-- **Core Stack:** Python 3.10+, MLX, FastAPI, uvicorn, PyObjC (for menubar app).
+- **Core Stack:** Python 3.10+, MLX, FastAPI, uvicorn, Swift/SwiftUI (for macOS menubar app).
 - **Venv location:** `.venv/` (always `source .venv/bin/activate` first).
 - **Key Features:**
     - **Continuous Batching:** High-throughput request processing.

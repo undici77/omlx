@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 # build.sh — produce a runnable oMLX.app for local manual testing.
-#
-# Side-by-side Swift bundle path: this builds `oMLX.app` alongside the
-# legacy Python/PyObjC `oMLX.app` until the Swift app becomes the primary
-# release channel.
+# Swift bundle path: this builds the primary Swift `oMLX.app` (the legacy
+# Python/PyObjC menubar app is now retired).
+
 # Pipeline:
 #   1. xcodebuild with `-resolvePackageDependencies` so SPM deps pick up
 #      any new minor/patch within the pin range each build
@@ -375,7 +374,8 @@ cat > "$CLI_WRAPPER" <<'EOF'
 #!/bin/sh
 set -eu
 
-APP_ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+REAL_PATH="$(realpath "$0")"
+APP_ROOT="$(CDPATH= cd -- "$(dirname -- "$REAL_PATH")/.." && pwd)"
 RESOURCES="$APP_ROOT/Resources"
 PYROOT="$RESOURCES/Python"
 CPYTHON="$PYROOT/cpython-3.11"

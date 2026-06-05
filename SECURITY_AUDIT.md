@@ -102,6 +102,16 @@ oMLX's security model assumes it runs on a **trusted host (macOS)** accessed loc
 - [ ] **Path traversal:** Model directories are validated against `base_path` using `Path.resolve()`.
 - [ ] **Log retention:** `logging.retention_days` is configured to prevent disk exhaustion.
 
+### 3.5 Dependency & Supply Chain Security (Vulnerabilities & Malware Auditing)
+
+- [ ] **Vulnerability Auditing:** Ensure `pip-audit` runs automatically during macOS builds to block compilation if insecure library versions are detected.
+- [ ] **Malicious Payload & Stealer Scanning:** Scan codebases and incoming dependencies for indicators of stealers, trojans, or malware:
+  - Check for dynamic/obfuscated code execution (e.g. `eval()`, `exec()`, or base64 decoding to execute payloads).
+  - Verify that no raw outbound calls exist outside of official API routes (e.g., raw TCP/UDP sockets, unsanctioned `urllib` or `requests` calls).
+  - Inspect files for exfiltration behavior (such as scraping SSH keys, browser cookies, `.env` files, or routing data to unverified webhooks/IPs).
+- [ ] **Reproducible Builds & Lockfiles:** Ensure `venvstacks` enforces deterministic dependency resolutions with frozen versions and date-locking (`exclude-newer`) to shield against compromised upstream updates.
+- [ ] **Static Security Testing (SAST):** Run SAST tools (like `bandit` for Python) to verify codebase security hygiene and identify vulnerable API usage.
+
 ---
 
 ## 4. Known Security Risks (Risk Register)

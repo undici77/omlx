@@ -12,6 +12,7 @@ import pytest
 from omlx.cache.paged_ssd_cache import (
     PagedSSDBlockMetadata,
     PagedSSDCacheManager,
+    SharedHotCacheBudget,
     _extract_tensor_bytes,
 )
 
@@ -585,6 +586,84 @@ class TestHotCacheByteAccounting:
         finally:
             mgr.close()
 
+    def test_shared_budget_evicts_across_managers_by_global_lru(self, tmp_path):
+        """A shared hot cache budget should cap aggregate manager memory."""
+        entry, entry_size = self._make_raw_entry(tmp_path, b"budget_size_probe")
+        del entry
+        budget = SharedHotCacheBudget(entry_size * 2 + 1)
+        mgr_a = PagedSSDCacheManager(
+            cache_dir=tmp_path / "budget_a",
+            max_size_bytes=100 * 1024**2,
+            hot_cache_max_bytes=budget.max_bytes,
+            hot_cache_only=True,
+            hot_cache_budget=budget,
+        )
+        mgr_b = PagedSSDCacheManager(
+            cache_dir=tmp_path / "budget_b",
+            max_size_bytes=100 * 1024**2,
+            hot_cache_max_bytes=budget.max_bytes,
+            hot_cache_only=True,
+            hot_cache_budget=budget,
+        )
+
+        try:
+            a0, _ = self._make_raw_entry(tmp_path, b"budget_a_0", model_name="model-a")
+            b0, _ = self._make_raw_entry(tmp_path, b"budget_b_0", model_name="model-b")
+            b1, _ = self._make_raw_entry(tmp_path, b"budget_b_1", model_name="model-b")
+
+            mgr_a._hot_cache_put(b"budget_a_0", a0)
+            mgr_b._hot_cache_put(b"budget_b_0", b0)
+            assert budget.total_bytes == entry_size * 2
+
+            # Refresh A, so B's first block is the global LRU victim.
+            assert mgr_a._hot_cache_get(b"budget_a_0") is not None
+            mgr_b._hot_cache_put(b"budget_b_1", b1)
+
+            assert budget.total_bytes == entry_size * 2
+            assert mgr_a._hot_cache_get(b"budget_a_0") is not None
+            assert mgr_b._hot_cache_get(b"budget_b_0") is None
+            assert mgr_b._hot_cache_get(b"budget_b_1") is not None
+            assert mgr_a.get_stats().hot_cache_max_bytes == budget.max_bytes
+            assert mgr_b.get_stats().hot_cache_max_bytes == budget.max_bytes
+        finally:
+            mgr_a.close()
+            mgr_b.close()
+
+    def test_shared_budget_forgets_owner_on_clear_and_close(self, tmp_path):
+        """Clearing or closing a manager must release shared budget bytes."""
+        _, entry_size = self._make_raw_entry(tmp_path, b"budget_clear_probe")
+        budget = SharedHotCacheBudget(entry_size * 4)
+        mgr_a = PagedSSDCacheManager(
+            cache_dir=tmp_path / "budget_clear_a",
+            max_size_bytes=100 * 1024**2,
+            hot_cache_max_bytes=budget.max_bytes,
+            hot_cache_only=True,
+            hot_cache_budget=budget,
+        )
+        mgr_b = PagedSSDCacheManager(
+            cache_dir=tmp_path / "budget_clear_b",
+            max_size_bytes=100 * 1024**2,
+            hot_cache_max_bytes=budget.max_bytes,
+            hot_cache_only=True,
+            hot_cache_budget=budget,
+        )
+
+        try:
+            a0, _ = self._make_raw_entry(tmp_path, b"budget_clear_a_0")
+            b0, _ = self._make_raw_entry(tmp_path, b"budget_clear_b_0")
+            mgr_a._hot_cache_put(b"budget_clear_a_0", a0)
+            mgr_b._hot_cache_put(b"budget_clear_b_0", b0)
+
+            assert budget.total_bytes == entry_size * 2
+            assert mgr_a.clear_hot_cache() == 1
+            assert budget.total_bytes == entry_size
+
+            mgr_b.close()
+            assert budget.total_bytes == 0
+        finally:
+            mgr_a.close()
+            mgr_b.close()
+
 
 @pytest.mark.skipif(not HAS_MLX, reason="MLX not available")
 class TestHotCacheStatsAccuracy:
@@ -949,7 +1028,10 @@ class TestPendingWriteBuffer:
             mgr.close()
 
     def test_queue_full_cleans_pending_buffer(self, tmp_path):
-        """When write queue is full, dropped block is removed from pending buffer."""
+        """When sustained queue saturation drops a hot-cache spill, the
+        dropped block is removed from the pending buffer."""
+        import queue as _queue
+
         entry_size = 2 * 2 * 1 * 2 * 16 * 16 * 4
         max_bytes = entry_size * 2 + 100
 
@@ -959,18 +1041,13 @@ class TestPendingWriteBuffer:
             hot_cache_max_bytes=max_bytes,
         )
         try:
-            # Pause the writer by filling the queue with sentinel-free blocks
-            # Use a tiny queue to make overflow easy
-            original_maxsize = mgr._write_queue.maxsize
-            mgr._write_queue = __import__("queue").Queue(maxsize=1)
-
-            # Save blocks to fill queue via eviction
             self._save_block(mgr, b"qf_test_block_00")
             self._save_block(mgr, b"qf_test_block_01")
-            # This evicts block 0 → fills queue (size 1)
             self._save_block(mgr, b"qf_test_block_02")
-            # This evicts block 1 → queue full → should drop AND clean buffer
-            self._save_block(mgr, b"qf_test_block_03")
+            # This evicts block 1. Force sustained saturation so the bounded
+            # wait expires and cleanup runs.
+            with patch.object(mgr._write_queue, "put", side_effect=_queue.Full):
+                self._save_block(mgr, b"qf_test_block_03")
 
             # Block 1 was dropped — should NOT be in pending buffer
             with mgr._pending_write_hashes_lock:
@@ -981,7 +1058,6 @@ class TestPendingWriteBuffer:
                     "Dropped block should be removed from pending hashes on queue full"
                 )
         finally:
-            mgr._write_queue = __import__("queue").Queue(maxsize=original_maxsize)
             mgr.close()
 
     def test_evicted_block_loadable_with_metadata(self, tmp_path):
@@ -1075,17 +1151,24 @@ class TestSSDWriteDrops:
         )
 
     def test_paged_ssd_cache_stats_default_and_reset(self):
-        """Dataclass: ssd_write_drops defaults to 0 and is zeroed by reset()."""
+        """Dataclass: drop/unlink counters default to 0 and reset to 0."""
         from omlx.cache.stats import PagedSSDCacheStats
 
         # Default is zero.
         stats = PagedSSDCacheStats()
         assert stats.ssd_write_drops == 0
+        assert stats.evict_unlink_failures == 0
 
         # reset() returns it to zero from a non-zero state.
-        stats = PagedSSDCacheStats(ssd_write_drops=5, saves=2, loads=3)
+        stats = PagedSSDCacheStats(
+            ssd_write_drops=5,
+            evict_unlink_failures=3,
+            saves=2,
+            loads=3,
+        )
         stats.reset()
         assert stats.ssd_write_drops == 0
+        assert stats.evict_unlink_failures == 0
         # Verify reset() didn't break the existing fields it already handled.
         assert stats.saves == 0
         assert stats.loads == 0
@@ -1127,12 +1210,31 @@ class TestSSDWriteDrops:
         finally:
             mgr.close()
 
-    def test_ssd_write_drops_increments_on_hot_eviction_queue_full(self, tmp_path):
-        """Site 1: hot-cache eviction → put_nowait raises queue.Full → drop += 1.
+    def test_evict_unlink_failures_round_trips_through_get_stats(self, tmp_path):
+        """evict_unlink_failures is visible through both stats accessors."""
+        mgr = PagedSSDCacheManager(
+            cache_dir=tmp_path / "unlink_failure_wiring_test",
+            max_size_bytes=100 * 1024**2,
+        )
+        try:
+            mgr._stats["evict_unlink_failures"] = 3
 
-        Patches the real queue's put_nowait to always raise queue.Full,
-        guaranteeing the drop path fires on the first eviction without any
-        dependency on the writer thread's drain rate.
+            stats = mgr.get_stats()
+            assert stats.evict_unlink_failures == 3
+
+            model_stats = mgr.get_stats_for_model("any-model-name")
+            assert model_stats.evict_unlink_failures == 3
+        finally:
+            mgr.close()
+
+    def test_ssd_write_drops_increments_on_hot_eviction_queue_full(self, tmp_path):
+        """Site 1: hot-cache eviction → put raises queue.Full → drop += 1.
+
+        Patches the real queue's put to raise queue.Full, guaranteeing the
+        drop path fires on the first eviction without any dependency on the
+        writer thread's drain rate. _enqueue_ssd_write uses put(item,
+        timeout=...) (not put_nowait) so a transient burst can ride over a
+        short writer-backlog window; sustained saturation still drops.
         """
         import queue as _queue
         from unittest.mock import patch
@@ -1149,19 +1251,19 @@ class TestSSDWriteDrops:
         )
         try:
             with patch.object(
-                mgr._write_queue, "put_nowait", side_effect=_queue.Full
+                mgr._write_queue, "put", side_effect=_queue.Full
             ):
                 self._save_block(mgr, b"qf_drop_block_00")
                 self._save_block(mgr, b"qf_drop_block_01")
-                # save_02 evicts block 00 → _enqueue_ssd_write → put_nowait
-                # raises queue.Full → drop fires, cleanup runs.
+                # save_02 evicts block 00 → _enqueue_ssd_write → put raises
+                # queue.Full → drop fires, cleanup runs.
                 self._save_block(mgr, b"qf_drop_block_02")
 
             stats = mgr.get_stats()
             assert stats.ssd_write_drops == 1
             assert stats.errors == 0  # drops are distinct from errors
 
-            # Block 00 was the one being enqueued when put_nowait raised.
+            # Block 00 was the one being enqueued when put raised.
             # Cleanup must have removed it from both pending structures.
             with mgr._pending_write_hashes_lock:
                 assert b"qf_drop_block_00" not in mgr._pending_write_buffers
@@ -1169,14 +1271,17 @@ class TestSSDWriteDrops:
         finally:
             mgr.close()
 
-    def test_ssd_write_drops_increments_on_cold_store_preflight(self, tmp_path):
-        """Site 2: save_block preflight _write_queue.full() guard.
+    def test_ssd_write_drops_increments_on_cold_store_sustained_full(
+        self, tmp_path
+    ):
+        """Site 2: save_block waits on a full queue before dropping.
 
-        Hot cache disabled. Patches the queue's `full()` method to return
-        True so the preflight short-circuits on the first save. No real
-        queue manipulation, no writer-thread race, no risk of crashing the
-        writer with a malformed sentinel.
+        Hot cache disabled. Even if ``full()`` reports saturation, the cold
+        path must still proceed to ``put(timeout=1.0)`` so transient writer
+        bursts get a chance to drain. Only sustained ``queue.Full`` from
+        the put call should count as a drop.
         """
+        import queue as _queue
         from unittest.mock import patch
 
         mgr = PagedSSDCacheManager(
@@ -1185,7 +1290,16 @@ class TestSSDWriteDrops:
             hot_cache_max_bytes=0,  # hot cache disabled → cold-store path
         )
         try:
-            with patch.object(mgr._write_queue, "full", return_value=True):
+            calls: list[float | None] = []
+
+            def full_put(*args, timeout=None, **kwargs):
+                calls.append(timeout)
+                raise _queue.Full
+
+            with (
+                patch.object(mgr._write_queue, "full", return_value=True),
+                patch.object(mgr._write_queue, "put", side_effect=full_put),
+            ):
                 cache_data = self._make_cache_data()
                 ok = mgr.save_block(
                     block_hash=b"cold_preflight_drop_00",
@@ -1196,20 +1310,21 @@ class TestSSDWriteDrops:
                 )
                 assert ok is False
 
+            assert calls == [1.0]
             stats = mgr.get_stats()
             assert stats.ssd_write_drops == 1
             assert stats.errors == 0
-            # Site 2 is a preflight rejection — no index/buffer state was
-            # created, so nothing to assert on cleanup.
         finally:
             mgr.close()
 
     def test_ssd_write_drops_increments_on_cold_store_late_exception(self, tmp_path):
-        """Site 3: save_block put_nowait raises queue.Full after preflight passes.
+        """Site 3: save_block put raises queue.Full after the preflight passes.
 
-        Hot cache disabled. put_nowait is patched to raise queue.Full even
-        though _write_queue.full() reports False — forces the late-exception
-        path inside save_block. Cleanup must remove index + pending hashes.
+        Hot cache disabled. ``put`` is patched to raise queue.Full directly
+        (simulating a sustained writer-backlog saturation that materializes
+        after the preflight check). Cleanup must remove index + pending
+        hashes. This covers the race where the queue fills between the
+        earlier hot/pending-buffer lookup and the put.
         """
         import queue as _queue
         from unittest.mock import patch
@@ -1223,7 +1338,7 @@ class TestSSDWriteDrops:
             cache_data = self._make_cache_data()
             block_hash = b"cold_late_drop_00"
             with patch.object(
-                mgr._write_queue, "put_nowait", side_effect=_queue.Full
+                mgr._write_queue, "put", side_effect=_queue.Full
             ):
                 ok = mgr.save_block(
                     block_hash=block_hash,

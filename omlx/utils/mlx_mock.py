@@ -718,6 +718,12 @@ class MockMLXLoader(importlib.abc.Loader):
                     parts.append({"type": "text", "text": text})
                 parts.extend({"type": "image"} for _ in range(num_images))
                 return {"role": role, "content": parts}
+            if role == "user" and not skip_audio_token and num_audios > 0:
+                parts = []
+                if text:
+                    parts.append({"type": "text", "text": text})
+                parts.extend({"type": "audio"} for _ in range(num_audios))
+                return {"role": role, "content": parts}
             return {"role": role, "content": text if isinstance(text, str) else str(text)}
 
         def _infer_tool_parser(template):
@@ -861,6 +867,15 @@ class MockMLXLoader(importlib.abc.Loader):
                 def size(self):
                     return self.keys.shape[2] if self.keys is not None else 0
 
+                def merge(self, caches):
+                    """Merge singleton caches into a batched cache. Returns self for mock."""
+                    return self
+
+                def extend(self, *a, **k):
+                    raise NotImplementedError(
+                        f"{type(self).__name__}.extend requires batched conversion first"
+                    )
+
                 @classmethod
                 def from_state(cls, state, meta_state=""):
                     inst = cls()
@@ -975,6 +990,20 @@ class MockMLXLoader(importlib.abc.Loader):
                 @state.setter
                 def state(self, s):
                     self.cache = list(s) if s is not None else []
+
+                def __setitem__(self, idx, value):
+                    idx = int(idx)
+                    while len(self.cache) <= idx:
+                        self.cache.append(None)
+                    self.cache[idx] = value
+
+                def __getitem__(self, idx):
+                    return self.cache[int(idx)]
+
+                def extend(self, *a, **k):
+                    raise NotImplementedError(
+                        f"{type(self).__name__}.extend requires batched conversion first"
+                    )
 
             class PoolingCache(_BaseCache):
                 def __init__(self, ratio=1, *a, **k):
@@ -1137,6 +1166,15 @@ class MockMLXLoader(importlib.abc.Loader):
                 "input_ids": loader.array([[1]]),
                 "pixel_values": None,
             }
+
+            def _load_audio(path_or_bytes, sample_rate=16000):
+                if isinstance(path_or_bytes, bytes):
+                    return loader.array(np.zeros(16000, dtype=np.float32))
+                if hasattr(path_or_bytes, "read"):
+                    return loader.array(np.zeros(16000, dtype=np.float32))
+                return loader.array(np.zeros(16000, dtype=np.float32))
+
+            m.load_audio = _load_audio
             sys.modules[spec.name] = m
             return m
 
@@ -1145,6 +1183,23 @@ class MockMLXLoader(importlib.abc.Loader):
             m.extract_text_from_content = _extract_text_from_content
             m.get_message_json = _get_message_json
             m.apply_chat_template = lambda *a, **k: a[0] if a else []
+            sys.modules[spec.name] = m
+            return m
+
+        if spec.name == "mlx.tokenizers._utils":
+            m = MockModule(spec.name)
+
+            def _is_spm_decoder(decoder):
+                if isinstance(decoder, dict):
+                    return decoder.get("type", "") == "Sentencepiece"
+                decoder_type = getattr(decoder, "type", "")
+                return decoder_type == "Sentencepiece"
+
+            def _is_spm_decoder_no_space(decoder):
+                return _is_spm_decoder(decoder)
+
+            m._is_spm_decoder = _is_spm_decoder
+            m._is_spm_decoder_no_space = _is_spm_decoder_no_space
             sys.modules[spec.name] = m
             return m
 
@@ -1180,6 +1235,8 @@ class MockMLXLoader(importlib.abc.Loader):
             class PromptProcessingBatch:
                 def __init__(self, *a, **k):
                     self.uids = [0]
+                    self.model = None
+                    self.prompt_cache = []
 
                 def prompt(self, *a, **k):
                     return None
@@ -1192,6 +1249,9 @@ class MockMLXLoader(importlib.abc.Loader):
 
                 def filter(self, *a, **k):
                     pass
+
+                def split(self, *a, **k):
+                    return self
 
                 def extend(self, *a, **k):
                     pass
@@ -1226,6 +1286,69 @@ class MockMLXLoader(importlib.abc.Loader):
             if not hasattr(loader, "_generation_stream"):
                 loader._generation_stream = type("Stream", (), {})()
             m.generation_stream = loader._generation_stream
+            sys.modules[spec.name] = m
+            return m
+
+        if spec.name == "mlx_lm.tokenizer_utils":
+            m = MockModule(spec.name)
+
+            class NaiveStreamingDetokenizer:
+                def __init__(self, tokenizer):
+                    self.tokenizer = tokenizer
+                    self._tokens = []
+                    self.last_subword_token = None
+                    self.last_segment = ""
+                    self.text = ""
+
+                def add_token(self, token):
+                    self._tokens.append(token)
+                    self.last_subword_token = token
+
+                def reset(self):
+                    self._tokens = []
+                    self.last_subword_token = None
+                    self.last_segment = ""
+                    self.text = ""
+
+                def finalize(self):
+                    result = "".join(chr(t) if t < 128 else "?" for t in self._tokens)
+                    self.text = result
+                    self.last_segment = result
+                    return result
+
+                def result(self):
+                    return ""
+
+                def decode(self, tokens):
+                    return "mocked"
+
+            class SPMStreamingDetokenizer(NaiveStreamingDetokenizer):
+                pass
+
+            class BPEStreamingDetokenizer(NaiveStreamingDetokenizer):
+                pass
+
+            def _is_spm_decoder(decoder):
+                if isinstance(decoder, dict):
+                    return decoder.get("type", "") == "Sentencepiece"
+                decoder_type = getattr(decoder, "type", "")
+                return decoder_type == "Sentencepiece"
+
+            def _is_spm_decoder_no_space(decoder):
+                return _is_spm_decoder(decoder)
+
+            def _is_bpe_decoder(decoder):
+                if isinstance(decoder, dict):
+                    return decoder.get("type", "") in ("BPE", "ByteLevel")
+                decoder_type = getattr(decoder, "type", "")
+                return decoder_type in ("BPE", "ByteLevel")
+
+            m.NaiveStreamingDetokenizer = NaiveStreamingDetokenizer
+            m.SPMStreamingDetokenizer = SPMStreamingDetokenizer
+            m.BPEStreamingDetokenizer = BPEStreamingDetokenizer
+            m._is_spm_decoder = _is_spm_decoder
+            m._is_spm_decoder_no_space = _is_spm_decoder_no_space
+            m._is_bpe_decoder = _is_bpe_decoder
             sys.modules[spec.name] = m
             return m
 
@@ -1607,7 +1730,24 @@ class MockMLXLoader(importlib.abc.Loader):
 
 
 class MockMLXFinder(importlib.abc.MetaPathFinder):
+    _dflash_mlx_checked = False
+    _dflash_mlx_available = False
+
     def find_spec(self, fullname, path, target=None):
+        # Only intercept dflash_mlx if it's actually importable.
+        # On Linux/CI, dflash_mlx requires mlx (macOS-only), so the real
+        # import should fail with ImportError and let tests skip gracefully.
+        if fullname.startswith("dflash_mlx"):
+            if not self._dflash_mlx_checked:
+                self._dflash_mlx_checked = True
+                try:
+                    __import__("dflash_mlx")
+                    self._dflash_mlx_available = True
+                except ImportError:
+                    self._dflash_mlx_available = False
+            if not self._dflash_mlx_available:
+                return None  # let real import machinery handle it
+
         if any(
             fullname == m or fullname.startswith(m + ".")
             for m in [
@@ -1616,7 +1756,6 @@ class MockMLXFinder(importlib.abc.MetaPathFinder):
                 "mlx_vlm",
                 "mlx_embeddings",
                 "openai_harmony",
-                "dflash_mlx",
             ]
         ):
             return importlib.machinery.ModuleSpec(fullname, MockMLXLoader())

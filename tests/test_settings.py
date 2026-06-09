@@ -11,11 +11,14 @@ from unittest.mock import patch
 import pytest
 
 from omlx.settings import (
+    BURST_DECODE_MODES,
+    DEFAULT_BURST_DECODE_MODE,
     AuthSettings,
     CacheSettings,
     ClaudeCodeSettings,
     GlobalSettings,
     HuggingFaceSettings,
+    IntegrationSettings,
     LoggingSettings,
     MCPSettings,
     MemorySettings,
@@ -24,6 +27,7 @@ from omlx.settings import (
     SamplingSettings,
     SchedulerSettings,
     ServerSettings,
+    burst_decode_env,
     get_settings,
     get_ssd_capacity,
     get_system_memory,
@@ -46,6 +50,7 @@ class TestServerSettings:
         assert settings.check_statuskit is False
         assert settings.sse_keepalive_mode == "chunk"
         assert settings.auto_start_on_launch is True
+        assert settings.burst_decode_mode == "balanced"
 
     def test_custom_values(self):
         """Test custom values."""
@@ -78,6 +83,7 @@ class TestServerSettings:
             "check_statuskit": False,
             "sse_keepalive_mode": "chunk",
             "auto_start_on_launch": True,
+            "burst_decode_mode": "balanced",
         }
 
     def test_from_dict_sse_keepalive_mode(self):
@@ -86,6 +92,18 @@ class TestServerSettings:
             settings = ServerSettings.from_dict({"sse_keepalive_mode": mode})
             assert settings.sse_keepalive_mode == mode
             assert settings.to_dict()["sse_keepalive_mode"] == mode
+
+    def test_from_dict_burst_decode_mode(self):
+        """burst_decode_mode round-trips through from_dict / to_dict."""
+        for mode in BURST_DECODE_MODES:
+            settings = ServerSettings.from_dict({"burst_decode_mode": mode})
+            assert settings.burst_decode_mode == mode
+            assert settings.to_dict()["burst_decode_mode"] == mode
+
+    def test_from_dict_burst_decode_mode_default(self):
+        """A settings.json without burst_decode_mode falls back to the default."""
+        settings = ServerSettings.from_dict({})
+        assert settings.burst_decode_mode == DEFAULT_BURST_DECODE_MODE
 
     def test_from_dict_auto_start_on_launch(self):
         """auto_start_on_launch round-trips through from_dict / to_dict."""
@@ -141,6 +159,40 @@ class TestServerSettings:
         assert settings.port == 9000
         assert settings.log_level == "info"  # default
         assert settings.cors_origins == ["http://localhost", "http://127.0.0.1"]  # default
+
+
+class TestBurstDecodeEnv:
+    """Tests for the Burst Decode mode -> OMLX_DECODE_BURST_* env mapping."""
+
+    def test_off_disables_bursting(self):
+        """'off' caps max_steps at 1, which disables bursting in _step_burst."""
+        assert burst_decode_env("off")["OMLX_DECODE_BURST_MAX_STEPS"] == "1"
+
+    def test_levels_set_single_request_budget(self):
+        """light / balanced / aggressive map to the documented budgets."""
+        assert burst_decode_env("light")["OMLX_DECODE_BURST_BUDGET_SINGLE_S"] == "0.05"
+        assert (
+            burst_decode_env("balanced")["OMLX_DECODE_BURST_BUDGET_SINGLE_S"] == "0.1"
+        )
+        assert (
+            burst_decode_env("aggressive")["OMLX_DECODE_BURST_BUDGET_SINGLE_S"] == "0.2"
+        )
+
+    def test_on_levels_keep_burst_enabled(self):
+        """The on-levels keep max_steps above the disable threshold."""
+        for mode in ("light", "balanced", "aggressive"):
+            assert int(burst_decode_env(mode)["OMLX_DECODE_BURST_MAX_STEPS"]) > 1
+
+    def test_unknown_mode_falls_back_to_default(self):
+        """An unknown mode never disables bursting; it uses the default."""
+        assert burst_decode_env("bogus") == burst_decode_env(DEFAULT_BURST_DECODE_MODE)
+
+    def test_keys_match_engine_config_env_vars(self):
+        """The mapping only sets the env vars EngineConfig actually reads."""
+        assert set(burst_decode_env("balanced")) == {
+            "OMLX_DECODE_BURST_MAX_STEPS",
+            "OMLX_DECODE_BURST_BUDGET_SINGLE_S",
+        }
 
 
 class TestModelSettings:
@@ -1011,6 +1063,16 @@ class TestGlobalSettings:
         errors = settings.validate()
         assert errors == []
 
+    def test_validate_context_window_policy(self):
+        """Sampling context policy must be positive when set."""
+        settings = GlobalSettings()
+        settings.sampling.max_context_window_policy = 128000
+        assert settings.validate() == []
+
+        settings.sampling.max_context_window_policy = 0
+        errors = settings.validate()
+        assert any("max_context_window_policy" in e for e in errors)
+
     def test_validate_invalid_port_low(self):
         """Test validation catches port below 1."""
         settings = GlobalSettings()
@@ -1688,7 +1750,12 @@ class TestSamplingSettings:
     def test_defaults(self):
         """Test default values."""
         settings = SamplingSettings()
+        # Fallback default kept at 32768 so existing settings.json
+        # files carrying the historical default keep working unchanged
+        # after upgrade. ``max_context_window_policy`` is the explicit
+        # operator policy cap (None by default).
         assert settings.max_context_window == 32768
+        assert settings.max_context_window_policy is None
         assert settings.max_tokens == 32768
         assert settings.temperature == 1.0
         assert settings.top_p == 0.95
@@ -1719,7 +1786,23 @@ class TestSamplingSettings:
         """Test from_dict uses defaults for missing fields."""
         settings = SamplingSettings.from_dict({})
         assert settings.max_context_window == 32768
+        assert settings.max_context_window_policy is None
         assert settings.repetition_penalty == 1.0
+
+    def test_policy_field_round_trip(self):
+        """``max_context_window_policy`` must serialize and
+        deserialize without losing its ``None`` semantics."""
+        unset = SamplingSettings.from_dict({})
+        assert unset.max_context_window_policy is None
+        # to_dict preserves None
+        d = unset.to_dict()
+        assert d["max_context_window_policy"] is None
+        # Setting an explicit value round-trips
+        with_policy = SamplingSettings.from_dict(
+            {"max_context_window_policy": 128_000}
+        )
+        assert with_policy.max_context_window_policy == 128_000
+        assert with_policy.to_dict()["max_context_window_policy"] == 128_000
 
 
 class TestClaudeCodeSettings:
@@ -1815,6 +1898,122 @@ class TestClaudeCodeSettings:
         settings = ClaudeCodeSettings.from_dict(data)
         assert settings.mode == "cloud"
         assert settings.opus_model is None
+
+
+class TestIntegrationSettings:
+    """Tests for IntegrationSettings dataclass.
+
+    Upstream ``tests/test_integrations.py::TestIntegrationSettings`` already
+    covers defaults, basic to_dict, and full/empty from_dict. The local
+    tests below add: exact dict-shape pinning (so a future field
+    addition that forgets to_dict raises a loud test failure — see
+    81dc2d5 for the MemorySettings case), partial-dict fallback,
+    explicit-null override semantics, and round-trip identity. Plus
+    upstream's MarkItDown-integration tests merged in below.
+    """
+
+    def test_to_dict_defaults(self):
+        settings = IntegrationSettings()
+        d = settings.to_dict()
+        # Pin only the integration-model surface — MarkItDown additions
+        # are covered by ``test_markitdown_defaults`` separately, so we
+        # check the model fields exactly and leave the rest free to
+        # grow.
+        assert d["codex_model"] is None
+        assert d["opencode_model"] is None
+        assert d["openclaw_model"] is None
+        assert d["hermes_model"] is None
+        assert d["pi_model"] is None
+        assert d["copilot_model"] is None
+        assert d["openclaw_tools_profile"] == "coding"
+
+    def test_to_dict_custom(self):
+        settings = IntegrationSettings(
+            codex_model="qwen-coder-30b",
+            opencode_model="qwen-coder-7b",
+            openclaw_model="qwen-coder-3b",
+            hermes_model="hermes-3-8b",
+            pi_model="qwen-3-4b",
+            copilot_model="qwen-coder-1.5b",
+            openclaw_tools_profile="creative",
+        )
+        d = settings.to_dict()
+        assert d["codex_model"] == "qwen-coder-30b"
+        assert d["opencode_model"] == "qwen-coder-7b"
+        assert d["openclaw_model"] == "qwen-coder-3b"
+        assert d["hermes_model"] == "hermes-3-8b"
+        assert d["pi_model"] == "qwen-3-4b"
+        assert d["copilot_model"] == "qwen-coder-1.5b"
+        assert d["openclaw_tools_profile"] == "creative"
+
+    def test_from_dict_partial(self):
+        """Missing keys fall back to dataclass defaults."""
+        settings = IntegrationSettings.from_dict({"pi_model": "qwen-3-4b"})
+        assert settings.pi_model == "qwen-3-4b"
+        assert settings.codex_model is None
+        assert settings.copilot_model is None
+        assert settings.openclaw_tools_profile == "coding"
+
+    def test_from_dict_explicit_null_overrides_default(self):
+        """Explicit None for a *_model field must be preserved."""
+        settings = IntegrationSettings.from_dict(
+            {"codex_model": None, "pi_model": "x"}
+        )
+        assert settings.codex_model is None
+        assert settings.pi_model == "x"
+
+    def test_round_trip(self):
+        """to_dict → from_dict → to_dict is identity."""
+        original = IntegrationSettings(
+            codex_model="m1",
+            pi_model="m2",
+            openclaw_tools_profile="custom",
+        )
+        round_tripped = IntegrationSettings.from_dict(original.to_dict())
+        assert round_tripped.to_dict() == original.to_dict()
+
+    # --- MarkItDown integration tests merged in from upstream ---
+
+    def test_markitdown_defaults(self):
+        settings = IntegrationSettings()
+        assert settings.markitdown_enabled is True
+        assert settings.markitdown_expose_model is True
+        assert settings.markitdown_max_file_size_mb == 25
+        assert settings.markitdown_max_files_per_request == 5
+        assert settings.markitdown_pdf_processing_engine == "markitdown"
+
+    def test_markitdown_to_dict(self):
+        settings = IntegrationSettings(
+            markitdown_enabled=False,
+            markitdown_expose_model=False,
+            markitdown_max_file_size_mb=10,
+            markitdown_max_files_per_request=2,
+            markitdown_pdf_processing_engine="OCR-Model",
+        )
+        result = settings.to_dict()
+        assert result["markitdown_enabled"] is False
+        assert result["markitdown_expose_model"] is False
+        assert result["markitdown_max_file_size_mb"] == 10
+        assert result["markitdown_max_files_per_request"] == 2
+        assert result["markitdown_pdf_processing_engine"] == "OCR-Model"
+
+    def test_markitdown_from_dict_backward_compat(self):
+        settings = IntegrationSettings.from_dict({})
+        assert settings.markitdown_enabled is True
+        assert settings.markitdown_expose_model is True
+        assert settings.markitdown_max_file_size_mb == 25
+        assert settings.markitdown_max_files_per_request == 5
+        assert settings.markitdown_pdf_processing_engine == "markitdown"
+
+    def test_markitdown_validation(self):
+        settings = GlobalSettings()
+        settings.integrations.markitdown_max_file_size_mb = 0
+        settings.integrations.markitdown_max_files_per_request = 0
+        settings.integrations.markitdown_pdf_processing_engine = ""
+        errors = settings.validate()
+        assert "markitdown_max_file_size_mb must be > 0" in errors
+        assert "markitdown_max_files_per_request must be > 0" in errors
+        assert "markitdown_pdf_processing_engine must not be empty" in errors
 
 
 class TestClaudeCodeValidation:

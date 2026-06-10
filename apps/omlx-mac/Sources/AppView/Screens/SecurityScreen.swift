@@ -8,11 +8,8 @@
 //   • Authentication — `skip_api_key_verification` toggle (no-auth mode)
 //   • Sub Keys — list + create + delete via /admin/api/sub-keys (POST/DELETE)
 //
-// The main key is rendered as a SecureField with an explicit show toggle
-// rather than the always-visible CodeChip — administrators routinely have
-// this screen open over shoulder-surfable displays, and the copy button
-// covers the "stash it into a client config" case without exposing the
-// plaintext.
+// Swift 6 / Xcode 26 removed implicit `Any` conformance to `Decodable` /
+// `Encodable`.  AnyDecodable / AnyEncodable bridge that gap.
 
 import SwiftUI
 import AppKit
@@ -48,7 +45,7 @@ struct SecurityScreen: View {
             .appendingPathComponent("statuskit-prefs.json")
 
         guard let data = try? Data(contentsOf: prefsURL),
-              let dict = try? JSONDecoder().decode([String: Any].self, from: data) else {
+              let dict = try? JSONDecoder().decode([String: AnyDecodable].self, from: data) else {
             return
         }
         // Store in a @State inside StatusKitSection — we use a simple
@@ -593,6 +590,12 @@ private struct StatusKitSection: View {
                     }
             }
         }
+        .task { load() }
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("OMLXStatusKitPrefsLoaded"))) { notification in
+            if let value = notification.object as? Bool {
+                enabled = value
+            }
+        }
 
         if let error = lastError {
             Text(error)
@@ -601,26 +604,20 @@ private struct StatusKitSection: View {
                 .padding(.horizontal, 18)
                 .padding(.top, 8)
         }
-        .task { load() }
-        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("OMLXStatusKitPrefsLoaded"))) { notification in
-            if let value = notification.object as? Bool {
-                enabled = value
-            }
-        }
     }
 
     private func load() {
         guard let data = try? Data(contentsOf: prefsURL),
-              let dict = try? JSONDecoder().decode([String: Any].self, from: data) else {
+              let dict = try? JSONDecoder().decode([String: AnyDecodable].self, from: data) else {
             return
         }
-        enabled = dict["enabled"] as? Bool ?? false
+        enabled = dict["enabled"]?.value as? Bool ?? false
     }
 
     private func save(_ value: Bool) async {
         saving = true
         defer { saving = false }
-        let dict: [String: Any] = ["enabled": value]
+        let dict: [String: AnyEncodable] = ["enabled": AnyEncodable(value)]
         guard let data = try? JSONEncoder().encode(dict) else { return }
         do {
             try data.write(to: prefsURL, options: [.atomic])
@@ -628,5 +625,124 @@ private struct StatusKitSection: View {
         } catch {
             lastError = error.localizedDescription
         }
+    }
+}
+
+// MARK: - AnyDecodable / AnyEncodable (Swift 6 Codable bridge for `Any`)
+
+/// Bridges Swift `Any` to `Decodable`.  Required because Swift 6 removed
+/// the implicit conformance of `Any` to `Decodable`.
+public struct AnyDecodable {
+
+    public let value: Any
+
+    public init(_ value: Any) {
+        self.value = value
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+
+        if container.decodeNil() {
+            self.value = NSNull()
+        } else if let bool = try? container.decode(Bool.self) {
+            self.value = bool
+        } else if let int = try? container.decode(Int.self) {
+            self.value = int
+        } else if let uint = try? container.decode(UInt.self) {
+            self.value = uint
+        } else if let double = try? container.decode(Double.self) {
+            self.value = double
+        } else if let string = try? container.decode(String.self) {
+            self.value = string
+        } else if let array = try? container.decode([AnyDecodable].self) {
+            self.value = array.map(\.value)
+        } else if let dict = try? container.decode([String: AnyDecodable].self) {
+            self.value = dict.mapValues { $0.value }
+        } else {
+            throw DecodingError.dataCorruptedError(
+                in: container,
+                debugDescription: "AnyDecodable cannot decode non-decodable value"
+            )
+        }
+    }
+}
+
+extension AnyDecodable: Decodable, Equatable, CustomStringConvertible {
+    public var description: String { "\(value)" }
+
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        switch (lhs.value, rhs.value) {
+        case let (a as Bool, b as Bool):          a == b
+        case let (a as Int,   b as Int):          a == b
+        case let (a as UInt,  b as UInt):         a == b
+        case let (a as Double,b as Double):       a == b
+        case let (a as String,b as String):       a == b
+        case let (a as [String: AnyDecodable],
+                  b as [String: AnyDecodable]):   a == b
+        case let (a as [AnyDecodable],
+                  b as [AnyDecodable]):           a == b
+        case let (a as [String: Any], b as [String: Any]):
+            NSDictionary(dictionary: a).isEqual(to: b)
+        case let (a as [Any], b as [Any]):
+            NSArray(array: a).isEqual(to: NSArray(array: b))
+        case is NSNull, is NSNull:                true
+        default:                                  false
+        }
+    }
+}
+
+/// Bridges Swift `Any` to `Encodable`.
+public struct AnyEncodable {
+
+    public let value: Any
+
+    public init(_ value: Any) {
+        self.value = value
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+
+        switch value {
+        case let v as NSNull:
+            try container.encodeNil()
+        case let v as Bool:       try container.encode(v)
+        case let v as Int:        try container.encode(v)
+        case let v as Int8:       try container.encode(v)
+        case let v as Int16:      try container.encode(v)
+        case let v as Int32:      try container.encode(v)
+        case let v as Int64:      try container.encode(v)
+        case let v as UInt:       try container.encode(v)
+        case let v as UInt8:      try container.encode(v)
+        case let v as UInt16:     try container.encode(v)
+        case let v as UInt32:     try container.encode(v)
+        case let v as UInt64:     try container.encode(v)
+        case let v as Float:      try container.encode(v)
+        case let v as Double:     try container.encode(v)
+        case let v as String:     try container.encode(v)
+        case let v as [String: Any]:
+            try container.encode(v.mapValues { AnyEncodable($0) }
+                as [String: AnyEncodable])
+        case let v as [Any]:
+            try container.encode(v.map { AnyEncodable($0) }
+                as [AnyEncodable])
+        default:
+            throw EncodingError.invalidValue(
+                value,
+                EncodingError.Context(
+                    codingPath: container.codingPath,
+                    debugDescription: "AnyEncodable cannot encode non-encodable value"
+                )
+            )
+        }
+    }
+}
+
+extension AnyEncodable: Encodable, Equatable, CustomStringConvertible {
+    public var description: String { "\(value)" }
+
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        AnyDecodable(lhs.value) == AnyDecodable(rhs.value)
     }
 }

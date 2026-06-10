@@ -197,7 +197,7 @@ final class AppUpdater {
     private final class DMGDownloadDelegate: NSObject, URLSessionDownloadDelegate {
         let destination: URL
         let onProgress: @Sendable (Int, Int64, Int64) -> Void
-        var continuation: CheckedContinuation<Void, Error>?
+        nonisolated(unsafe) var continuation: CheckedContinuation<Void, Error>?
 
         private let lock = NSLock()
         private var completed = false

@@ -18,7 +18,7 @@ NC='\033[0m' # No Color
 echo -e "${BLUE}=== oMLX isolated build (Tahoe) ===${NC}"
 
 # 1. Check Requirements & Select Python
-echo -e "${GREEN}[1/5] Checking host environment...${NC}"
+echo -e "${GREEN}[1/8] Checking host environment...${NC}"
 
 if [[ "$(uname)" != "Darwin" ]]; then
     echo "Error: This script must be run on macOS."
@@ -39,17 +39,20 @@ else
 fi
 
 # 2. Create temporary venv for the build process
-echo -e "${GREEN}[2/5] Creating build virtual environment (.build_venv)...${NC}"
+echo -e "${GREEN}[2/8] Creating build virtual environment (.build_venv)...${NC}"
 $PYTHON_BIN -m venv .build_venv
 source .build_venv/bin/activate
 
+# Remember repo root before we cd into packaging/
+REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
+
 # 3. Install build-time requirements into the venv
-echo -e "${GREEN}[3/5] Installing build dependencies (venvstacks + audit)...${NC}"
+echo -e "${GREEN}[3/8] Installing build dependencies (venvstacks + audit)...${NC}"
 pip install --quiet --upgrade pip
 pip install --quiet venvstacks setuptools pip-audit
 
 # 4. Security Audit
-echo -e "${GREEN}[4/5] Auditing packages for known vulnerabilities...${NC}"
+echo -e "${GREEN}[4/8] Auditing packages for known vulnerabilities...${NC}"
 # Scan the root project dependencies for security flaws
 if pip-audit --desc on .; then
     echo -e "  ✓ No known vulnerabilities found."
@@ -58,31 +61,36 @@ else
     # Optionally: exit 1 here if you want to block builds with any vulnerability
 fi
 
-# 5. Navigate to packaging directory and run build
+# 5. Navigate to packaging directory and run venvstacks build
 cd packaging
-echo -e "${GREEN}[5/5] Building venvstacks Python layers…${NC}"
+echo -e "${GREEN}[5/8] Building venvstacks Python layers…${NC}"
 # Use the python from our venv
 python build.py --venvstacks-only
 
-# 6. Locate the output
-echo -e "${GREEN}[5/5] Locating generated bundle…${NC}"
-VERSION=$(python -c "import re; print(re.search(r'__version__\s*=\s*\"([^\"]+)\"', open('../omlx/_version.py').read()).group(1))")
-APP_DIR=$(ls -d dist/oMLX.app 2>/dev/null | head -n 1)
+# 6. Build the Swift app bundle (embeds venvstacks layers)
+echo -e "${GREEN}[6/8] Building Swift app bundle…${NC}"
+cd "$REPO_ROOT"
+"$REPO_ROOT/apps/omlx-mac/Scripts/build.sh" swift 2>&1 || {
+    echo -e "${YELLOW}Warning: Swift build failed; venvstacks export is still at packaging/_export/${NC}"
+    exit 1
+}
 
-if [[ -d "$APP_DIR" ]]; then
+# 7. Copy staged app to project root
+echo -e "${GREEN}[7/8] Copying oMLX.app to project root…${NC}"
+VERSION=$(python -c "import re; print(re.search(r'__version__\s*=\s*\"([^\"]+)\"', open('omlx/_version.py').read()).group(1))")
+STAGED_APP="$REPO_ROOT/apps/omlx-mac/build/Stage/oMLX.app"
+
+if [[ -d "$STAGED_APP" ]]; then
+    rm -rf "$REPO_ROOT/oMLX.app"
+    cp -R "$STAGED_APP" "$REPO_ROOT/oMLX.app"
     echo -e "${GREEN}Success!${NC}"
-    echo -e "App created at: ${BLUE}$(pwd)/$APP_DIR${NC}"
-
-    # Copy app to project root
-    echo -e "${GREEN}Copying oMLX.app to project root…${NC}"
-    rm -rf ../oMLX.app
-    cp -R dist/oMLX.app ../oMLX.app
-    echo -e "  ✓ oMLX.app copied to $(cd .. && pwd)/oMLX.app"
-
-    echo ""
-    echo -e "${BLUE}Note: The build environment is located in .build_venv and can be removed after installation.${NC}"
-    echo -e "${BLUE}DMG creation is no longer part of this script — use xcrun productbuild or a dedicated DMG tool.${NC}"
+    echo -e "App created at: ${BLUE}$REPO_ROOT/oMLX.app${NC}"
 else
-    echo "Error: oMLX.app was not found in the dist/ directory."
+    echo -e "${YELLOW}Warning: Staged app not found at $STAGED_APP — venvstacks layers built but Swift app missing.${NC}"
+    echo -e "Check: $REPO_ROOT/apps/omlx-mac/build/Stage/"
     exit 1
 fi
+
+echo ""
+echo -e "${BLUE}Note: The build environment is located in .build_venv and can be removed after installation.${NC}"
+echo -e "${BLUE}DMG creation is no longer part of this script — use xcrun productbuild or a dedicated DMG tool.${NC}"

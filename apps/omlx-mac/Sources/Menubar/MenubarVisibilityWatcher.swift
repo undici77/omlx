@@ -156,10 +156,10 @@ final class MenubarVisibilityWatcher {
             .appendingPathComponent("statuskit-prefs.json")
 
         guard let data = try? Data(contentsOf: prefsURL),
-              let dict = try? JSONDecoder().decode([String: Any].self, from: data) else {
+              let dict = try? JSONDecoder().decode([String: AnyDecodable].self, from: data) else {
             return false
         }
-        return dict["enabled"] as? Bool ?? false
+        return dict["enabled"]?.value as? Bool ?? false
     }
 
     private func runAutofixFlow() {
@@ -555,7 +555,8 @@ final class MenubarVisibilityWatcher {
         let bundleIDs = [
             "com.surteesstudios.Bartender",
             "com.jordanbaird.Ice",
-            "com.jordanbaird.ice"
+            "com.jordanbaird.ice",
+            "com.stonerl.Thaw"
         ]
         return bundleIDs.contains { bundleID in
             !NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).isEmpty

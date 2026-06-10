@@ -640,6 +640,15 @@ def build_venvstacks():
     """Build venvstacks layers."""
     print("\n[1/4] Building venvstacks layers...")
 
+    # Remove stale _build/ from prior runs. Packages installed via direct
+    # wheel extraction (mlx-audio, mlx-lm, etc.) don't create RECORD files,
+    # so venvstacks' pip install --upgrade aborts with uninstall-no-record-
+    # file when it tries to update the existing environment.  A clean slate
+    # avoids the problem entirely — lock recreates _build/ from scratch.
+    if BUILD_DIR.exists():
+        print("\n  Pre-flight: removing stale _build/ (no-RECORD packages)…")
+        shutil.rmtree(BUILD_DIR)
+
     venvstacks_cmd = _venvstacks_driver()
     print(f"  Using venvstacks driver: {' '.join(venvstacks_cmd)}")
 

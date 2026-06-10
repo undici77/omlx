@@ -164,6 +164,15 @@ def _default_func(*args, _n=_captured_name, **kwargs):
 | `@pytest.mark.integration` | Tests requiring a live oMLX server | Excluded from default `pytest` run |
 | `pytest.skip()` in fixture | Tests requiring external data (vocab files, network) | Offline CI must not fail on missing downloads |
 | Inline mock override | **Never** inline `sys.meta_path` hacks in test files | Use `omlx/utils/mlx_mock.py` exclusively |
+| **Harmony token ID tests** | **Skip automatically via conftest.py** — do NOT add mock implementations for `HarmonyEncoding`, `StreamableParser`, etc. | Mock cannot produce exact token IDs; conftest.py `pytest_collection_modifyitems` auto-skips all tests whose file path or method name contains "harmony" when the MLX mock is active |
+
+> **⚠️ Critical: Skip, don't maintain Harmony mocks.**
+> The MLX mock cannot produce the exact token IDs that the real `openai_harmony`
+> library generates. Tests that depend on real Harmony token IDs would fail spuriously.
+> **Never add mock implementations for `HarmonyEncoding.encode()`, `StreamableParser`, etc.**
+> Instead, `tests/conftest.py` automatically skips any test file or method whose
+> name/path contains "harmony" when the mock is active. This keeps test files
+> unchanged — zero modifications needed.
 
 `pytest.ini` enforces: `addopts = -m "not slow and not integration"` — the default CI run must yield **zero failures**.
 

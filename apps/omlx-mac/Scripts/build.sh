@@ -283,6 +283,14 @@ log "Bundle version: $APP_VERSION (build $BUILD_NUMBER) — from omlx/_version.p
 log "Building oMLX ($CONFIG)…"
 mkdir -p "$BUILD_DIR"
 
+# Clean stale build artefacts (module cache, derived data) so new source
+# files are picked up reliably.  xcodebuild -derivedDataPath points at
+# $BUILD_DIR, so a full rm -rf wipes the whole graph including the
+# XCBuildData description cache that can outlive the project file.
+log "Cleaning old build artefacts…"
+rm -rf "$BUILD_DIR"
+mkdir -p "$BUILD_DIR"
+
 log "Resolving Swift package dependencies…"
 xcodebuild -resolvePackageDependencies \
     -project "$PROJECT_DIR/oMLX.xcodeproj" \

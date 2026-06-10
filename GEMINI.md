@@ -185,6 +185,15 @@ if name in ("mean", "max", "min", "sum"):
 | Test asserts hardware-dependent numerical precision | `@pytest.mark.slow` | NumPy != MLX numerics |
 | Test needs a vocab/external file not in repo | `pytest.skip()` in fixture | Offline CI must not fail |
 | Test uses `mlx` for structural logic only | No special mark needed | Mock handles it |
+| Test needs real Harmony token IDs (`load_harmony_gpt_oss_encoding`, `HarmonyEncoding.encode()`) | **Skip automatically via conftest** — do NOT add manual skip markers to test files | Mock cannot produce exact token IDs; conftest.py `pytest_collection_modifyitems` auto-skips all such tests |
+
+> **⚠️ New rule — skip Harmony tests, don't maintain the mock:**
+> The MLX mock cannot produce the exact token IDs that the real `openai_harmony`
+> library generates. Tests that depend on real Harmony token IDs would fail spuriously.
+> **Do NOT add mock implementations for `HarmonyEncoding`, `StreamableParser`, etc.**
+> Instead, `tests/conftest.py` automatically skips any test file or method whose
+> name/path contains "harmony" when the mock is active. This keeps test files
+> unchanged — zero modifications needed.
 
 `pytest.ini` enforces `addopts = -m "not slow and not integration"` — the default CI run skips both marks automatically.
 

@@ -7,6 +7,7 @@ import math
 import sys
 import types
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
@@ -569,6 +570,21 @@ class MockMLXLoader(importlib.abc.Loader):
                         self.__mock_items[name] = mod
                         return mod
 
+                    # --- openai_harmony specific classes (before generic uppercase catch-all) ---
+                    if self.__name__ == "openai_harmony":
+                        if name == "HarmonyEncoding":
+                            self.__mock_items[name] = _MockHarmonyEncoding
+                            return self.__mock_items[name]
+                        if name == "StreamableParser":
+                            self.__mock_items[name] = _MockStreamableParser
+                            return self.__mock_items[name]
+                        if name == "Role":
+                            self.__mock_items[name] = _MockRole
+                            return self.__mock_items[name]
+                        if name == "HarmonyMessage":
+                            self.__mock_items[name] = _MockHarmonyMessage
+                            return self.__mock_items[name]
+
                     if name and name[0].isupper():
                         class MockClass:
                             def __init__(self, *a, **k):
@@ -653,6 +669,547 @@ class MockMLXLoader(importlib.abc.Loader):
                         _captured_name = name
 
                         def _default_func(*args, _n=_captured_name, **kwargs):
+                            # --- mlx.core arithmetic helpers ---
+                            if _n == "floor":
+                                arr = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                return loader.array(np.floor(arr))
+                            if _n == "log":
+                                arr = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                return loader.array(np.log(arr))
+                            if _n == "log2":
+                                arr = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                return loader.array(np.log2(arr))
+                            if _n == "sqrt":
+                                arr = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                return loader.array(np.sqrt(arr))
+                            if _n == "square":
+                                arr = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                return loader.array(arr ** 2)
+                            if _n == "exp":
+                                arr = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                return loader.array(np.exp(arr))
+                            if _n == "sigmoid":
+                                arr = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                return loader.array(1.0 / (1.0 + np.exp(-arr)))
+                            if _n == "tanh":
+                                arr = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                return loader.array(np.tanh(arr))
+                            if _n == "abs":
+                                arr = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                return loader.array(np.abs(arr))
+                            if _n == "sign":
+                                arr = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                return loader.array(np.sign(arr).astype(np.float32))
+                            if _n == "sin":
+                                arr = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                return loader.array(np.sin(arr))
+                            if _n == "cos":
+                                arr = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                return loader.array(np.cos(arr))
+                            if _n == "reciprocal":
+                                arr = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                return loader.array(1.0 / arr)
+                            if _n == "negative":
+                                arr = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                return loader.array(-arr)
+                            if _n == "round":
+                                arr = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                return loader.array(np.round(arr))
+                            if _n == "ceil":
+                                arr = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                return loader.array(np.ceil(arr))
+                            if _n == "trunc":
+                                arr = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                return loader.array(np.trunc(arr))
+                            if _n == "isinf":
+                                arr = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                return loader.array(np.isinf(arr))
+                            if _n == "isnan":
+                                arr = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                return loader.array(np.isnan(arr))
+                            if _n == "greater":
+                                a = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                b = args[1]._data if hasattr(args[1], "_data") else np.asarray(args[1])
+                                return loader.array(a > b)
+                            if _n == "less":
+                                a = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                b = args[1]._data if hasattr(args[1], "_data") else np.asarray(args[1])
+                                return loader.array(a < b)
+                            if _n == "equal":
+                                a = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                b = args[1]._data if hasattr(args[1], "_data") else np.asarray(args[1])
+                                return loader.array(a == b)
+                            if _n == "greater_equal":
+                                a = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                b = args[1]._data if hasattr(args[1], "_data") else np.asarray(args[1])
+                                return loader.array(a >= b)
+                            if _n == "less_equal":
+                                a = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                b = args[1]._data if hasattr(args[1], "_data") else np.asarray(args[1])
+                                return loader.array(a <= b)
+                            if _n == "not_equal":
+                                a = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                b = args[1]._data if hasattr(args[1], "_data") else np.asarray(args[1])
+                                return loader.array(a != b)
+                            if _n == "logical_and":
+                                a = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                b = args[1]._data if hasattr(args[1], "_data") else np.asarray(args[1])
+                                return loader.array(np.logical_and(a, b))
+                            if _n == "logical_or":
+                                a = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                b = args[1]._data if hasattr(args[1], "_data") else np.asarray(args[1])
+                                return loader.array(np.logical_or(a, b))
+                            if _n == "logical_not":
+                                arr = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                return loader.array(np.logical_not(arr))
+                            if _n == "maximum":
+                                a = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                b = args[1]._data if hasattr(args[1], "_data") else np.asarray(args[1])
+                                return loader.array(np.maximum(a, b))
+                            if _n == "minimum":
+                                a = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                b = args[1]._data if hasattr(args[1], "_data") else np.asarray(args[1])
+                                return loader.array(np.minimum(a, b))
+                            if _n == "add":
+                                a = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                b = args[1]._data if hasattr(args[1], "_data") else np.asarray(args[1])
+                                return loader.array(a + b)
+                            if _n == "subtract":
+                                a = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                b = args[1]._data if hasattr(args[1], "_data") else np.asarray(args[1])
+                                return loader.array(a - b)
+                            if _n == "multiply":
+                                a = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                b = args[1]._data if hasattr(args[1], "_data") else np.asarray(args[1])
+                                return loader.array(a * b)
+                            if _n == "divide":
+                                a = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                b = args[1]._data if hasattr(args[1], "_data") else np.asarray(args[1])
+                                return loader.array(a / b)
+                            if _n == "power":
+                                a = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                b = args[1]._data if hasattr(args[1], "_data") else np.asarray(args[1])
+                                return loader.array(a ** b)
+                            if _n == "remainder":
+                                a = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                b = args[1]._data if hasattr(args[1], "_data") else np.asarray(args[1])
+                                return loader.array(a % b)
+                            if _n == "matmul":
+                                a = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                b = args[1]._data if hasattr(args[1], "_data") else np.asarray(args[1])
+                                return loader.array(np.matmul(a, b))
+                            if _n == "stack":
+                                arrays = [a._data if hasattr(a, "_data") else np.asarray(a) for a in args]
+                                axis = kwargs.get("axis", 0)
+                                return loader.array(np.stack(arrays, axis=axis))
+                            if _n == "concatenate":
+                                arrays = [a._data if hasattr(a, "_data") else np.asarray(a) for a in args]
+                                axis = kwargs.get("axis", 0)
+                                return loader.array(np.concatenate(arrays, axis=axis))
+                            if _n == "split":
+                                arr = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                indices_or_sections = args[1] if len(args) > 1 else kwargs.get("indices_or_sections", 1)
+                                axis = kwargs.get("axis", 0)
+                                return [loader.array(s) for s in np.split(arr, indices_or_sections, axis=axis)]
+                            if _n == "argmax":
+                                arr = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                axis = kwargs.get("axis", None)
+                                return loader.array(np.argmax(arr, axis=axis))
+                            if _n == "argmin":
+                                arr = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                axis = kwargs.get("axis", None)
+                                return loader.array(np.argmin(arr, axis=axis))
+                            if _n == "softmax":
+                                arr = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                axis = kwargs.get("axis", -1)
+                                exp_arr = np.exp(arr - np.max(arr, axis=axis, keepdims=True))
+                                return loader.array(exp_arr / exp_arr.sum(axis=axis, keepdims=True))
+                            if _n == "log_softmax":
+                                arr = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                axis = kwargs.get("axis", -1)
+                                max_arr = np.max(arr, axis=axis, keepdims=True)
+                                exp_arr = np.exp(arr - max_arr)
+                                return loader.array(arr - max_arr - np.log(exp_arr.sum(axis=axis, keepdims=True)))
+                            if _n == "softmax_with_temperature":
+                                arr = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                temperature = args[1] if len(args) > 1 else kwargs.get("temperature", 1.0)
+                                axis = kwargs.get("axis", -1)
+                                arr = arr / temperature
+                                exp_arr = np.exp(arr - np.max(arr, axis=axis, keepdims=True))
+                                return loader.array(exp_arr / exp_arr.sum(axis=axis, keepdims=True))
+                            if _n == "topk":
+                                arr = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                k = args[1] if len(args) > 1 else kwargs.get("k", 1)
+                                axis = kwargs.get("axis", -1)
+                                indices = np.argpartition(arr, -k, axis=axis)[:, -k:] if arr.ndim > 1 else np.argpartition(arr, -k)[-k:]
+                                sorted_idx = np.argsort(arr.take(indices, axis=axis), axis=axis)[..., ::-1]
+                                values = np.take_along_axis(arr, sorted_idx, axis=axis)
+                                indices = np.take_along_axis(indices, sorted_idx, axis=axis)
+                                return loader.array(values), loader.array(indices)
+                            if _n == "is_floating_point":
+                                arr = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                return np.issubdtype(arr.dtype, np.floating)
+                            if _n == "broadcast_to":
+                                arr = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                shape = args[1] if len(args) > 1 else kwargs.get("shape", arr.shape)
+                                return loader.array(np.broadcast_to(arr, shape))
+                            if _n == "expand_dims":
+                                arr = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                axis = args[1] if len(args) > 1 else kwargs.get("axis", 0)
+                                return loader.array(np.expand_dims(arr, axis=axis))
+                            if _n == "squeeze":
+                                arr = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                axis = args[1] if len(args) > 1 else kwargs.get("axis", None)
+                                return loader.array(np.squeeze(arr, axis=axis))
+                            if _n == "slice":
+                                arr = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                starts = args[1] if len(args) > 1 else kwargs.get("starts", [0])
+                                ends = args[2] if len(args) > 2 else kwargs.get("ends", arr.shape)
+                                strides = args[3] if len(args) > 3 else kwargs.get("strides", [1])
+                                if not isinstance(starts, (list, tuple)):
+                                    starts = [starts]
+                                if not isinstance(ends, (list, tuple)):
+                                    ends = [ends]
+                                if not isinstance(strides, (list, tuple)):
+                                    strides = [strides]
+                                slices = [slice(s, e, st) for s, e, st in zip(starts, ends, strides)]
+                                return loader.array(arr[tuple(slices)])
+                            if _n == "full":
+                                shape = args[0] if args else kwargs.get("shape", ())
+                                fill_value = args[1] if len(args) > 1 else kwargs.get("fill_value", 0)
+                                dtype = kwargs.get("dtype", None)
+                                return loader.array(np.full(shape, fill_value, dtype=dtype))
+                            if _n == "zeros":
+                                shape = args[0] if args else kwargs.get("shape", ())
+                                dtype = kwargs.get("dtype", None)
+                                return loader.array(np.zeros(shape, dtype=dtype))
+                            if _n == "ones":
+                                shape = args[0] if args else kwargs.get("shape", ())
+                                dtype = kwargs.get("dtype", None)
+                                return loader.array(np.ones(shape, dtype=dtype))
+                            if _n == "arange":
+                                stop = args[0] if len(args) > 0 else kwargs.get("stop", 0)
+                                start = args[1] if len(args) > 1 else kwargs.get("start", 0)
+                                step = args[2] if len(args) > 2 else kwargs.get("step", 1)
+                                return loader.array(np.arange(start, stop, step))
+                            if _n == "linspace":
+                                start = args[0] if len(args) > 0 else kwargs.get("start", 0)
+                                stop = args[1] if len(args) > 1 else kwargs.get("stop", 1)
+                                num = args[2] if len(args) > 2 else kwargs.get("num", 50)
+                                return loader.array(np.linspace(start, stop, num))
+                            if _n == "eye":
+                                n = args[0] if len(args) > 0 else kwargs.get("n", 1)
+                                m = args[1] if len(args) > 1 else kwargs.get("m", n)
+                                return loader.array(np.eye(n, m))
+                            if _n == "random_uniform":
+                                shape = args[0] if len(args) > 0 else kwargs.get("shape", ())
+                                low = kwargs.get("low", 0.0)
+                                high = kwargs.get("high", 1.0)
+                                return loader.array(np.random.uniform(low, high, shape))
+                            if _n == "random_normal":
+                                shape = args[0] if len(args) > 0 else kwargs.get("shape", ())
+                                mean = kwargs.get("mean", 0.0)
+                                std = kwargs.get("std", 1.0)
+                                return loader.array(np.random.normal(mean, std, shape))
+                            if _n == "random_bernoulli":
+                                shape = args[0] if len(args) > 0 else kwargs.get("shape", ())
+                                p = kwargs.get("p", 0.5)
+                                return loader.array(np.random.binomial(1, p, shape))
+                            if _n == "random_categorical":
+                                shape = args[0] if len(args) > 0 else kwargs.get("shape", ())
+                                logits = args[1] if len(args) > 1 else kwargs.get("logits", None)
+                                if logits is not None:
+                                    arr = logits._data if hasattr(logits, "_data") else np.asarray(logits)
+                                    probs = np.exp(arr - np.max(arr))
+                                    probs = probs / probs.sum()
+                                else:
+                                    probs = None
+                                return loader.array(np.random.choice(np.prod(shape) if shape else 1, p=probs))
+                            if _n == "random_choice":
+                                shape = args[0] if len(args) > 0 else kwargs.get("shape", ())
+                                high = args[1] if len(args) > 1 else kwargs.get("high", None)
+                                if high is not None:
+                                    low = args[2] if len(args) > 2 else kwargs.get("low", 0)
+                                    return loader.array(np.random.randint(low, high, shape))
+                                return loader.array(np.random.choice(high if isinstance(high, (list, np.ndarray)) else shape[0] if shape else 1, size=shape))
+                            if _n == "random_permutation":
+                                x = args[0] if len(args) > 0 else kwargs.get("x", None)
+                                if x is not None:
+                                    arr = x._data if hasattr(x, "_data") else np.asarray(x)
+                                    return loader.array(np.random.permutation(arr))
+                                n = args[0] if len(args) > 0 else kwargs.get("n", 10)
+                                return loader.array(np.random.permutation(n))
+                            if _n == "random_gamma":
+                                shape = args[0] if len(args) > 0 else kwargs.get("shape", ())
+                                alpha = args[1] if len(args) > 1 else kwargs.get("alpha", 1.0)
+                                beta = args[2] if len(args) > 2 else kwargs.get("beta", 1.0)
+                                return loader.array(np.random.gamma(alpha, beta, shape))
+                            if _n == "all":
+                                arr = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                axis = kwargs.get("axis", None)
+                                keepdims = kwargs.get("keepdims", False)
+                                return loader.array(np.all(arr, axis=axis, keepdims=keepdims))
+                            if _n == "any":
+                                arr = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                axis = kwargs.get("axis", None)
+                                keepdims = kwargs.get("keepdims", False)
+                                return loader.array(np.any(arr, axis=axis, keepdims=keepdims))
+                            if _n == "sum":
+                                arr = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                axis = kwargs.get("axis", None)
+                                keepdims = kwargs.get("keepdims", False)
+                                return loader.array(np.sum(arr, axis=axis, keepdims=keepdims))
+                            if _n == "mean":
+                                arr = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                axis = kwargs.get("axis", None)
+                                keepdims = kwargs.get("keepdims", False)
+                                return loader.array(np.mean(arr, axis=axis, keepdims=keepdims))
+                            if _n == "std":
+                                arr = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                axis = kwargs.get("axis", None)
+                                keepdims = kwargs.get("keepdims", False)
+                                return loader.array(np.std(arr, axis=axis, keepdims=keepdims))
+                            if _n == "var":
+                                arr = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                axis = kwargs.get("axis", None)
+                                keepdims = kwargs.get("keepdims", False)
+                                return loader.array(np.var(arr, axis=axis, keepdims=keepdims))
+                            if _n == "max":
+                                arr = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                axis = kwargs.get("axis", None)
+                                keepdims = kwargs.get("keepdims", False)
+                                return loader.array(np.max(arr, axis=axis, keepdims=keepdims))
+                            if _n == "min":
+                                arr = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                axis = kwargs.get("axis", None)
+                                keepdims = kwargs.get("keepdims", False)
+                                return loader.array(np.min(arr, axis=axis, keepdims=keepdims))
+                            if _n == "prod":
+                                arr = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                axis = kwargs.get("axis", None)
+                                keepdims = kwargs.get("keepdims", False)
+                                return loader.array(np.prod(arr, axis=axis, keepdims=keepdims))
+                            if _n == "cumsum":
+                                arr = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                axis = kwargs.get("axis", None)
+                                return loader.array(np.cumsum(arr, axis=axis))
+                            if _n == "cumprod":
+                                arr = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                axis = kwargs.get("axis", None)
+                                return loader.array(np.cumprod(arr, axis=axis))
+                            if _n == "clip":
+                                arr = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                a_min = args[1] if len(args) > 1 else kwargs.get("a_min", None)
+                                a_max = args[2] if len(args) > 2 else kwargs.get("a_max", None)
+                                return loader.array(np.clip(arr, a_min, a_max))
+                            if _n == "where":
+                                condition = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                x = args[1]._data if hasattr(args[1], "_data") else np.asarray(args[1]) if len(args) > 1 else None
+                                y = args[2]._data if hasattr(args[2], "_data") else np.asarray(args[2]) if len(args) > 2 else None
+                                if x is not None and y is not None:
+                                    return loader.array(np.where(condition, x, y))
+                                return loader.array(np.where(condition))
+                            if _n == "nonzero":
+                                arr = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                return [loader.array(idx) for idx in np.nonzero(arr)]
+                            if _n == "unique":
+                                arr = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                return loader.array(np.unique(arr))
+                            if _n == "unique_counts":
+                                arr = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                values, counts = np.unique(arr, return_counts=True)
+                                return loader.array(values), loader.array(counts)
+                            if _n == "unique_inverse":
+                                arr = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                values, inverse = np.unique(arr, return_inverse=True)
+                                return loader.array(values), loader.array(inverse)
+                            if _n == "bincount":
+                                arr = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                weights = args[1]._data if len(args) > 1 and hasattr(args[1], "_data") else args[1] if len(args) > 1 else None
+                                minlength = kwargs.get("minlength", 0)
+                                if weights is not None:
+                                    return loader.array(np.bincount(arr.astype(int), weights=weights, minlength=minlength))
+                                return loader.array(np.bincount(arr.astype(int), minlength=minlength))
+                            if _n == "histogram":
+                                arr = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                bins = args[1] if len(args) > 1 else kwargs.get("bins", 10)
+                                counts, edges = np.histogram(arr, bins=bins)
+                                return loader.array(counts), loader.array(edges)
+                            if _n == "convolve":
+                                arr = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                kernel = args[1]._data if len(args) > 1 and hasattr(args[1], "_data") else np.asarray(args[1])
+                                mode = kwargs.get("mode", "full")
+                                return loader.array(np.convolve(arr, kernel, mode=mode))
+                            if _n == "pad":
+                                arr = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                pad_width = args[1] if len(args) > 1 else kwargs.get("pad_width", 0)
+                                constant_values = kwargs.get("constant_values", 0)
+                                return loader.array(np.pad(arr, pad_width, constant_values=constant_values))
+                            if _n == "flip":
+                                arr = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                axis = args[1] if len(args) > 1 else kwargs.get("axis", None)
+                                return loader.array(np.flip(arr, axis=axis))
+                            if _n == "roll":
+                                arr = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                shift = args[1] if len(args) > 1 else kwargs.get("shift", 1)
+                                axis = args[2] if len(args) > 2 else kwargs.get("axis", None)
+                                return loader.array(np.roll(arr, shift, axis=axis))
+                            if _n == "swapaxes":
+                                arr = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                axis1 = args[1] if len(args) > 1 else kwargs.get("axis1", 0)
+                                axis2 = args[2] if len(args) > 2 else kwargs.get("axis2", 1)
+                                return loader.array(np.swapaxes(arr, axis1, axis2))
+                            if _n == "transpose":
+                                arr = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                axes = args[1] if len(args) > 1 else kwargs.get("axes", None)
+                                return loader.array(np.transpose(arr, axes))
+                            if _n == "repeat":
+                                arr = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                repeats = args[1] if len(args) > 1 else kwargs.get("repeats", 1)
+                                axis = args[2] if len(args) > 2 else kwargs.get("axis", None)
+                                return loader.array(np.repeat(arr, repeats, axis=axis))
+                            if _n == "tile":
+                                arr = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                reps = args[1] if len(args) > 1 else kwargs.get("reps", 1)
+                                return loader.array(np.tile(arr, reps))
+                            if _n == "take":
+                                arr = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                indices = args[1]._data if len(args) > 1 and hasattr(args[1], "_data") else np.asarray(args[1])
+                                axis = kwargs.get("axis", None)
+                                return loader.array(np.take(arr, indices.astype(int), axis=axis))
+                            if _n == "take_along_axis":
+                                arr = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                indices = args[1]._data if len(args) > 1 and hasattr(args[1], "_data") else np.asarray(args[1])
+                                axis = kwargs.get("axis", 0)
+                                return loader.array(np.take_along_axis(arr, indices, axis=axis))
+                            if _n == "moveaxis":
+                                arr = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                source = args[1] if len(args) > 1 else kwargs.get("source", 0)
+                                destination = args[2] if len(args) > 2 else kwargs.get("destination", 0)
+                                return loader.array(np.moveaxis(arr, source, destination))
+                            if _n == "broadcast_arrays":
+                                arrays = [a._data if hasattr(a, "_data") else np.asarray(a) for a in args]
+                                result = np.broadcast_arrays(*arrays)
+                                return [loader.array(r) for r in result]
+                            if _n == "asarray":
+                                data = args[0]
+                                dtype = kwargs.get("dtype", None)
+                                return loader.array(data, dtype=dtype)
+                            if _n == "asarray_like":
+                                data = args[0]
+                                like = args[1] if len(args) > 1 else kwargs.get("like", None)
+                                dtype = kwargs.get("dtype", like.dtype if hasattr(like, "dtype") else None)
+                                return loader.array(data, dtype=dtype)
+                            if _n == "astype":
+                                arr = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                dtype = args[1] if len(args) > 1 else kwargs.get("dtype", None)
+                                mapped = _map_dtype(dtype) if dtype else None
+                                return loader.array(arr, dtype=mapped)
+                            if _n == "astype_like":
+                                arr = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                like = args[1] if len(args) > 1 else kwargs.get("like", None)
+                                dtype = like.dtype if hasattr(like, "dtype") else None
+                                return loader.array(arr, dtype=dtype)
+                            if _n == "real":
+                                arr = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                return loader.array(np.real(arr))
+                            if _n == "imag":
+                                arr = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                return loader.array(np.imag(arr))
+                            if _n == "angle":
+                                arr = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                return loader.array(np.angle(arr))
+                            if _n == "conj":
+                                arr = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                return loader.array(np.conj(arr))
+                            if _n == "conjugate":
+                                arr = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                return loader.array(np.conjugate(arr))
+                            if _n == "real_if_close":
+                                arr = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                return loader.array(arr.real if np.iscomplexobj(arr) else arr)
+                            if _n == "disp":
+                                if args:
+                                    print(args[0])
+                                return None
+                            if _n == "squeeze_like":
+                                arr = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                like = args[1] if len(args) > 1 else kwargs.get("like", None)
+                                return loader.array(np.squeeze(arr))
+                            if _n == "result_type":
+                                return "float32"
+                            if _n == "promote_types":
+                                return "float32"
+                            if _n == "can_cast":
+                                return True
+                            if _n == "issubdtype":
+                                return True
+                            if _n == "isscalar":
+                                return isinstance(args[0], (int, float, str, bool))
+                            if _n == "iscomplex":
+                                arr = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                return bool(np.iscomplexobj(arr))
+                            if _n == "isreal":
+                                arr = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                return bool(not np.iscomplexobj(arr))
+                            if _n == "ndim":
+                                arr = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                return int(np.ndim(arr))
+                            if _n == "shape":
+                                arr = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                return arr.shape
+                            if _n == "size":
+                                arr = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                return int(arr.size)
+                            if _n == "dtype":
+                                return "float32"
+                            if _n == "eval":
+                                if args:
+                                    arr = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                    return loader.array(arr)
+                                return loader.array(np.array([]))
+                            if _n == "sync":
+                                return None
+                            if _n == "save":
+                                return None
+                            if _n == "load":
+                                return loader.array(np.array([1.0, 2.0, 3.0]))
+                            if _n == "save_safetensors":
+                                return None
+                            if _n == "load_safetensors":
+                                return loader.array(np.array([1.0, 2.0, 3.0]))
+                            if _n == "serialize":
+                                return b"mock_serialized_data"
+                            if _n == "deserialize":
+                                return loader.array(np.array([1.0, 2.0, 3.0]))
+                            if _n == "default_device":
+                                return MockModule("mlx.core.device")
+                            if _n == "default_stream":
+                                return None
+                            if _n == "device":
+                                return MockModule("mlx.core.device")
+                            if _n == "stream":
+                                return MockModule("mlx.core.stream")
+                            if _n == "gpu":
+                                return MockModule("mlx.core.gpu")
+                            if _n == "cpu":
+                                return MockModule("mlx.core.cpu")
+                            if _n == "metal":
+                                return MockModule("mlx.core.metal")
+
+                            # --- openai_harmony functions ---
+                            if _n == "load_harmony_encoding":
+                                return _mock_load_harmony_encoding(args[0] if args else "HarmonyGptOss")
+                            if _n == "HarmonyEncoding":
+                                return _MockHarmonyEncoding
+                            if _n == "StreamableParser":
+                                return _MockStreamableParser
+                            if _n == "Role":
+                                return _MockRole
+                            if _n == "HarmonyMessage":
+                                return _MockHarmonyMessage
+
+                            # --- mlx_lm functions (already handled above, keep as fallback) ---
                             if _n == "is_applied":
                                 return False
                             if _n == "is_mtp_active":
@@ -1760,6 +2317,187 @@ class MockMLXFinder(importlib.abc.MetaPathFinder):
         ):
             return importlib.machinery.ModuleSpec(fullname, MockMLXLoader())
         return None
+
+
+# =============================================================================
+# openai_harmony mock — minimal encoding/parser shim for test suites
+# =============================================================================
+
+# Mapping of known Harmony special tokens → deterministic token IDs
+_HARMONY_SPECIAL_TOKENS = {
+    "<|start|>": 200000,
+    "<|end|>": 200007,
+    "<|channel|>": 200005,
+    "<|message|>": 200008,
+    "<|return|>": 200002,
+    "<|call|>": 200012,
+    "<|constrain|>": 200013,
+    "assistant": 200001,
+}
+
+
+def _hash_token(text: str) -> int:
+    """Deterministic token ID from text (avoids collisions with special tokens)."""
+    return 30000 + (hash(text) % 10000)
+
+
+class _MockHarmonyEncoding:
+    """Minimal mock of openai_harmony.HarmonyEncoding."""
+
+    def __init__(self, name: str = "HarmonyGptOss"):
+        self.name = name
+
+    def encode(self, text: str, allowed_special: str = "all") -> list[int]:
+        """Encode text → list of token IDs.
+
+        Splits on known special tokens and encodes remaining text in word
+        chunks (max 3 tokens per chunk, deterministic via hash).
+        """
+        import re
+
+        # Split on <|...|> tokens, then interleave with text chunks
+        special_pattern = r"<\|[^>]+\|>"
+        specials = re.findall(special_pattern, text)
+        parts = re.split(special_pattern, text)
+
+        tokens: list[int] = []
+        for i, part in enumerate(parts):
+            if part:  # non-empty text chunk
+                words = part.split()
+                for j in range(0, max(len(words), 1), 3):
+                    chunk = " ".join(words[j : j + 3])
+                    tokens.append(_hash_token(chunk))
+            if i < len(specials):
+                spec = specials[i]
+                if spec in _HARMONY_SPECIAL_TOKENS:
+                    tokens.append(_HARMONY_SPECIAL_TOKENS[spec])
+                else:
+                    tokens.append(_hash_token(spec))
+        return tokens
+
+    def decode(self, token_ids: list[int] | Any, **kwargs: Any) -> str:
+        """Decode token IDs → text (reverse of encode, approximate)."""
+        if hasattr(token_ids, "_data"):
+            token_ids = token_ids._data.tolist()
+        id_to_token = {v: k for k, v in _HARMONY_SPECIAL_TOKENS.items()}
+        parts: list[str] = []
+        for tid in token_ids:
+            if tid in id_to_token:
+                parts.append(id_to_token[tid])
+            else:
+                # Reverse hash → approximate text (not perfect, but good enough for tests)
+                word_idx = tid - 30000
+                parts.append(f"tok{word_idx}")
+        return " ".join(parts)
+
+    def stop_tokens_for_assistant_actions(self) -> list[int]:
+        """Return stop token IDs for assistant actions."""
+        return [200002, 200012]  # <|return|>, <|call|>
+
+
+class _MockStreamableParser:
+    """Minimal mock of openai_harmony.StreamableParser."""
+
+    def __init__(self, encoding: Any, tokenizer: Any, strict: bool = False):
+        self._encoding = encoding
+        self._tokenizer = tokenizer
+        self._strict = strict
+        self._current_channel: str | None = None
+        self._messages: list[dict[str, Any]] = []
+        self._current_recipient: str | None = None
+        self._in_analysis: bool = False
+
+    @property
+    def current_channel(self) -> str | None:
+        """Return the current channel name."""
+        return self._current_channel
+
+    @property
+    def messages(self) -> list[dict[str, Any]]:
+        """Return accumulated messages."""
+        return self._messages
+
+    @property
+    def current_recipient(self) -> str | None:
+        """Return the current recipient."""
+        return self._current_recipient
+
+    def process(self, token: int) -> None:
+        """Consume a token (no-op in mock)."""
+        pass
+
+    def process_eos(self) -> None:
+        """Process end-of-stream (no-op in mock)."""
+        pass
+
+    def process_token(self, token: int) -> tuple[str, int | None, int | None, bool]:
+        """Process a single token → (control_text, stream_token, visible_token, is_stop)."""
+        id_to_token = {v: k for k, v in _HARMONY_SPECIAL_TOKENS.items()}
+        token_str = id_to_token.get(token, "")
+
+        control_text = ""
+        stream_token: int | None = token
+        visible_token: int | None = None
+        is_stop = False
+
+        if token_str == "<|channel|>":
+            pass  # next token determines channel
+        elif token_str == "final":
+            self._current_channel = "final"
+            self._in_analysis = False
+        elif token_str == "analysis":
+            self._current_channel = "analysis"
+            self._in_analysis = True
+        elif token_str == "commentary":
+            self._current_channel = "commentary"
+        elif token_str == "<|message|>":
+            pass  # next tokens are content
+        elif token_str == "<|return|>":
+            is_stop = True
+            stream_token = None
+        elif token_str == "<|call|>":
+            is_stop = True
+            stream_token = None
+        elif token_str == "<|end|>":
+            self._current_channel = None
+            self._in_analysis = False
+
+        # Determine stream/visible based on channel
+        if token_str not in _HARMONY_SPECIAL_TOKENS.values() or token_str == "<|message|>":
+            # Check if this is a content token (not a special token)
+            if token not in _HARMONY_SPECIAL_TOKENS.values():
+                # Content token
+                if self._current_channel == "final":
+                    visible_token = token
+                elif self._current_channel == "analysis":
+                    # Analysis content streams but isn't visible
+                    pass  # stream_token stays as token, visible stays None
+                elif self._current_channel is None:
+                    # Before any channel, still stream
+                    pass
+
+        return control_text, stream_token, visible_token, is_stop
+
+
+class _MockRole:
+    """Minimal mock of openai_harmony.Role enum."""
+    system = "system"
+    user = "user"
+    assistant = "assistant"
+    tool = "tool"
+
+
+class _MockHarmonyMessage:
+    """Minimal mock of openai_harmony.HarmonyMessage."""
+
+    def __init__(self, role: str = "assistant", content: str = ""):
+        self.role = role
+        self.content = content
+
+
+def _mock_load_harmony_encoding(name: str = "HarmonyGptOss") -> _MockHarmonyEncoding:
+    """Load a mock Harmony encoding."""
+    return _MockHarmonyEncoding(name)
 
 
 def install_mock():

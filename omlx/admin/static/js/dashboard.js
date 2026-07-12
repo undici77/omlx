@@ -66,6 +66,11 @@
     const DASHBOARD_MODELS_TABS = new Set(['manager', 'downloader', 'quantizer', 'uploader']);
     const DASHBOARD_BENCH_TABS = new Set(['throughput', 'accuracy']);
 
+    // Default sort for the settings and manager model tables. Also the target
+    // state for the "reset sort" action.
+    const MODELS_SORT_DEFAULT = { by: 'id', order: 'asc' };
+    const MANAGER_SORT_DEFAULT = { by: 'name', order: 'asc' };
+
     function dashboard() {
         return {
             // Theme
@@ -87,7 +92,7 @@
             globalSettings: {
                 base_path: '',
                 server: { host: '127.0.0.1', port: 8000, log_level: 'info', sse_keepalive_mode: 'chunk', burst_decode_mode: 'balanced', preserve_mid_system_cache: true },
-                model: { model_dirs: [''] },
+                model: { model_dirs: [''], model_fallback: false, hide_helper_models: false },
                 memory: { prefill_memory_guard: true, memory_guard_tier: 'balanced', memory_guard_custom_ceiling_gb: 0 },
                 scheduler: { max_concurrent_requests: 8, embedding_batch_size: 32, chunked_prefill: false },
                 cache: { enabled: true, ssd_cache_dir: '', ssd_cache_max_size: 'auto', hot_cache_max_size: '0', initial_cache_blocks: 256, hot_cache_only: false },
@@ -131,8 +136,14 @@
             models: [],
             loadingModels: false,
             reloading: false,
-            sortBy: 'id',
-            sortOrder: 'asc',
+            // Sort state persists across refreshes/restarts via localStorage.
+            sortBy: localStorage.getItem('omlx_models_sort_by') || MODELS_SORT_DEFAULT.by,
+            sortOrder: localStorage.getItem('omlx_models_sort_order') || MODELS_SORT_DEFAULT.order,
+            modelSearch: '',
+            // Manager tab (Browse Models > Local) sort + search state.
+            managerSortBy: localStorage.getItem('omlx_manager_sort_by') || MANAGER_SORT_DEFAULT.by,
+            managerSortOrder: localStorage.getItem('omlx_manager_sort_order') || MANAGER_SORT_DEFAULT.order,
+            managerSearch: '',
 
             // Auth UI state
             showApiKey: false,
@@ -187,7 +198,7 @@
             _applySeq: 0,               // monotonic counter for apply race guard
             profileError: '',
             showNewProfileForm: false,
-            newProfile: { name: '', display_name: '', description: '', also_as_template: false },
+            newProfile: { display_name: '', api_name: '', api_name_touched: false, description: '', also_as_template: false },
             showNewTemplateForm: false,
             newTemplate: { name: '', display_name: '', description: '' },
             editingProfile: null,        // profile name being edited inline
@@ -404,6 +415,10 @@
             oqDtype: 'bfloat16',
             oqSensitivityModelPath: '',
             oqPreserveMtp: false,
+            oqEnhanced: false,
+            oqeReuseImatrixCache: true,
+            oqeImatrixCachePath: '',
+            oqeStrictImatrix: false,
 
             // oQ Uploader state
             uploadHfToken: localStorage.getItem('omlx-hf-upload-token') || '',
@@ -436,6 +451,15 @@
             benchAllowUpload: false,
             benchForceLmEngine: false,
             benchAdvancedOptionsOpen: false,
+            benchExternalEnabled: false,
+            // Shared external endpoint settings (persisted in localStorage,
+            // used by both the throughput and accuracy bench tabs)
+            externalBaseUrl: localStorage.getItem('omlx_bench_external_base_url') || '',
+            externalApiKey: localStorage.getItem('omlx_bench_external_api_key') || '',
+            externalModel: localStorage.getItem('omlx_bench_external_model') || '',
+            // { base_url, model } snapshot of the current run when external
+            // (no API key — used for the text export header)
+            benchRunExternal: null,
             benchRunning: false,
 
             benchBenchId: null,
@@ -512,6 +536,9 @@
             ],
             accBatchSize: 1,
             accEnableThinking: false,
+            accSamplingProfile: 'deterministic',
+            accAdvancedOptionsOpen: false,
+            accExternalEnabled: false,
             accRunning: false,
             accCurrentModel: '',
             accCurrentBenchId: null,
@@ -846,6 +873,7 @@
                             preserve_mid_system_cache: this.globalSettings.server.preserve_mid_system_cache,
                             model_dirs: this.globalSettings.model.model_dirs.filter(d => d.trim()),
                             model_fallback: this.globalSettings.model.model_fallback,
+                            hide_helper_models: this.globalSettings.model.hide_helper_models,
                             memory_prefill_memory_guard: this.globalSettings.memory.prefill_memory_guard,
                             memory_guard_tier: this.globalSettings.memory.memory_guard_tier,
                             memory_guard_custom_ceiling_gb: this.globalSettings.memory.memory_guard_custom_ceiling_gb,
@@ -1017,6 +1045,12 @@
                         } else if (field === 'is_pinned') {
                             const model = this.models.find(m => m.id === modelId);
                             if (model) model.pinned = value;
+                        } else if (field === 'is_hidden') {
+                            const model = this.models.find(m => m.id === modelId);
+                            if (model) model.is_hidden = value;
+                        } else if (field === 'is_favorite') {
+                            const model = this.models.find(m => m.id === modelId);
+                            if (model) model.is_favorite = value;
                         }
                     } else if (response.status === 401) {
                         window.location.href = '/admin';
@@ -1191,6 +1225,15 @@
                 }
                 return null;
             },
+            profileTooltip(profile) {
+                const lines = [];
+                if (profile?.expose_as_model && profile.model_id) {
+                    lines.push(profile.model_id);
+                }
+                const description = (profile?.description || '').trim();
+                if (description) lines.push(description);
+                return lines.join('\n');
+            },
             async loadProfilesForModel(modelId) {
                 this.profiles = [];
                 try {
@@ -1337,10 +1380,8 @@
             },
 
             isSpecPrefillDraftModel(model) {
-                const text = this.draftModelSearchText(model);
                 return !this.isDflashDraftModel(model)
-                    && !this.isVlmMtpDraftModel(model)
-                    && !/(^|[-_/\s])mtp($|[-_/\s])/i.test(text);
+                    && !this.isVlmMtpDraftModel(model);
             },
 
             draftModelCandidates(filterFn, { fallbackToBase = true } = {}) {
@@ -1540,21 +1581,44 @@
                 try { localStorage.setItem('omlx_profile_scope', scope); } catch (e) {}
             },
 
+            isValidProfileName(name) {
+                // Mirror of the backend rule (validate_profile_name) and the
+                // Mac app's isValidSlug. api_name is the exposed model ID
+                // suffix (<model>:<api_name>), so it must be a clean slug.
+                return /^[a-z0-9][a-z0-9_-]{0,31}$/.test((name || '').trim());
+            },
+            slugifyProfileApiName(value) {
+                let slug = (value || '')
+                    .normalize('NFKD')
+                    .replace(/[\u0300-\u036f]/g, '')
+                    .toLowerCase()
+                    .replace(/[^a-z0-9_-]+/g, '-')
+                    .replace(/-+/g, '-')
+                    .replace(/^[-_]+|[-_]+$/g, '')
+                    .slice(0, 32)
+                    .replace(/[-_]+$/g, '');
+                return slug || 'profile';
+            },
             async createProfile() {
                 if (!this.selectedModel) return;
                 this.profileError = '';
-                const displayName = this.newProfile.display_name.trim();
+                const displayName = (this.newProfile.display_name || '').trim();
                 if (!displayName) {
                     this.profileError = 'Name required';
                     return;
                 }
-                // Auto-generate short unique slug (matches backend ^[a-z0-9][a-z0-9_-]{0,31}$)
+                const apiName = (this.newProfile.api_name || this.slugifyProfileApiName(displayName)).trim();
+                if (!this.isValidProfileName(apiName)) {
+                    this.profileError = window.t('modal.model_settings.profiles.invalid_name');
+                    return;
+                }
                 const autoId = 'p-' + Date.now().toString(36) + '-' +
                                Math.random().toString(36).slice(2, 6);
                 const body = {
                     name: autoId,
                     display_name: displayName,
-                    description: this.newProfile.description.trim() || null,
+                    api_name: apiName,
+                    description: (this.newProfile.description || '').trim() || null,
                     settings: this.formValuesForProfile(),
                     also_save_as_template: false,
                 };
@@ -1568,7 +1632,7 @@
                         await this.loadProfilesForModel(this.selectedModel.id);
                         if (body.also_save_as_template) await this.loadTemplates();
                         this.showNewProfileForm = false;
-                        this.newProfile = { name: '', display_name: '', description: '', also_as_template: false };
+                        this.newProfile = { display_name: '', api_name: '', api_name_touched: false, description: '', also_as_template: false };
                     } else if (r.status === 401) {
                         window.location.href = '/admin';
                     } else {
@@ -1631,6 +1695,7 @@
                     const body = {
                         name: template.name,
                         display_name: template.display_name,
+                        api_name: this.slugifyProfileApiName(template.display_name || template.name),
                         description: template.description || null,
                         settings: template.settings,
                         source_template: template.name,
@@ -1675,8 +1740,37 @@
                     this.profileDeleteConfirm = null;
                 }
             },
+            updateProfileFromEdit(p) {
+                // Edit-dialog save. Internal profile name stays stable; api_name
+                // is the API-visible suffix used by exposed model IDs.
+                this.profileError = '';
+                const displayName = (p._editDisplayName ?? p.display_name ?? p.name).trim();
+                const apiName = (p._editApiName ?? p.api_name ?? p.name).trim();
+                const description = (p._editDescription ?? p.description ?? '').trim();
+                const exposeAsModel = !!(p._editExposeAsModel ?? p.expose_as_model);
+                if (!displayName) {
+                    this.profileError = 'Name required';
+                    return;
+                }
+                if (!this.isValidProfileName(apiName)) {
+                    this.profileError = window.t('modal.model_settings.profiles.invalid_name');
+                    return;
+                }
+                const patch = {
+                    display_name: displayName,
+                    api_name: apiName,
+                    description: description,
+                    expose_as_model: exposeAsModel,
+                };
+                return this.updateProfile(p.name, patch);
+            },
+            updateProfileSettingsFromForm(p) {
+                return this.updateProfile(p.name, {
+                    settings: this.formValuesForProfile(),
+                });
+            },
             async updateProfile(name, patch) {
-                // patch: { new_name?, display_name?, description?, settings?, also_save_as_template? }
+                // patch: { new_name?, display_name?, api_name?, description?, expose_as_model?, settings?, also_save_as_template? }
                 if (!this.selectedModel) return;
                 this.profileError = '';
                 try {
@@ -2716,9 +2810,35 @@
                 }
             },
 
+            // Shared external endpoint settings (both bench tabs)
+            saveExternalEndpoint() {
+                localStorage.setItem('omlx_bench_external_base_url', this.externalBaseUrl.trim());
+                localStorage.setItem('omlx_bench_external_api_key', this.externalApiKey);
+                localStorage.setItem('omlx_bench_external_model', this.externalModel.trim());
+            },
+
+            externalConfigValid() {
+                return !!(this.externalBaseUrl.trim() && this.externalModel.trim());
+            },
+
+            externalRequestBody() {
+                return {
+                    base_url: this.externalBaseUrl.trim(),
+                    api_key: this.externalApiKey,
+                    model: this.externalModel.trim(),
+                };
+            },
+
             // Benchmark functions
             async startBenchmark() {
-                if (!this.benchModelId) return;
+                if (this.benchExternalEnabled) {
+                    if (!this.externalConfigValid()) {
+                        this.benchError = window.t('js.error.external_endpoint_required');
+                        return;
+                    }
+                } else if (!this.benchModelId) {
+                    return;
+                }
 
                 // Collect selected prompt lengths
                 const promptLengths = Object.entries(this.benchPromptLengths)
@@ -2751,18 +2871,22 @@
                 this.benchUploadDone = null;
                 this.benchUploading = false;
                 this.benchUploadSkipped = null;
+                this.benchRunExternal = this.benchExternalEnabled
+                    ? { base_url: this.externalBaseUrl.trim(), model: this.externalModel.trim() }
+                    : null;
 
                 try {
                     const response = await fetch('/admin/api/bench/start', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
-                            model_id: this.benchModelId,
+                            model_id: this.benchExternalEnabled ? this.externalModel.trim() : this.benchModelId,
                             prompt_lengths: promptLengths,
                             generation_length: 128,
                             batch_sizes: batchSizes,
                             allow_upload: this.benchAllowUpload,
-                            force_lm_engine: this.benchForceLmEngine,
+                            force_lm_engine: this.benchExternalEnabled ? false : this.benchForceLmEngine,
+                            external: this.benchExternalEnabled ? this.externalRequestBody() : null,
                         }),
                     });
 
@@ -2853,7 +2977,10 @@
                             es.close();
                             this.benchEventSource = null;
                         } else if (data.type === 'upload_skipped') {
-                            this.benchUploadSkipped = { features: data.features || [] };
+                            this.benchUploadSkipped = {
+                                reason: data.reason || 'experimental_features',
+                                features: data.features || [],
+                            };
                             this.benchUploading = false;
                             this.benchRunning = false;
                             this.benchProgress = null;
@@ -2916,8 +3043,13 @@
 
                 lines.push('oMLX - LLM inference, optimized for your Mac');
                 lines.push('https://github.com/jundot/omlx');
-                lines.push(`Benchmark Model: ${this.benchModelId}`);
-                lines.push(`Engine: ${this.benchForceLmEngine ? 'Force mlx-lm' : 'Auto'}`);
+                if (this.benchRunExternal) {
+                    lines.push(`Benchmark Model: ${this.benchRunExternal.model} @ ${this.benchRunExternal.base_url}`);
+                    lines.push('Engine: External OpenAI-compatible endpoint');
+                } else {
+                    lines.push(`Benchmark Model: ${this.benchModelId}`);
+                    lines.push(`Engine: ${this.benchForceLmEngine ? 'Force mlx-lm' : 'Auto'}`);
+                }
                 lines.push('='.repeat(80));
 
                 // Single Request Results
@@ -3056,19 +3188,39 @@
                             bench_id: data.bench_id,
                             model_id: data.model_id,
                             force_lm_engine: !!data.force_lm_engine,
+                            external: !!data.external,
                         };
                         return;
                     }
 
                     // Fresh slate: attach.
                     this.benchBenchId = data.bench_id;
-                    this.benchModelId = data.model_id;
-                    this.benchForceLmEngine = !!data.force_lm_engine;
+                    this._restoreBenchRunSource(data);
                     this.benchRunning = true;
                     this.benchOtherActive = null;
                     this.connectBenchSSE(data.bench_id);
                 } catch (err) {
                     console.error('Failed to load bench state:', err);
+                }
+            },
+
+            // Restore the config UI from an active run discovered via
+            // /api/bench/active. External model ids aren't in the local
+            // dropdown, so the external flag drives which controls light up.
+            _restoreBenchRunSource(data) {
+                if (data.external) {
+                    this.benchExternalEnabled = true;
+                    this.benchRunExternal = {
+                        // base_url is intentionally not exposed by the API;
+                        // fall back to this browser's stored setting.
+                        base_url: this.externalBaseUrl.trim(),
+                        model: data.model_id,
+                    };
+                } else {
+                    this.benchModelId = data.model_id;
+                    this.benchForceLmEngine = !!data.force_lm_engine;
+                    this.benchExternalEnabled = false;
+                    this.benchRunExternal = null;
                 }
             },
 
@@ -3081,8 +3233,7 @@
                 const other = this.benchOtherActive;
                 this.benchOtherActive = null;
                 this.benchBenchId = other.bench_id;
-                this.benchModelId = other.model_id;
-                this.benchForceLmEngine = !!other.force_lm_engine;
+                this._restoreBenchRunSource(other);
                 this.benchRunning = true;
                 this.benchSingleResults = [];
                 this.benchBatchResults = [];
@@ -3157,7 +3308,14 @@
             },
 
             async addToAccQueue() {
-                if (!this.accModelId) return;
+                if (this.accExternalEnabled) {
+                    if (!this.externalConfigValid()) {
+                        this.accError = window.t('js.error.external_endpoint_required');
+                        return;
+                    }
+                } else if (!this.accModelId) {
+                    return;
+                }
                 const selected = Object.entries(this.accBenchmarks)
                     .filter(([_, v]) => v)
                     .map(([k]) => k);
@@ -3170,12 +3328,14 @@
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
-                            model_id: this.accModelId,
+                            model_id: this.accExternalEnabled ? this.externalModel.trim() : this.accModelId,
                             benchmarks: Object.fromEntries(
                                 selected.map(k => [k, this.accSampleSizes[k]])
                             ),
                             batch_size: this.accBatchSize,
-                            enable_thinking: this.accEnableThinking,
+                            enable_thinking: this.accExternalEnabled ? false : this.accEnableThinking,
+                            sampling_profile: this.accSamplingProfile,
+                            external: this.accExternalEnabled ? this.externalRequestBody() : null,
                         }),
                     });
                     if (!resp.ok) {
@@ -3887,15 +4047,19 @@
                 return `${gb}GB`;
             },
 
-            // Sort models
+            // Filter + sort models
             get sortedModels() {
-                return [...this.models].sort((a, b) => {
+                return [...this.filterModelsByName(this.models, this.modelSearch)].sort((a, b) => {
+                    // Favorites always sort first, regardless of the active column.
+                    const favDiff = (b.is_favorite ? 1 : 0) - (a.is_favorite ? 1 : 0);
+                    if (favDiff !== 0) return favDiff;
+
                     let aVal, bVal;
 
                     switch (this.sortBy) {
                         case 'id':
-                            aVal = (a.id || '').toLowerCase();
-                            bVal = (b.id || '').toLowerCase();
+                            aVal = (a.display_name || a.id || '').toLowerCase();
+                            bVal = (b.display_name || b.id || '').toLowerCase();
                             break;
                         case 'type':
                             aVal = (a.model_type || 'llm').toLowerCase();
@@ -3917,6 +4081,10 @@
                             aVal = a.is_default ? 1 : 0;
                             bVal = b.is_default ? 1 : 0;
                             break;
+                        case 'is_hidden':
+                            aVal = a.is_hidden ? 1 : 0;
+                            bVal = b.is_hidden ? 1 : 0;
+                            break;
                         default:
                             return 0;
                     }
@@ -3934,6 +4102,113 @@
                     this.sortBy = column;
                     this.sortOrder = 'asc';
                 }
+                this.persistSort('omlx_models_sort_by', this.sortBy, 'omlx_models_sort_order', this.sortOrder);
+            },
+
+            resetSort() {
+                this.sortBy = MODELS_SORT_DEFAULT.by;
+                this.sortOrder = MODELS_SORT_DEFAULT.order;
+                try {
+                    localStorage.removeItem('omlx_models_sort_by');
+                    localStorage.removeItem('omlx_models_sort_order');
+                } catch (e) { /* storage disabled */ }
+            },
+
+            get isModelsSortDefault() {
+                return this.sortBy === MODELS_SORT_DEFAULT.by
+                    && this.sortOrder === MODELS_SORT_DEFAULT.order;
+            },
+
+            // ---- Manager (Browse Models > Local) filter + sort ----
+
+            // Cross-reference the richer /api/models entry (has model_type,
+            // settings) for a manager row keyed by its model name.
+            managerModelInfo(name) {
+                return this.models.find(m => m.id === name);
+            },
+
+            filterModelsByName(list, query) {
+                const q = (query || '').trim().toLowerCase();
+                if (!q) return list;
+                return list.filter(m => {
+                    const id = (m.id || m.name || '').toLowerCase();
+                    const display = (m.display_name || '').toLowerCase();
+                    const alias = (
+                        (m.settings && m.settings.model_alias)
+                        || (this.managerModelInfo(m.name) && this.managerModelInfo(m.name).settings
+                            && this.managerModelInfo(m.name).settings.model_alias)
+                        || ''
+                    ).toLowerCase();
+                    return id.includes(q) || display.includes(q) || alias.includes(q);
+                });
+            },
+
+            get sortedManagerModels() {
+                const list = this.filterModelsByName(this.hfModels, this.managerSearch);
+                return [...list].sort((a, b) => {
+                    // Favorites always sort first, regardless of the active column.
+                    const aFav = this.managerModelInfo(a.name)?.is_favorite ? 1 : 0;
+                    const bFav = this.managerModelInfo(b.name)?.is_favorite ? 1 : 0;
+                    if (aFav !== bFav) return bFav - aFav;
+
+                    let aVal, bVal;
+                    switch (this.managerSortBy) {
+                        case 'name':
+                            aVal = (a.display_name || a.name || '').toLowerCase();
+                            bVal = (b.display_name || b.name || '').toLowerCase();
+                            break;
+                        case 'type':
+                            aVal = (this.managerModelInfo(a.name)?.model_type || 'llm').toLowerCase();
+                            bVal = (this.managerModelInfo(b.name)?.model_type || 'llm').toLowerCase();
+                            break;
+                        case 'size':
+                            aVal = a.size || 0;
+                            bVal = b.size || 0;
+                            break;
+                        default:
+                            return 0;
+                    }
+                    if (aVal < bVal) return this.managerSortOrder === 'asc' ? -1 : 1;
+                    if (aVal > bVal) return this.managerSortOrder === 'asc' ? 1 : -1;
+                    return 0;
+                });
+            },
+
+            toggleManagerSort(column) {
+                if (this.managerSortBy === column) {
+                    this.managerSortOrder = this.managerSortOrder === 'asc' ? 'desc' : 'asc';
+                } else {
+                    this.managerSortBy = column;
+                    this.managerSortOrder = 'asc';
+                }
+                this.persistSort('omlx_manager_sort_by', this.managerSortBy, 'omlx_manager_sort_order', this.managerSortOrder);
+            },
+
+            resetManagerSort() {
+                this.managerSortBy = MANAGER_SORT_DEFAULT.by;
+                this.managerSortOrder = MANAGER_SORT_DEFAULT.order;
+                try {
+                    localStorage.removeItem('omlx_manager_sort_by');
+                    localStorage.removeItem('omlx_manager_sort_order');
+                } catch (e) { /* storage disabled */ }
+            },
+
+            get isManagerSortDefault() {
+                return this.managerSortBy === MANAGER_SORT_DEFAULT.by
+                    && this.managerSortOrder === MANAGER_SORT_DEFAULT.order;
+            },
+
+            persistSort(byKey, byVal, orderKey, orderVal) {
+                try {
+                    localStorage.setItem(byKey, byVal);
+                    localStorage.setItem(orderKey, orderVal);
+                } catch (e) { /* storage disabled */ }
+            },
+
+            // Deeplink from a manager row to that model's settings card (modal).
+            openModelSettingsFromManager(name) {
+                const model = this.managerModelInfo(name);
+                if (model) this.openModelSettings(model);
             },
 
             // Theme select
@@ -4206,24 +4481,31 @@
                 this.oqSuccess = '';
                 this.oqStarting = true;
                 try {
+                    const payload = {
+                        model_path: this.oqSelectedModelPath,
+                        oq_level: this.oqLevel,
+                        group_size: 64,
+                        sensitivity_model_path: this.oqSensitivityModelPath,
+                        text_only: this.oqTextOnly,
+                        dtype: this.oqDtype,
+                        preserve_mtp: this.oqSelectedModelHasMtp() ? this.oqPreserveMtp : false,
+                    };
+                    if (this.oqEnhanced) {
+                        payload.enhanced = true;
+                        payload.imatrix_reuse_cache = this.oqeReuseImatrixCache;
+                        payload.imatrix_cache_path = this.oqeImatrixCachePath.trim();
+                        payload.imatrix_strict = this.oqeStrictImatrix;
+                    }
                     const response = await fetch('/admin/api/oq/start', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            model_path: this.oqSelectedModelPath,
-                            oq_level: this.oqLevel,
-                            group_size: 64,
-                            sensitivity_model_path: this.oqSensitivityModelPath,
-                            text_only: this.oqTextOnly,
-                            dtype: this.oqDtype,
-                            preserve_mtp: this.oqSelectedModelHasMtp() ? this.oqPreserveMtp : false,
-                        }),
+                        body: JSON.stringify(payload),
                     });
                     const data = await response.json().catch(() => ({}));
                     if (response.ok) {
                         const model = this.oqModels.find(m => m.path === this.oqSelectedModelPath);
                         const name = model ? model.name : this.oqSelectedModelPath;
-                        this.oqSuccess = `Quantization started: ${name} → oQ${this.oqLevel}`;
+                        this.oqSuccess = `Quantization started: ${name} → oQ${this.oqLevel}${this.oqEnhanced ? 'e' : ''}`;
                         await this.loadOQTasks();
                         this.startOQRefresh();
                         setTimeout(() => { this.oqSuccess = ''; }, 5000);
@@ -4293,7 +4575,8 @@
 
             formatOQProgress(task) {
                 const pct = Math.round(task.progress || 0);
-                return `${pct}% · ${task.phase || task.status}`;
+                const label = task.progress_detail || task.phase || task.status;
+                return `${pct}% · ${label}`;
             },
 
             formatOQElapsed(task) {
@@ -4314,6 +4597,10 @@
                     m.is_quantized &&
                     m.model_type === source.model_type
                 );
+            },
+
+            oqLevelLabel(level) {
+                return `oQ${level}${this.oqEnhanced ? 'e' : ''}`;
             },
 
             oqSelectedModelIsVLM() {

@@ -52,22 +52,45 @@
 
 ## 설치
 
-### macOS 앱 (소스에서 빌드)
+### macOS 앱
 
-사용자의 보안과 빌드 체인에 대한 완전한 제어를 위해, **이 리포지토리는 미리 빌드된 바이너리나 DMG 파일을 제공하지 않습니다**. 이는 커뮤니티에 대한 "불신"의 문제가 아니라, 모든 사용자를 존중하고 보호하기 위한 의도적인 "더블 체크(Double Check)"입니다.
+[Releases](https://github.com/jundot/omlx/releases)에서 `.dmg`를 다운로드하고, Applications에 드래그하면 끝입니다. 앱 내 자동 업데이트를 지원하므로 이후 업그레이드는 클릭 한 번이면 됩니다. macOS 앱은 `~/.omlx/bin/omlx` CLI shim도 설치하므로 터미널 명령이나 Apple Shortcuts에서 앱이 관리하는 서버를 제어할 수 있습니다.
 
-- **개인정보 보호 검증**: oMLX는 처음부터 사용자의 개인정보를 존중하도록 설계되었습니다. 소스에서 빌드하도록 함으로써 소프트웨어가 문서화된 대로 정확하게 작동하는지(데이터가 사용자의 머신을 절대 떠나지 않음) 사용자가 직접 투명하게 검증할 수 있는 수단을 제공합니다.
-- **사용자 제어**: 사용자는 빌드 체인에 대해 완전한 제어권을 가집니다. 자신의 컴퓨터에서 어떤 코드가 컴파일되고 실행되는지 정확히 알 수 있어, 보안이 손상된 바이너리 위험을 제거하고 검증된 보안 빌드 스크립트 사용을 장려합니다.
+### Homebrew
 
-macOS 앱을 만들려면:
-1. 이 리포지토리를 클론합니다.
-2. 보안 빌드 스크립트를 실행합니다:
-   ```bash
-   ./build_tahoe.sh
-   ```
-3. 최종 DMG 파일은 `packaging/dist/`에 생성됩니다. 생성된 `oMLX.app`을 응용 프로그램(Applications) 폴더로 드래그하세요.
+```bash
+brew tap jundot/omlx https://github.com/jundot/omlx
+brew install omlx
 
-macOS 15.0+ (Sequoia), Python 3.11+ (권장) 및 Apple Silicon (M1/M2/M3/M4)이 필요합니다.
+# 최신 버전으로 업그레이드
+brew update && brew upgrade omlx
+
+# 백그라운드 서비스로 실행 (크래시 시 자동 재시작)
+omlx start
+
+# 선택사항: MCP (Model Context Protocol) 지원
+/opt/homebrew/opt/omlx/libexec/bin/pip install mcp
+```
+
+선택사항인 GLM-5.2 / MiniMax M3 네이티브 커스텀 커널은 현재 HEAD 빌드가 필요합니다:
+
+```bash
+brew install omlx --HEAD --with-custom-kernel
+```
+
+### 소스에서 설치
+
+```bash
+git clone https://github.com/jundot/omlx.git
+cd omlx
+pip install -e .          # 코어만
+pip install -e ".[mcp]"   # MCP (Model Context Protocol) 포함
+
+# 선택사항: GLM-5.2 / MiniMax M3 네이티브 커스텀 커널
+OMLX_WITH_CUSTOM_KERNEL=1 pip install -e .
+```
+
+Python 3.10+와 Apple Silicon (M1/M2/M3/M4)이 필요합니다.
 
 ## 빠른 시작
 
@@ -82,12 +105,38 @@ Applications 폴더에서 oMLX를 실행하세요. 환영 화면에서 세 단�
 
 ### CLI
 
-CLI를 사용하려면 `omlx` 명령어를 애플리케이션 번들 내부에서 찾거나, 빌드 후 리포지토리에서 실행할 수 있습니다.
+```bash
+# 관리형 백그라운드 서버 (macOS 앱 또는 Homebrew 설치)
+omlx start
+omlx stop
+omlx restart
+
+# 현재 터미널에 붙는 foreground 서버
+omlx serve --model-dir ~/models
+```
+
+서버가 하위 디렉토리에서 LLM, VLM, 임베딩 모델, 리랭커를 자동으로 탐색합니다. OpenAI 호환 클라이언트에서 `http://localhost:8000/v1`로 연결할 수 있습니다. 내장 채팅 UI도 `http://localhost:8000/admin/chat`에서 사용 가능합니다.
+
+### Homebrew 서비스
+
+Homebrew로 설치한 경우 oMLX를 관리형 백그라운드 서비스로 실행할 수 있습니다:
 
 ```bash
-# 빌드 후 소스 디렉토리에서 실행하는 예시
-./.build_venv/bin/omlx serve --model-dir ~/models
+omlx start                    # brew services를 통해 시작
+omlx stop                     # 중지
+omlx restart                  # 재시작
+
+brew services start omlx    # 시작 (크래시 시 자동 재시작)
+brew services stop omlx     # 중지
+brew services restart omlx  # 재시작
+brew services info omlx     # 상태 확인
 ```
+
+서비스는 기본 설정으로 `omlx serve`를 실행합니다 (`~/.omlx/models`, 포트 8000). `omlx start`, `omlx stop`, `omlx restart`는 공통 lifecycle 명령이며, Homebrew 설치에서는 `brew services`로 위임됩니다. 커스터마이즈하려면 환경 변수(`OMLX_MODEL_DIR`, `OMLX_PORT` 등)를 설정하거나, `omlx serve --model-dir /your/path`를 한 번 실행하여 `~/.omlx/settings.json`에 설정을 저장하세요.
+
+로그는 두 곳에 기록됩니다:
+- **서비스 로그**: `$(brew --prefix)/var/log/omlx.log` (stdout/stderr)
+- **서버 로그**: `~/.omlx/logs/server.log` (구조화된 애플리케이션 로그)
 
 ## 기능
 
@@ -140,6 +189,7 @@ Claude Code에서 작은 컨텍스트 모델을 실행하기 위한 컨텍스트
 
 - **모델 별칭**: 커스텀 API 표시 이름을 설정합니다. `/v1/models`에서 별칭을 반환하며, 요청 시 별칭과 디렉토리 이름 모두 사용 가능합니다.
 - **모델 타입 오버라이드**: 자동 감지와 관계없이 LLM 또는 VLM으로 수동 설정합니다.
+- **프로파일**: 모델별 설정을 이름이 지정된 번들로 저장하고 관리자 패널에서 전환합니다. 프로파일은 선택적으로 자체 모델로 노출할 수 있습니다: 그러면 `/v1/models`에 `<모델>:<프로파일>`(예: `qwen3-8b:thinking`)도 표시되며, 베이스 모델과 동일한 엔진에서 프로파일 설정을 요청마다 덮어써 동작합니다 — 추가 메모리나 재로드가 없습니다. 베이스 모델에 별칭이 있으면 노출되는 ID는 `<별칭>:<프로파일>` 형식으로 표시되고, 디렉토리 이름 형식도 베이스 모델과 마찬가지로 계속 작동합니다.
 
 <p align="center">
   <img src="docs/images/omlx_ChatTemplateKwargs.png" alt="oMLX 채팅 템플릿 파라미터" width="480">
@@ -321,12 +371,14 @@ open apps/omlx-mac/build/Stage/oMLX.app
 
 # venvstacks 강제 재빌드 (그 외에는 fingerprint 로 캐시됨)
 apps/omlx-mac/Scripts/build.sh release --rebuild-donor
+
+# 선택 GLM-5.2 / MiniMax M3 네이티브 커스텀 커널을 포함해 스테이징
+apps/omlx-mac/Scripts/build.sh release --with-custom-kernel
 ```
 
 첫 cold 빌드는 10–20분 소요됩니다 (venvstacks Python 레이어 어셈블리). 이후 빌드는 `packaging/_export/` 캐시를 재사용해 약 4분에 끝납니다. 레이어 구성은 [packaging/README.md](packaging/README.md), Swift 소스는 [apps/omlx-mac/](apps/omlx-mac/) 를 참조하세요.
 
 ## 기여하기
-
 
 기여를 환영합니다! 자세한 내용은 [기여 가이드](docs/CONTRIBUTING.md)를 참조하세요.
 
@@ -342,6 +394,7 @@ apps/omlx-mac/Scripts/build.sh release --rebuild-donor
 
 - [MLX](https://github.com/ml-explore/mlx)와 [mlx-lm](https://github.com/ml-explore/mlx-lm) by Apple
 - [mlx-vlm](https://github.com/Blaizzy/mlx-vlm) - Apple Silicon에서의 비전-언어 모델 추론
+- [vllm-mlx](https://github.com/waybarrios/vllm-mlx) - oMLX는 vllm-mlx v0.1.0에서 시작하여 멀티 모델 서빙, 계층형 KV 캐시, 페이지드 캐시를 완전 지원하는 VLM, 관리자 패널, macOS 메뉴 바 앱으로 크게 발전했습니다
 - [venvstacks](https://venvstacks.lmstudio.ai) - macOS 앱 번들을 위한 포터블 Python 환경 레이어링
 - [mlx-embeddings](https://github.com/Blaizzy/mlx-embeddings) - Apple Silicon을 위한 임베딩 모델 지원
 - [dflash-mlx](https://github.com/bstnxbt/dflash-mlx) - Apple Silicon에서의 블록 디퓨전 speculative decoding

@@ -17,6 +17,7 @@ struct ListModelsResponse: Codable, Sendable {
 
 struct ModelDTO: Codable, Equatable, Sendable, Identifiable {
     let id: String
+    let displayName: String?
     let modelPath: String?
     let loaded: Bool
     let isLoading: Bool
@@ -24,6 +25,7 @@ struct ModelDTO: Codable, Equatable, Sendable, Identifiable {
     let estimatedSizeFormatted: String?
     let pinned: Bool?
     let isDefault: Bool?
+    let isFavorite: Bool?
     let engineType: String?
     let modelType: String?
     /// Lower-level config-derived model class (e.g. `deepseek_v32`,
@@ -68,6 +70,7 @@ struct ModelSettingsDTO: Codable, Equatable, Sendable {
     let ttlSeconds: Int?
     let isPinned: Bool?
     let isDefault: Bool?
+    let isFavorite: Bool?
     let displayName: String?
     let activeProfileName: String?
     // Security
@@ -134,6 +137,7 @@ struct ModelSettingsPatch: Encodable, Equatable, Sendable {
     var maxToolResultTokens: Int? = nil
     var forceSampling: Bool? = nil
     var isPinned: Bool? = nil
+    var isFavorite: Bool? = nil
     // Security
     var trustRemoteCode: Bool? = nil
     var reasoningParser: String? = nil

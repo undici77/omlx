@@ -20,6 +20,12 @@ import pytest
 from omlx.exceptions import PrefillMemoryExceededError
 from omlx.scheduler import Scheduler
 
+_TINY_PNG_DATA_URI = (
+    "data:image/png;base64,"
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/"
+    "x8AAwMCAO+/p9sAAAAASUVORK5CYII="
+)
+
 # ---------------------------------------------------------------------------
 # Scheduler.preflight_or_raise / _preflight_memory_check_tokens
 # ---------------------------------------------------------------------------
@@ -275,7 +281,7 @@ async def test_vlm_preflight_chat_adds_image_token_budget(monkeypatch):
                 {"type": "text", "text": "hello"},
                 {
                     "type": "image_url",
-                    "image_url": {"url": "data:image/png;base64,..."},
+                    "image_url": {"url": _TINY_PNG_DATA_URI},
                 },
                 {"type": "image", "source": {}},
                 {"type": "text", "text": "world"},
@@ -313,7 +319,7 @@ async def test_vlm_preflight_chat_strips_images_before_template(monkeypatch):
             "role": "user",
             "content": [
                 {"type": "text", "text": "compare these:"},
-                {"type": "image_url", "image_url": {"url": "data:..."}},
+                {"type": "image_url", "image_url": {"url": _TINY_PNG_DATA_URI}},
                 {"type": "image", "source": {}},
             ],
         }
@@ -578,6 +584,7 @@ async def test_engine_core_add_request_cleans_up_on_scheduler_raise(
     core._output_collectors = {}
     core._stream_states = {}
     core._finished_events = {}
+    core._finished_at = {}
 
     class _Cfg:
         stream_interval = 1

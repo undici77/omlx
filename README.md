@@ -15,7 +15,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/license-Apache%202.0-blue" alt="License">
-  <img src="https://img.shields.io/badge/python-3.10+-green" alt="Python 3.10+">
+  <img src="https://img.shields.io/badge/python-3.11--3.13-green" alt="Python 3.11-3.13">
   <img src="https://img.shields.io/badge/platform-Apple%20Silicon-black?logo=apple" alt="Apple Silicon">
 </p>
 
@@ -98,6 +98,55 @@ Requires macOS 15.0+ (Sequoia), Python 3.11+ (recommended), and Apple Silicon (M
 
 ## Getting Started
 
+### CLI / Homebrew
+
+```bash
+# Upgrade to the latest version
+brew update && brew upgrade omlx
+
+# Run as a background service (auto-restarts on crash)
+omlx start
+
+# Optional: MCP (Model Context Protocol) support
+/opt/homebrew/opt/omlx/libexec/bin/pip install mcp
+```
+
+Optional GLM-5.2 / MiniMax M3 native custom kernels currently require a HEAD build:
+
+```bash
+brew install omlx --HEAD --with-custom-kernel
+```
+
+### From Source
+
+```bash
+git clone https://github.com/jundot/omlx.git
+cd omlx
+pip install -e .          # Core only
+pip install -e ".[mcp]"   # With MCP (Model Context Protocol) support
+
+# GLM-5.2 / MiniMax M3 / Qwen3.5 native custom kernels (strongly recommended
+# if you serve those families -- see note below)
+OMLX_WITH_CUSTOM_KERNEL=1 pip install -e .
+```
+
+Requires macOS 15.0+ (Sequoia), Python 3.11–3.13, and Apple Silicon (M1/M2/M3/M4).
+
+> **Note on native custom kernels:** a plain `pip install -e .` does NOT build
+> them, and the affected model families then silently fall back to much slower
+> generic paths -- for GLM-5.2 the fused DSA prefill is roughly 30x faster with
+> the kernels (measured 845 vs ~29 tok/s on an M3 Ultra), and the fallback also
+> uses more memory (#2137). Building them requires the Metal toolchain, which
+> Command Line Tools alone do not provide (`xcrun: error: unable to find utility
+> "metal"`): install full Xcode, or use the official DMG which ships the kernels
+> precompiled. Homebrew can build them with `brew install omlx --HEAD
+> --with-custom-kernel`, but that build also needs full Xcode. To verify your
+> install:
+>
+> ```bash
+> python -c "from omlx.custom_kernels import native_kernel_status; print(native_kernel_status())"
+> ```
+
 ### macOS App
 
 Launch oMLX from your Applications folder. The Welcome screen guides you through three steps - model directory, server start, and first model download. That's it. To connect OpenClaw, OpenCode, Codex, Hermes Agent, or Copilot, see [Local Integration](#local-integration).
@@ -121,7 +170,7 @@ Supports text LLMs, vision-language models (VLM), OCR models, embeddings, and re
 
 ### Admin Dashboard
 
-Web UI at `/admin` for real-time monitoring, model management, chat, benchmark, and per-model settings. Supports English, Korean, Japanese, Chinese, French, and Russian. All CDN dependencies are vendored for fully offline operation.
+Web UI at `/admin` for real-time monitoring, model management, chat, benchmark, and per-model settings. Supports English, Korean, Japanese, Chinese, French, Russian, Spanish, and Brazilian Portuguese. All CDN dependencies are vendored for fully offline operation.
 
 <p align="center">
   <img src="docs/images/Screenshot 2026-02-10 at 00.45.34.png" alt="oMLX Admin Dashboard" width="720">
@@ -166,6 +215,7 @@ Configure sampling parameters, chat template kwargs, TTL, model alias, model typ
 
 - **Model alias**: set a custom API-visible name. `/v1/models` returns the alias, and requests accept both the alias and directory name.
 - **Model type override**: manually set a model as LLM or VLM regardless of auto-detection.
+- **Profiles**: save named bundles of per-model settings and switch between them from the admin panel. A profile can optionally be exposed as its own model: `/v1/models` then also lists `<model>:<profile>` (e.g. `qwen3-8b:thinking`), which serves on the same engine as the base model with the profile's settings overlaid per request — no extra memory, no reload. When the base model has an alias, the exposed ID is advertised as `<alias>:<profile>`; the directory-name form keeps working, just like for the base model.
 
 <p align="center">
   <img src="docs/images/omlx_ChatTemplateKwargs.png" alt="oMLX Chat Template Kwargs" width="480">
@@ -357,6 +407,9 @@ open apps/omlx-mac/build/Stage/oMLX.app
 
 # Force a fresh venvstacks rebuild (otherwise it's cached by fingerprint)
 apps/omlx-mac/Scripts/build.sh release --rebuild-donor
+
+# Stage with optional GLM-5.2 / MiniMax M3 native custom kernels
+apps/omlx-mac/Scripts/build.sh release --with-custom-kernel
 ```
 
 First cold build takes 10–20 minutes (venvstacks Python layer assembly). Subsequent builds reuse the cached `packaging/_export/` and finish in about 4 minutes. See [packaging/README.md](packaging/README.md) for the layer configuration and [apps/omlx-mac/](apps/omlx-mac/) for the Swift sources.
@@ -380,3 +433,4 @@ Contributions are welcome! See [Contributing Guide](docs/CONTRIBUTING.md) for de
 - [venvstacks](https://venvstacks.lmstudio.ai) - Portable Python environment layering for the macOS app bundle
 - [mlx-embeddings](https://github.com/Blaizzy/mlx-embeddings) - Embedding model support for Apple Silicon
 - [dflash-mlx](https://github.com/bstnxbt/dflash-mlx) - Block diffusion speculative decoding on Apple Silicon
+- [MTPLX](https://github.com/youssofal/mtplx) - Lightning MTP's verify-shape Metal kernels are powered by MTPLX by Youssof Altoukhi, which also inspired the depth-k pipeline

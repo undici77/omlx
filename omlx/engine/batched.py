@@ -14,7 +14,12 @@ from typing import Any
 from ..api.tool_calling import convert_tools_for_template
 from ..api.utils import clean_special_tokens, detect_and_strip_partial
 from ..utils.tokenizer import get_tokenizer_config
-from .base import BaseEngine, GenerationOutput, _warn_scheduler_unreachable_once
+from .base import (
+    BaseEngine,
+    GenerationOutput,
+    _clear_teardown_references,
+    _warn_scheduler_unreachable_once,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -227,11 +232,10 @@ class BatchedEngine(BaseEngine):
 
         import asyncio
 
-        from mlx_lm import load
-
         from ..engine_core import AsyncEngineCore, EngineConfig
         from ..scheduler import SchedulerConfig
         from ..utils.model_loading import (
+            lm_load_compat,
             maybe_apply_pre_load_patches,
             maybe_load_custom_quantization,
         )
@@ -263,7 +267,7 @@ class BatchedEngine(BaseEngine):
                 model, processor = custom_loaded
                 return model, getattr(processor, "tokenizer", processor)
 
-            return load(
+            return lm_load_compat(
                 self._model_name,
                 tokenizer_config=tokenizer_config,
                 trust_remote_code=self._trust_remote_code,
@@ -300,15 +304,100 @@ class BatchedEngine(BaseEngine):
                 tq_bits = float(getattr(self._model_settings, "turboquant_kv_bits", 4))
                 logger.info(f"TurboQuant KV cache enabled: {tq_bits} bits")
 
+        # head_dim=256 long-context prefill: route to an O(L) tiled SDPA kernel
+        # so models like Qwen3.6-27B stop OOMing / getting prefill-guard-rejected
+        # below their context window. The route is memory-aware: it defers to
+        # the faster unfused fallback whenever the scheduler-provided guard
+        # headroom fits its O(L^2) transient (#2204). Installed after
+        # TurboQuant so it is the outer wrapper and only grabs non-quantized
+        # 256 prefill; all other cases (incl. TurboQuant caches, other head
+        # dims, decode, short prefill) fall through to the prior SDPA
+        # unchanged. Passthrough-safe to install unconditionally — the route
+        # is strictly gated. Disable via
+        # model_settings.sdpa256_prefill_enabled = False.
+        if getattr(self._model_settings, "sdpa256_prefill_enabled", True) is not False:
+            try:
+                from ..patches.sdpa256_attention import (
+                    apply_sdpa256_attention_patch,
+                )
+
+                apply_sdpa256_attention_patch()
+            except Exception:
+                logger.debug("sdpa256 attention patch not applied", exc_info=True)
+
+        # Qwen3.5/3.6 head_dim=256 causal prefill -> native steel FA kernel.
+        # Strictly shape-gated; decode, quantized-cache paths, and unsupported
+        # models fall through to the previous SDPA implementation.
+        if (
+            getattr(self._model_settings, "fa256_steel_prefill_enabled", True)
+            is not False
+        ):
+            try:
+                from ..patches.qwen35_fa256_attention import (
+                    apply_qwen35_fa256_attention_patch,
+                )
+
+                apply_qwen35_fa256_attention_patch()
+            except Exception:
+                logger.debug("Qwen FA-256 steel patch not applied", exc_info=True)
+
+        # Qwen3.5/3.6 q4 prefill linears -> native qmm tile tuned for long
+        # batches. Strictly gated in the patch; decode and unsupported linears
+        # fall through.
+        if (
+            getattr(self._model_settings, "qwen35_q4_mlp_prefill_enabled", True)
+            is not False
+        ):
+            try:
+                from ..patches.qwen35_q4_mlp import (
+                    apply_qwen35_q4_lm_prefill_linear_patch,
+                    apply_qwen35_q4_mlp_patch,
+                    apply_qwen35_q4_prefill_linear_patch,
+                )
+
+                apply_qwen35_q4_mlp_patch()
+                apply_qwen35_q4_prefill_linear_patch()
+                apply_qwen35_q4_lm_prefill_linear_patch()
+            except Exception:
+                logger.debug("Qwen q4 MLP prefill patch not applied", exc_info=True)
+
+        # Qwen3.5/3.6 sparse MoE prefill -> native weighted-sum after sorted
+        # SwitchGLU. Strictly gated; decode and unsupported MoE variants fall
+        # through to stock mlx-lm.
+        if (
+            getattr(self._model_settings, "qwen35_moe_weighted_sum_enabled", True)
+            is not False
+        ):
+            try:
+                from ..patches.qwen35_moe_weighted_sum import (
+                    apply_qwen35_moe_weighted_sum_patch,
+                )
+
+                apply_qwen35_moe_weighted_sum_patch()
+            except Exception:
+                logger.debug(
+                    "Qwen MoE weighted-sum patch not applied", exc_info=True
+                )
+
+        if (
+            getattr(self._model_settings, "qwen35_ragged_decode_fallback_enabled", True)
+            is not False
+        ):
+            try:
+                from ..patches.qwen35_ragged_decode import (
+                    apply_qwen35_ragged_decode_patch,
+                )
+
+                apply_qwen35_ragged_decode_patch()
+            except Exception:
+                logger.debug("qwen3_5 ragged decode patch not applied", exc_info=True)
+
         # Create engine config (copy to avoid mutating the shared instance)
         scheduler_config = (
             copy.copy(self._scheduler_config)
             if self._scheduler_config
             else SchedulerConfig()
         )
-        scheduler_config.model_name = (
-            self._model_name
-        )  # Ensure cache isolation per model
         engine_config = EngineConfig(
             model_name=self._model_name,
             scheduler_config=scheduler_config,
@@ -365,7 +454,7 @@ class BatchedEngine(BaseEngine):
                                 specprefill_draft,
                                 trust_remote_code=self._trust_remote_code,
                             )
-                            draft_model, _ = load(
+                            draft_model, _ = lm_load_compat(
                                 specprefill_draft,
                                 tokenizer_config=draft_tokenizer_config,
                                 trust_remote_code=self._trust_remote_code,
@@ -408,9 +497,16 @@ class BatchedEngine(BaseEngine):
                     self._engine.engine.close()
                 except Exception as e:
                     logger.warning(f"Error closing engine: {e}")
-        self._engine = None
-        self._model = None
-        self._tokenizer = None
+        _clear_teardown_references(
+            self,
+            none_attrs=(
+                "_engine",
+                "_model",
+                "_tokenizer",
+                "_grammar_compiler",
+            ),
+            false_attrs=("_grammar_compiler_init_attempted",),
+        )
         self._loaded = False
         logger.info("BatchedEngine stopped")
 
@@ -672,6 +768,8 @@ class BatchedEngine(BaseEngine):
                     finish_reason=output.finish_reason,
                     tool_calls=output.tool_calls,
                     cached_tokens=output.cached_tokens,
+                    generated_at=getattr(output, "generated_at", None),
+                    generated_until=getattr(output, "generated_until", None),
                 )
         except GeneratorExit:
             # Client disconnected

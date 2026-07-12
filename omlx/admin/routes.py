@@ -31,6 +31,8 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 
 from ..api.markitdown import MARKITDOWN_MODEL_ID, markitdown_model_visible
+from ..api.openai_models import _coerce_tool_call_arguments
+from ..api.utils import _try_parse_json
 from ..model_profiles import EXCLUDED_FROM_PROFILES
 from ..settings import BURST_DECODE_MODES, SubKeyEntry, burst_decode_env
 from ..utils.release_check import normalize_update_channel, select_latest_release
@@ -155,6 +157,8 @@ class ModelSettingsRequest(BaseModel):
     guided_grammar: str | None = None
     is_pinned: bool | None = None
     is_default: bool | None = None
+    is_hidden: bool | None = None
+    is_favorite: bool | None = None
     # Security: per-model opt-in for trust_remote_code (issue #926)
     trust_remote_code: bool | None = None
 
@@ -164,10 +168,12 @@ class CreateProfileRequest(BaseModel):
 
     name: str
     display_name: str
+    api_name: str | None = None
     description: str | None = None
     settings: dict[str, Any] = Field(default_factory=dict)
     also_save_as_template: bool = False
     source_template: str | None = None
+    expose_as_model: bool = False
 
 
 class UpdateProfileRequest(BaseModel):
@@ -175,9 +181,11 @@ class UpdateProfileRequest(BaseModel):
 
     new_name: str | None = None
     display_name: str | None = None
+    api_name: str | None = None
     description: str | None = None
     settings: dict[str, Any] | None = None
     source_template: str | None = None
+    expose_as_model: bool | None = None
     also_save_as_template: bool = False
 
 
@@ -216,6 +224,7 @@ class GlobalSettingsRequest(BaseModel):
     model_dirs: list[str] | None = None
     model_dir: str | None = None  # Deprecated: kept for backward compatibility
     model_fallback: bool | None = None
+    hide_helper_models: bool | None = None
 
     # Memory enforcement
     memory_prefill_memory_guard: bool | None = None
@@ -336,6 +345,12 @@ class OQStartRequest(BaseModel):
     dtype: str = "bfloat16"
     preserve_mtp: bool = False
     auto_proxy_sensitivity: bool = True
+    enhanced: bool = False
+    imatrix_cache_path: str = ""
+    imatrix_reuse_cache: bool = True
+    imatrix_strict: bool = False
+    imatrix_num_samples: int = 128
+    imatrix_seq_length: int = 512
 
 
 class HFUploadRequest(BaseModel):
@@ -628,7 +643,7 @@ def _mtp_compat_for_model(model_info: dict) -> tuple[bool, str]:
     if not _is_mtp_compatible(cfg, model_type):
         return False, (
             f"model_type={model_type!r} is not on the MTP whitelist "
-            "(supported: qwen3_5*, qwen3_6*, deepseek_v4*)"
+            "(supported: qwen3_5*, qwen3_6*, deepseek_v4*, glm_moe_dsa)"
         )
     if not _model_has_mtp_weight_tensors(Path(model_path)):
         return False, (
@@ -1775,6 +1790,54 @@ async def list_grammar_parsers(is_admin: bool = Depends(require_admin)):
 # =============================================================================
 
 
+def _model_display_name(
+    model_id: str,
+    model_path: str | Path | None,
+    model_dirs: list[Path],
+    *,
+    source_repo_id: str | None = None,
+) -> str:
+    """Return the UI-only display name for a discovered local model."""
+    repo_id = (source_repo_id or "").strip()
+    if "/" in repo_id:
+        return repo_id
+
+    if not model_path:
+        return model_id
+
+    path_text = str(model_path)
+    if "://" in path_text:
+        return model_id
+
+    try:
+        path = Path(path_text).expanduser().resolve()
+    except (OSError, RuntimeError):
+        path = Path(path_text).expanduser()
+
+    for model_dir in model_dirs:
+        try:
+            rel = path.relative_to(model_dir.expanduser().resolve())
+        except (OSError, RuntimeError, ValueError):
+            continue
+
+        parts = rel.parts
+        if len(parts) >= 2:
+            return f"{parts[0]}/{parts[1]}"
+        return model_id
+
+    return model_id
+
+
+def _model_dirs_for_display(global_settings: Any | None) -> list[Path]:
+    if global_settings is None:
+        return []
+    try:
+        return global_settings.model.get_model_dirs(global_settings.base_path)
+    except Exception as e:  # pragma: no cover - defensive for partial test doubles
+        logger.debug("Could not resolve model dirs for display names: %s", e)
+        return []
+
+
 @router.get("/api/models")
 async def list_models(is_admin: bool = Depends(require_admin)):
     """
@@ -1792,6 +1855,8 @@ async def list_models(is_admin: bool = Depends(require_admin)):
     engine_pool = _get_engine_pool()
     settings_manager = _get_settings_manager()
     server_state = _get_server_state()
+    global_settings = _get_global_settings() if _get_global_settings else None
+    model_dirs = _model_dirs_for_display(global_settings)
 
     if engine_pool is None:
         raise HTTPException(status_code=503, detail="Server not initialized")
@@ -1802,6 +1867,18 @@ async def list_models(is_admin: bool = Depends(require_admin)):
 
     # Get all model settings
     all_settings = settings_manager.get_all_settings() if settings_manager else {}
+
+    # Draft-model references pointed at by other models' speculative settings —
+    # used to badge "helper" drafters that only differ by being referenced.
+    referenced_drafts: set[str] = set()
+    for _ms in all_settings.values():
+        for ref in (
+            _ms.specprefill_draft_model,
+            _ms.dflash_draft_model,
+            _ms.vlm_mtp_draft_model,
+        ):
+            if ref:
+                referenced_drafts.add(ref)
 
     # SSD cache dir is set on the scheduler_config when the user enables paged
     # SSD caching; admin UI consumes it to gate the dflash SSD toggle.
@@ -1825,6 +1902,12 @@ async def list_models(is_admin: bool = Depends(require_admin)):
         model_data = {
             "id": model_id,
             "model_path": model_info.get("model_path", ""),
+            "display_name": _model_display_name(
+                model_id,
+                model_info.get("model_path", ""),
+                model_dirs,
+                source_repo_id=model_info.get("source_repo_id"),
+            ),
             "loaded": model_info.get("loaded", False),
             "is_loading": model_info.get("is_loading", False),
             "estimated_size": model_info.get("estimated_size", 0),
@@ -1840,6 +1923,14 @@ async def list_models(is_admin: bool = Depends(require_admin)):
             "pinned": model_info.get("pinned", False),
             "is_default": (
                 server_state.default_model == model_id if server_state else False
+            ),
+            "is_hidden": bool(settings and settings.is_hidden),
+            "is_favorite": bool(settings and settings.is_favorite),
+            "is_helper": (
+                bool(model_info.get("is_helper"))
+                or model_id in referenced_drafts
+                or model_info.get("model_path") in referenced_drafts
+                or model_info.get("source_repo_id") in referenced_drafts
             ),
             "engine_type": model_info.get("engine_type", "batched"),
             "model_type": model_info.get("model_type", "llm"),
@@ -1861,11 +1952,16 @@ async def list_models(is_admin: bool = Depends(require_admin)):
         # Add settings if available
         if settings:
             model_data["settings"] = asdict(settings)
+        if settings_manager:
+            model_data["exposed_profiles"] = [
+                profile
+                for profile in settings_manager.list_profiles(model_id)
+                if profile.get("expose_as_model")
+            ]
 
 
         models.append(model_data)
 
-    global_settings = _get_global_settings() if _get_global_settings else None
     if markitdown_model_visible(global_settings) and not any(
         m.get("id") == MARKITDOWN_MODEL_ID for m in models
     ):
@@ -1873,6 +1969,7 @@ async def list_models(is_admin: bool = Depends(require_admin)):
             {
                 "id": MARKITDOWN_MODEL_ID,
                 "model_path": "builtin://markitdown",
+                "display_name": MARKITDOWN_MODEL_ID,
                 "loaded": True,
                 "is_loading": False,
                 "estimated_size": 0,
@@ -2057,6 +2154,12 @@ async def update_model_settings(
                         status_code=400,
                         detail=f"Alias '{alias_value}' conflicts with model directory name '{mid}'",
                     )
+            _raise_if_alias_conflicts_exposed_profiles(
+                alias_value=alias_value,
+                model_id=model_id,
+                settings_manager=settings_manager,
+                engine_pool=engine_pool,
+            )
         current_settings.model_alias = alias_value
     if "model_type_override" in sent:
         valid_types = {
@@ -2310,7 +2413,8 @@ async def update_model_settings(
                     detail=(
                         f"Model is not MTP-compatible (model_type={model_type!r}, "
                         f"mtp_num_hidden_layers={cfg.get('mtp_num_hidden_layers', 0)}). "
-                        "Native MTP requires Qwen3.5/3.6 or DeepSeek-V4 with MTP heads."
+                        "Lightning MTP requires a Qwen3.5/3.6, DeepSeek-V4 or "
+                        "GLM-5.2 checkpoint with MTP heads."
                     ),
                 )
             if not _model_has_mtp_weight_tensors(Path(entry.model_path)):
@@ -2323,7 +2427,7 @@ async def update_model_settings(
                         "mlx-lm sanitize() path strips them."
                     ),
                 )
-            # Mutual exclusion with DFlash / TurboQuant — ModelSettings.__post_init__
+            # Mutual exclusion with DFlash — ModelSettings.__post_init__
             # also enforces this, but we surface a clearer error here.
             dflash_after = (
                 bool(request.dflash_enabled)
@@ -2334,16 +2438,6 @@ async def update_model_settings(
                 raise HTTPException(
                     status_code=400,
                     detail="MTP and DFlash cannot both be enabled; choose one speculative-decoding path.",
-                )
-            tq_after = (
-                bool(request.turboquant_kv_enabled)
-                if "turboquant_kv_enabled" in sent
-                else current_settings.turboquant_kv_enabled
-            )
-            if tq_after:
-                raise HTTPException(
-                    status_code=400,
-                    detail="MTP and TurboQuant KV cannot both be enabled; TurboQuant patches the attention path MTP relies on.",
                 )
         current_settings.mtp_enabled = new_mtp_enabled
 
@@ -2410,6 +2504,10 @@ async def update_model_settings(
         # Update server_state.default_model if setting as default
         if request.is_default and server_state:
             server_state.default_model = model_id
+    if request.is_hidden is not None:
+        current_settings.is_hidden = request.is_hidden
+    if request.is_favorite is not None:
+        current_settings.is_favorite = request.is_favorite
     if "trust_remote_code" in sent:
         current_settings.trust_remote_code = bool(request.trust_remote_code)
 
@@ -2538,6 +2636,81 @@ def _require_model(model_id: str):
     return entry
 
 
+def _model_aliases(
+    settings_manager, *, exclude_model_id: str | None = None
+) -> dict[str, str]:
+    return {
+        ms.model_alias: mid
+        for mid, ms in settings_manager.get_all_settings().items()
+        if mid != exclude_model_id and ms.model_alias
+    }
+
+
+def _raise_if_profile_id_conflicts_model_id(
+    candidate_id: str,
+    *,
+    model_id: str,
+    engine_pool,
+):
+    for existing_id in engine_pool.get_model_ids():
+        if existing_id != model_id and existing_id == candidate_id:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Exposed profile model ID '{candidate_id}' conflicts with "
+                    f"model directory name '{existing_id}'"
+                ),
+            )
+
+
+def _raise_if_alias_conflicts_exposed_profiles(
+    *,
+    alias_value: str,
+    model_id: str,
+    settings_manager,
+    engine_pool,
+):
+    exposed_ids = settings_manager.get_exposed_profile_model_ids()
+    if alias_value in exposed_ids:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Alias '{alias_value}' conflicts with an exposed profile model ID",
+        )
+
+    aliases = _model_aliases(settings_manager, exclude_model_id=model_id)
+    for profile in settings_manager.list_profiles(model_id):
+        if not profile.get("expose_as_model"):
+            continue
+        api_name = profile.get("api_name") or profile["name"]
+        candidate_id = f"{alias_value}:{api_name}"
+        _raise_if_profile_id_conflicts_model_id(
+            candidate_id,
+            model_id=model_id,
+            engine_pool=engine_pool,
+        )
+        if candidate_id in aliases:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Alias '{alias_value}' would expose profile model ID "
+                    f"'{candidate_id}', which conflicts with model alias "
+                    f"for '{aliases[candidate_id]}'"
+                ),
+            )
+        other_exposed_ids = settings_manager.get_exposed_profile_model_ids(
+            exclude_model_id=model_id,
+            exclude_profile_name=profile["name"],
+        )
+        if candidate_id in other_exposed_ids:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Alias '{alias_value}' would expose duplicate profile "
+                    f"model ID '{candidate_id}'"
+                ),
+            )
+
+
 @router.get("/api/models/{model_id}/profiles")
 async def list_model_profiles(
     model_id: str,
@@ -2558,6 +2731,7 @@ async def create_model_profile(
 
     mgr = _require_settings_manager()
     _require_model(model_id)
+    engine_pool = _get_engine_pool()
     try:
         profile = mgr.save_profile(
             model_id=model_id,
@@ -2566,6 +2740,11 @@ async def create_model_profile(
             description=request.description,
             settings=request.settings or {},
             source_template=request.source_template,
+            expose_as_model=request.expose_as_model,
+            api_name=request.api_name,
+            reserved_model_ids=(
+                set(engine_pool.get_model_ids()) if engine_pool is not None else None
+            ),
         )
     except InvalidProfileNameError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -2596,6 +2775,7 @@ async def update_model_profile(
 
     mgr = _require_settings_manager()
     _require_model(model_id)
+    engine_pool = _get_engine_pool()
     try:
         updated = mgr.update_profile(
             model_id=model_id,
@@ -2605,6 +2785,11 @@ async def update_model_profile(
             description=request.description,
             settings=request.settings,
             source_template=request.source_template,
+            expose_as_model=request.expose_as_model,
+            api_name=request.api_name,
+            reserved_model_ids=(
+                set(engine_pool.get_model_ids()) if engine_pool is not None else None
+            ),
         )
     except InvalidProfileNameError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -3024,6 +3209,7 @@ async def get_global_settings(is_admin: bool = Depends(require_admin)):
                 str(d) for d in global_settings.get_effective_model_dirs()
             ],
             "model_fallback": global_settings.model.model_fallback,
+            "hide_helper_models": global_settings.model.hide_helper_models,
         },
         "memory": {
             "prefill_memory_guard": global_settings.memory.prefill_memory_guard,
@@ -3287,6 +3473,9 @@ async def update_global_settings(
     if request.model_fallback is not None:
         global_settings.model.model_fallback = request.model_fallback
         runtime_applied.append("model_fallback")
+    if request.hide_helper_models is not None:
+        global_settings.model.hide_helper_models = request.hide_helper_models
+        runtime_applied.append("hide_helper_models")
 
     # Apply memory guard tier + custom ceiling change (Live)
     if (
@@ -4732,6 +4921,39 @@ async def clear_hot_cache(is_admin: bool = Depends(require_admin)):
     }
 
 
+def _normalize_probe_tool_calls(messages: list[dict]) -> list[dict]:
+    """Parse echoed tool_call arguments (JSON string -> object) for templating.
+
+    Native tool-calling chat templates (GLM, Qwen3.x, MiniMax) iterate
+    ``tool_call.function.arguments.items()``, but the OpenAI wire form sends
+    ``arguments`` as a JSON string. Rendering the string form raises
+    ``'str object' has no attribute 'items'`` and the probe 400s, so any
+    conversation that used tools reports an error (hollow cache dot) instead
+    of a real hit/miss. The chat path parses these before rendering; mirror
+    that here so (a) tool conversations tokenize and (b) the probe's block
+    hashes line up with what a real prefill produced. Returns shallow copies
+    so the caller's message dicts are left untouched.
+    """
+    normalized: list[dict] = []
+    for msg in messages:
+        tool_calls = msg.get("tool_calls") if isinstance(msg, dict) else None
+        if not tool_calls:
+            normalized.append(msg)
+            continue
+        new_calls = []
+        for tc in tool_calls:
+            fn = tc.get("function") if isinstance(tc, dict) else None
+            if isinstance(fn, dict) and "arguments" in fn:
+                arguments = _coerce_tool_call_arguments(fn["arguments"])
+                tc = {
+                    **tc,
+                    "function": {**fn, "arguments": _try_parse_json(arguments)},
+                }
+            new_calls.append(tc)
+        normalized.append({**msg, "tool_calls": new_calls})
+    return normalized
+
+
 @router.post("/api/cache/probe")
 async def probe_cache(
     request: CacheProbeRequest,
@@ -4799,7 +5021,7 @@ async def probe_cache(
     # Render + tokenize the prompt using the same path as generation so the
     # hashes line up with what the scheduler would produce at prefill.
     try:
-        messages = request.messages
+        messages = _normalize_probe_tool_calls(request.messages)
         if hasattr(engine, "_preprocess_messages"):
             messages = engine._preprocess_messages(messages)
         try:
@@ -5119,7 +5341,12 @@ async def list_hf_models(is_admin: bool = Depends(require_admin)):
 
     from ..model_discovery import _resolve_hf_cache_entry
 
-    def _add_model(model_path: Path, model_name: str) -> None:
+    def _add_model(
+        model_path: Path,
+        model_name: str,
+        *,
+        source_repo_id: str | None = None,
+    ) -> None:
         if model_name in seen_names:
             return
         seen_names.add(model_name)
@@ -5128,6 +5355,12 @@ async def list_hf_models(is_admin: bool = Depends(require_admin)):
             {
                 "name": model_name,
                 "path": str(model_path),
+                "display_name": _model_display_name(
+                    model_name,
+                    model_path,
+                    model_dirs,
+                    source_repo_id=source_repo_id,
+                ),
                 "size": total_size,
                 "size_formatted": format_size(total_size),
             }
@@ -5150,7 +5383,11 @@ async def list_hf_models(is_admin: bool = Depends(require_admin)):
                 hf_resolved = _resolve_hf_cache_entry(subdir)
                 if hf_resolved is not None:
                     if (hf_resolved.snapshot_path / "config.json").exists():
-                        _add_model(hf_resolved.snapshot_path, hf_resolved.model_id)
+                        _add_model(
+                            hf_resolved.snapshot_path,
+                            hf_resolved.model_id,
+                            source_repo_id=hf_resolved.source_repo_id,
+                        )
                     continue
 
                 # Level 2: organization folder — scan children
@@ -5160,8 +5397,8 @@ async def list_hf_models(is_admin: bool = Depends(require_admin)):
                     if (child / "config.json").exists():
                         _add_model(child, child.name)
 
-    # Sort case-insensitively by name for a stable, user-friendly order.
-    models.sort(key=lambda m: m["name"].lower())
+    # Sort by the UI display name so organization prefixes group together.
+    models.sort(key=lambda m: m["display_name"].lower())
     return {"models": models}
 
 
@@ -5499,16 +5736,18 @@ async def add_to_accuracy_queue(
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    entry = engine_pool.get_entry(bench_request.model_id)
-    if entry is None:
-        raise HTTPException(
-            status_code=404, detail=f"Model not found: {bench_request.model_id}"
-        )
-    if entry.model_type not in ("llm", "vlm", None):
-        raise HTTPException(
-            status_code=400,
-            detail=f"Model {bench_request.model_id} is not a supported model (type: {entry.model_type})",
-        )
+    # External runs target a remote model — nothing to validate locally.
+    if bench_request.external is None:
+        entry = engine_pool.get_entry(bench_request.model_id)
+        if entry is None:
+            raise HTTPException(
+                status_code=404, detail=f"Model not found: {bench_request.model_id}"
+            )
+        if entry.model_type not in ("llm", "vlm", None):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Model {bench_request.model_id} is not a supported model (type: {entry.model_type})",
+            )
 
     add_to_queue(bench_request)
 
@@ -5665,6 +5904,10 @@ async def get_active_benchmark(is_admin: bool = Depends(require_admin)):
         "bench_id": run.bench_id,
         "model_id": run.request.model_id,
         "force_lm_engine": run.request.force_lm_engine,
+        # Reconnecting tabs need this to restore the disabled-dropdown UI
+        # state. Never expose base_url/api_key here — model_id already
+        # carries the external model name.
+        "external": run.request.external is not None,
     }
 
 
@@ -5710,17 +5953,19 @@ async def start_benchmark(
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    # Validate model exists and is an LLM
-    entry = engine_pool.get_entry(bench_request.model_id)
-    if entry is None:
-        raise HTTPException(
-            status_code=404, detail=f"Model not found: {bench_request.model_id}"
-        )
-    if entry.model_type not in ("llm", "vlm", None):
-        raise HTTPException(
-            status_code=400,
-            detail=f"Model {bench_request.model_id} is not a supported model (type: {entry.model_type})",
-        )
+    # Validate model exists and is an LLM. External runs target a remote
+    # model — nothing to validate locally.
+    if bench_request.external is None:
+        entry = engine_pool.get_entry(bench_request.model_id)
+        if entry is None:
+            raise HTTPException(
+                status_code=404, detail=f"Model not found: {bench_request.model_id}"
+            )
+        if entry.model_type not in ("llm", "vlm", None):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Model {bench_request.model_id} is not a supported model (type: {entry.model_type})",
+            )
 
     # Cleanup old runs
     cleanup_old_runs()
@@ -6041,6 +6286,17 @@ async def start_oq_quantization(
             status_code=400,
             detail="Invalid dtype. Must be 'bfloat16' or 'float16'",
         )
+    if request.enhanced:
+        if not 1 <= request.imatrix_num_samples <= 4096:
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid imatrix_num_samples. Must be between 1 and 4096.",
+            )
+        if not 64 <= request.imatrix_seq_length <= 8192:
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid imatrix_seq_length. Must be between 64 and 8192.",
+            )
     is_paro, _ = _paroquant_compat_for_model({"model_path": request.model_path})
     if is_paro:
         raise HTTPException(
@@ -6060,6 +6316,12 @@ async def start_oq_quantization(
             dtype=request.dtype,
             preserve_mtp=request.preserve_mtp,
             auto_proxy_sensitivity=request.auto_proxy_sensitivity,
+            enhanced=request.enhanced,
+            imatrix_cache_path=request.imatrix_cache_path,
+            imatrix_reuse_cache=request.imatrix_reuse_cache,
+            imatrix_strict=request.imatrix_strict,
+            imatrix_num_samples=request.imatrix_num_samples,
+            imatrix_seq_length=request.imatrix_seq_length,
         )
         return {"success": True, "task": task.to_dict()}
     except ValueError as e:

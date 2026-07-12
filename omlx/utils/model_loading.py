@@ -14,18 +14,49 @@ from mlx.utils import tree_flatten
 logger = logging.getLogger(__name__)
 
 _VLM_TEXT_PREFIX = "language_model."
+# HF/checkpoint order vs runtime module-tree order for the VLM text stack.
+# ``sanitize`` swaps the former to the latter; class_predicate matches the latter.
+_CKPT_TEXT_PREFIX = "model.language_model."
+_RUNTIME_TEXT_PREFIX = "language_model.model."
 
 _MLX_LM_LOAD_CONFIG_PATCHED = False
 
+# mlx_lm.load dropped trust_remote_code in some releases. Check once at
+# import time so call sites can pass it safely across versions.
+def _mlx_lm_load_accepts_trust_remote_code() -> bool:
+    try:
+        import inspect
+        from mlx_lm import load as _lm_load
+        return "trust_remote_code" in inspect.signature(_lm_load).parameters
+    except Exception:
+        return False
+
+_LM_LOAD_ACCEPTS_TRC = _mlx_lm_load_accepts_trust_remote_code()
+
+
+def lm_load_compat(path_or_repo: str, *, trust_remote_code: bool = False, **kwargs):
+    """Wrapper around mlx_lm.load that forwards trust_remote_code only when supported."""
+    from mlx_lm import load
+    if _LM_LOAD_ACCEPTS_TRC:
+        kwargs["trust_remote_code"] = trust_remote_code
+    return load(path_or_repo, **kwargs)
+
 
 def expand_per_layer_quant_keys(cfg: dict) -> dict:
-    """Add ``language_model.``-prefixed variants of per-layer quantization keys.
+    """Add module-tree-path variants of per-layer quantization keys.
 
-    oQ writes per-layer overrides keyed by safetensors tensor base name
-    (e.g. ``"lm_head"``), but ``nn.quantize``'s class_predicate receives
-    model-tree paths (``"language_model.lm_head"``).  Without the prefixed
-    variant the lookup misses and the global bits are used, causing a
-    shape mismatch at ``load_weights``.
+    mlx-lm's ``nn.quantize`` class_predicate matches the runtime module-tree
+    path directly (``if p in config["quantization"]``), but oQ / HF
+    checkpoints key per-layer overrides by other conventions:
+
+    - bare safetensors tensor base name (``"lm_head"``), which the VLM text
+      tree nests under ``language_model.`` (``"language_model.lm_head"``).
+    - HF checkpoint order ``model.language_model.layers.N.*``, which
+      ``sanitize`` swaps to module-tree order
+      ``language_model.model.layers.N.*``.
+
+    Without the matching variant the lookup misses, the global bits are used,
+    and the layer is built at the wrong bit-width.
 
     Mutates *cfg* in place and returns it for convenience.
     """
@@ -37,15 +68,63 @@ def expand_per_layer_quant_keys(cfg: dict) -> dict:
         for key, val in quant.items():
             if not isinstance(val, dict):
                 continue
-            prefixed = _VLM_TEXT_PREFIX + key
-            if not key.startswith(_VLM_TEXT_PREFIX) and prefixed not in quant:
-                extras[prefixed] = val
+            if key.startswith(_CKPT_TEXT_PREFIX):
+                # model.language_model.X -> language_model.model.X
+                variant = _RUNTIME_TEXT_PREFIX + key[len(_CKPT_TEXT_PREFIX) :]
             elif key.startswith(_VLM_TEXT_PREFIX):
-                short = key[len(_VLM_TEXT_PREFIX) :]
-                if short not in quant:
-                    extras[short] = val
+                # language_model.X -> X
+                variant = key[len(_VLM_TEXT_PREFIX) :]
+            else:
+                # X -> language_model.X
+                variant = _VLM_TEXT_PREFIX + key
+            if variant not in quant and variant not in extras:
+                extras[variant] = val
         if extras:
             quant.update(extras)
+    return cfg
+
+
+def expand_glm_moe_dsa_fused_quant_keys(cfg: dict) -> dict:
+    """Add quantization specs for GLM DSA fused MoE gate/up layers.
+
+    The oMLX GLM DSA patch fuses ``switch_mlp.gate_proj`` and
+    ``switch_mlp.up_proj`` into ``switch_mlp.gate_up_proj``.  mlx-lm's loader
+    chooses a module's quantizer from ``config["quantization"][path]`` before
+    falling back to the global quantization settings.  GLM-5.1-MXFP4-Q8 ships
+    per-layer MXFP4 specs for the split gate/up modules, but no fused path
+    entry, so the fallback incorrectly quantizes ``gate_up_proj`` as affine and
+    strict loading asks for missing ``gate_up_proj.biases`` tensors.
+
+    Mutates *cfg* in place and returns it for convenience.
+    """
+    if cfg.get("model_type") != "glm_moe_dsa":
+        return cfg
+
+    for config_key in ("quantization", "quantization_config"):
+        quant = cfg.get(config_key)
+        if not isinstance(quant, dict):
+            continue
+
+        extras: dict[str, dict] = {}
+        for gate_path, gate_spec in list(quant.items()):
+            if not gate_path.endswith(".mlp.switch_mlp.gate_proj"):
+                continue
+            if not isinstance(gate_spec, dict):
+                continue
+
+            base_path = gate_path[: -len(".gate_proj")]
+            up_path = f"{base_path}.up_proj"
+            fused_path = f"{base_path}.gate_up_proj"
+            if fused_path in quant:
+                continue
+
+            up_spec = quant.get(up_path)
+            if isinstance(up_spec, dict) and up_spec == gate_spec:
+                extras[fused_path] = dict(gate_spec)
+
+        if extras:
+            quant.update(extras)
+
     return cfg
 
 
@@ -65,6 +144,7 @@ def _patch_mlx_lm_load_config() -> None:
     def _patched(model_path, *args, **kwargs):
         cfg = _original(model_path, *args, **kwargs)
         expand_per_layer_quant_keys(cfg)
+        expand_glm_moe_dsa_fused_quant_keys(cfg)
         return cfg
 
     _lu.load_config = _patched
@@ -86,6 +166,10 @@ def maybe_apply_pre_load_patches(
       declares ``model_type == "step3p7"``.
     - Llama 4 attention offset patch when ``config.json`` declares
       ``model_type == "llama4"`` directly or under ``text_config``.
+    - GLM-5.2 ``glm_moe_dsa`` patch (mlx-lm PR 1410) when ``config.json``
+      declares ``model_type == "glm_moe_dsa"``. Required because pinned
+      mlx-lm exposes it as a bare DeepSeek-V3.2 subclass and cannot load
+      checkpoints whose shared DSA layers carry no indexer weights.
     - Native MTP patch (PR 990 + PR 15) when the config declares MTP heads
       on a supported model_type. Always applied for sanitize correctness;
       head attachment is gated by ``model_settings.mtp_enabled``.
@@ -102,9 +186,6 @@ def maybe_apply_pre_load_patches(
       and crashes with KeyError unless the mlx_vlm_mtp sanitize replacement
       is installed first. ``for_vlm=True`` is only passed by
       ``VLMBatchedEngine``, so no separate ``vision_config`` gate is needed.
-    - mlx-vlm diffusion mxfp4 embedding patch when ``for_vlm`` is True and
-      the checkpoint declares ``model_type == "diffusion_gemma"``.
-
     Both patches inject modules into ``sys.modules`` and replace mlx-lm
     internals; gating keeps non-affected models at zero cost.
 
@@ -143,6 +224,12 @@ def maybe_apply_pre_load_patches(
         if apply_step3p7_patch():
             logger.info("Step 3.7 pre-load patch applied for %s", model_name)
 
+    if model_type == "hy_v3":
+        from ..patches.hy_v3 import apply_hy_v3_patch
+
+        if apply_hy_v3_patch():
+            logger.info("Hy3 pre-load patch applied for %s", model_name)
+
     text_config = config.get("text_config")
     text_model_type = (
         text_config.get("model_type") if isinstance(text_config, dict) else None
@@ -153,16 +240,26 @@ def maybe_apply_pre_load_patches(
         if apply_llama4_attention_patch():
             logger.info("Llama 4 attention patch applied for %s", model_name)
 
-    if for_vlm and model_type == "diffusion_gemma":
-        from ..patches.mlx_vlm_diffusion import apply_mlx_vlm_diffusion_patch
+    if model_type == "glm_moe_dsa":
+        from ..patches.glm_moe_dsa import apply_glm_moe_dsa_patch
 
-        if apply_mlx_vlm_diffusion_patch():
-            logger.info("mlx-vlm diffusion patch applied for %s", model_name)
+        if apply_glm_moe_dsa_patch():
+            logger.info("GLM MoE DSA pre-load patch applied for %s", model_name)
 
     minimax_m3_types = {"minimax_m3", "minimax_m3_vl"}
     if for_vlm and (
         model_type in minimax_m3_types or text_model_type in minimax_m3_types
     ):
+        from ..patches.mlx_vlm_minimax_m3_compat import (
+            apply_mlx_vlm_minimax_m3_compat_patch,
+        )
+
+        if apply_mlx_vlm_minimax_m3_compat_patch():
+            logger.info(
+                "MiniMax M3 mlx-vlm compatibility patch applied for %s",
+                model_name,
+            )
+
         from ..patches.minimax_m3_sparse_attention import (
             apply_minimax_m3_sparse_attention_patch,
         )
@@ -196,10 +293,20 @@ def maybe_apply_pre_load_patches(
         from ..patches.mlx_lm_mtp import (
             apply_mlx_lm_mtp_patch,
             set_mtp_active,
+            set_mtp_depth,
         )
 
         if apply_mlx_lm_mtp_patch():
             set_mtp_active(mtp_enabled)
+            # mtp_num_draft_tokens is the MAX draft depth; an adaptive
+            # controller picks 1..max per sequence from rolling accept/latency
+            # estimates, so prose/chat settles at 1 and predictable text
+            # climbs. Set it to 1 for a fixed depth-1 cycle. Note: depth >= 2
+            # verify forwards route through the verify-shape qmm kernels
+            # (M >= 3), whose numerics can diverge from the unrouted path at
+            # bf16 tail-ULP level.
+            depth = getattr(model_settings, "mtp_num_draft_tokens", None)
+            set_mtp_depth(int(depth) if depth else 3)
             if mtp_enabled:
                 logger.info(
                     "Native MTP patch applied for %s (model_type=%s, active)",
@@ -372,8 +479,33 @@ _MTP_WEIGHT_PREFIXES = (
 )
 
 
+def _nextn_weight_prefixes(model_path: str | Path) -> tuple[str, ...]:
+    """Weight-key prefixes for MTP layers stored as extra decoder layers.
+
+    DeepSeek-V3-style checkpoints (GLM-5.2 among them) keep their MTP head
+    as ``model.layers.<num_hidden_layers + i>.*`` rather than ``mtp.*``;
+    the model patch's sanitize remaps them at load/convert time, so for
+    detection purposes those layers count as MTP weights.
+    """
+    try:
+        config = json.loads((Path(model_path) / "config.json").read_text())
+    except Exception:
+        return ()
+    cfgs = (config, config.get("text_config") or {})
+    n_mtp = max(int(c.get("num_nextn_predict_layers", 0) or 0) for c in cfgs)
+    if n_mtp <= 0:
+        return ()
+    n_main = max(int(c.get("num_hidden_layers", 0) or 0) for c in cfgs)
+    if n_main <= 0:
+        return ()
+    return tuple(f"model.layers.{n_main + i}." for i in range(n_mtp))
+
+
 def _checkpoint_has_mtp_weights(model_path: str | Path) -> bool:
-    """True iff the checkpoint at *model_path* ships any ``mtp.*`` weight tensor.
+    """True iff the checkpoint at *model_path* ships any MTP weight tensor.
+
+    Matches both the ``mtp.*`` naming and the nextn layout (extra decoder
+    layers past ``num_hidden_layers``, see ``_nextn_weight_prefixes``).
 
     Some Qwen3.6 MoE VLM exports declare ``mtp_num_hidden_layers > 0`` in
     ``config.json`` but strip the MTP weights during conversion (e.g.
@@ -391,12 +523,14 @@ def _checkpoint_has_mtp_weights(model_path: str | Path) -> bool:
     if not p.is_dir():
         return False
 
+    prefixes = _MTP_WEIGHT_PREFIXES + _nextn_weight_prefixes(p)
+
     index_path = p / "model.safetensors.index.json"
     if index_path.exists():
         try:
             data = json.loads(index_path.read_text())
             weight_map = data.get("weight_map") or {}
-            return any(k.startswith(_MTP_WEIGHT_PREFIXES) for k in weight_map)
+            return any(k.startswith(prefixes) for k in weight_map)
         except Exception as e:
             logger.debug("Failed to read %s for mtp weight scan: %s", index_path, e)
 
@@ -413,7 +547,7 @@ def _checkpoint_has_mtp_weights(model_path: str | Path) -> bool:
         try:
             with safetensors.safe_open(str(shard), framework="numpy") as f:
                 for k in f.keys():
-                    if k.startswith(_MTP_WEIGHT_PREFIXES):
+                    if k.startswith(prefixes):
                         return True
         except Exception as e:
             logger.debug("Failed to read %s header for mtp weight scan: %s", shard, e)
@@ -423,9 +557,9 @@ def _checkpoint_has_mtp_weights(model_path: str | Path) -> bool:
 def _is_mtp_compatible(config: dict, model_type: str | None) -> bool:
     """Decide whether the native MTP patch can be applied to this model.
 
-    Phase 1 supports Qwen3.5/3.6 (mlx-lm PR 990) and DeepSeek-V4-Flash
-    (Blaizzy/mlx-lm fork PR 15). The model also has to declare MTP heads
-    in the config; otherwise the patch is a no-op.
+    Supports Qwen3.5/3.6 (mlx-lm PR 990), DeepSeek-V4-Flash (Blaizzy/mlx-lm
+    fork PR 15) and GLM-5.2 (glm_moe_dsa). The model also has to declare
+    MTP heads in the config; otherwise the patch is a no-op.
     """
     if not _has_mtp_heads(config):
         return False
@@ -435,6 +569,7 @@ def _is_mtp_compatible(config: dict, model_type: str | None) -> bool:
         model_type.startswith("qwen3_5")
         or model_type.startswith("qwen3_6")
         or model_type.startswith("deepseek_v4")
+        or model_type == "glm_moe_dsa"
     )
 
 
@@ -445,14 +580,12 @@ def load_text_model(
 ):
     """Load an LLM model/tokenizer pair via mlx-lm."""
     maybe_apply_pre_load_patches(model_name, model_settings=model_settings)
-    from mlx_lm import load
-
     trust_remote_code = (
         bool(getattr(model_settings, "trust_remote_code", False))
         if model_settings is not None
         else False
     )
-    return load(
+    return lm_load_compat(
         model_name,
         tokenizer_config=tokenizer_config,
         trust_remote_code=trust_remote_code,

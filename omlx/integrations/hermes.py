@@ -149,5 +149,6 @@ class HermesIntegration(Integration):
         args = ["hermes", "chat", "--tui"]
         if ctx.model:
             args.extend(["-m", ctx.model])
+        args.extend(ctx.extra_args)
 
         os.execvpe("hermes", args, env)

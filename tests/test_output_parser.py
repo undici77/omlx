@@ -70,6 +70,17 @@ class CohereTokenizer:
         return "".join(self._token_map[token_id] for token_id in token_ids)
 
 
+class DeepSeekV4Tokenizer(CohereTokenizer):
+    has_tool_calling = True
+    tool_call_start = "<｜DSML｜tool_calls>"
+    tool_call_end = "</｜DSML｜tool_calls>"
+
+    def tool_parser(self, text: str, tools=None):
+        from omlx.patches.deepseek_v4.tool_parser_v4 import parse_tool_call
+
+        return parse_tool_call(text, tools)
+
+
 class _FakeMelodyOptions:
     def cmd4(self):
         return self
@@ -234,6 +245,63 @@ class TestCohere2MoeOutputParserSession:
             }
         ]
         assert final.finish_reason == "tool_calls"
+
+    def test_literal_newline_in_arguments_is_reescaped(self, monkeypatch):
+        """Melody may stream literal control chars when the model emits them inside
+        JSON string values (e.g. newlines inside code arguments).  finalize() must
+        re-serialize the accumulated arguments so they are valid JSON."""
+        # Build a fake Melody that returns arguments containing a literal newline
+        # (U+000A) inside the JSON string value, as the real model sometimes does.
+        literal_newline_args = '{"path":"f.py","code":"line1\nline2"}'  # literal \n
+
+        class _FakeMelodyFilterLiteralNewline:
+            def __init__(self, options):
+                pass
+
+            def write_decoded(self, decoded_text: str):
+                if decoded_text == "TC":
+                    tc = SimpleNamespace(
+                        index=0,
+                        id="call_1",
+                        name="edit",
+                        arguments=literal_newline_args,
+                    )
+                    return SimpleNamespace(
+                        content=None, reasoning=None, tool_calls=[tc]
+                    )
+                return SimpleNamespace(content=None, reasoning=None, tool_calls=[])
+
+            def flush_partials(self):
+                return SimpleNamespace(content=None, reasoning=None, tool_calls=[])
+
+        import types, json as _json
+
+        module = types.ModuleType("cohere_melody")
+        module.PyFilter = _FakeMelodyFilterLiteralNewline
+        module.PyFilterOptions = _FakeMelodyOptions
+        monkeypatch.setitem(__import__("sys").modules, "cohere_melody", module)
+
+        tokenizer = CohereTokenizer({"TC": "TC"})
+        from omlx.adapter.output_parser import Cohere2MoeOutputParserSession
+
+        session = Cohere2MoeOutputParserSession.__new__(Cohere2MoeOutputParserSession)
+        session._tokenizer = tokenizer
+        session._melody = _FakeMelodyFilterLiteralNewline(None)
+        session._detokenizer = None
+        session._thinking_started = False
+        session._thinking_closed = False
+        session._tool_calls = {}
+
+        session.process_token("TC")
+        final = session.finalize()
+
+        assert len(final.tool_calls) == 1
+        args_str = final.tool_calls[0]["arguments"]
+        # Must be valid strict JSON (no literal control characters)
+        parsed = _json.loads(args_str)
+        assert parsed["code"] == "line1\nline2"
+        # The literal newline must have been escaped
+        assert "\n" not in args_str or "\\n" in args_str
 
 
 class TestGemma4OutputParserSession:
@@ -432,6 +500,90 @@ class TestGemma4OutputParserSession:
 
 
 class TestOutputParserFactory:
+    def test_detects_deepseek_v4_by_config(self):
+        tokenizer = DeepSeekV4Tokenizer({1: "x"})
+        factory = detect_output_parser(
+            "DeepSeek-V4-Flash-oQ4e",
+            tokenizer,
+            {"model_type": "deepseek_v4"},
+        )
+
+        assert factory is not None
+        assert factory.kind == "deepseek_v4"
+
+    def test_deepseek_v4_stops_at_first_dsml_tool_block(self):
+        tokenizer = DeepSeekV4Tokenizer(
+            {
+                1: "Before ",
+                2: "<｜DSML｜tool",
+                3: '_calls>\n<｜DSML｜invoke name="Bash">\n',
+                4: '<｜DSML｜parameter name="command" string="true">ls</｜DSML｜parameter>\n'
+                "</｜DSML｜invoke>\n",
+                5: "</｜DSML｜tool_calls>",
+            }
+        )
+        factory = detect_output_parser(
+            "DeepSeek-V4-Flash-oQ4e",
+            tokenizer,
+            {"model_type": "deepseek_v4"},
+        )
+        session = factory.create_session(tokenizer)
+
+        stream = []
+        visible = []
+        stop_seen = False
+        for token_id in [1, 2, 3, 4, 5]:
+            result = session.process_token(token_id)
+            stream.append(result.stream_text)
+            visible.append(result.visible_text)
+            stop_seen = stop_seen or result.is_stop
+            assert result.record_token is True
+
+        final = session.finalize()
+        stream.append(final.stream_text)
+        visible.append(final.visible_text)
+
+        assert stop_seen is True
+        assert "".join(stream) == "Before "
+        assert "".join(visible) == "Before "
+        assert final.finish_reason == "tool_calls"
+        assert len(final.tool_calls) == 1
+        assert final.tool_calls[0]["name"] == "Bash"
+        assert json.loads(final.tool_calls[0]["arguments"]) == {"command": "ls"}
+
+    def test_deepseek_v4_drops_text_after_tool_end_in_same_token(self):
+        tokenizer = DeepSeekV4Tokenizer(
+            {
+                1: '<｜DSML｜tool_calls>\n<｜DSML｜invoke name="Bash">\n',
+                2: '<｜DSML｜parameter name="command" string="true">ls</｜DSML｜parameter>\n'
+                "</｜DSML｜invoke>\n",
+                3: "</｜DSML｜tool_calls>\n"
+                '<｜DSML｜parameter name="command" string="true">pwd</｜DSML｜parameter>',
+            }
+        )
+        factory = detect_output_parser(
+            "DeepSeek-V4-Flash-oQ4e",
+            tokenizer,
+            {"model_type": "deepseek_v4"},
+        )
+        session = factory.create_session(tokenizer)
+
+        stream = []
+        stop_seen = False
+        for token_id in [1, 2, 3]:
+            result = session.process_token(token_id)
+            stream.append(result.stream_text)
+            stop_seen = stop_seen or result.is_stop
+
+        final = session.finalize()
+        stream.append(final.stream_text)
+
+        assert stop_seen is True
+        assert "".join(stream) == ""
+        assert final.finish_reason == "tool_calls"
+        assert len(final.tool_calls) == 1
+        assert json.loads(final.tool_calls[0]["arguments"]) == {"command": "ls"}
+
     def test_detects_minimax_m3_by_config(self):
         tokenizer = CohereTokenizer({1: "x"})
         factory = detect_output_parser(
@@ -553,6 +705,59 @@ class TestOutputParserFactory:
 
         assert factory is not None
         assert factory.kind == "gemma4"
+
+    def test_session_receives_model_path_when_provided(self, monkeypatch):
+        """Since #2178 the scheduler's model_name is a display id, so the
+        filesystem path must reach parser sessions via model_path."""
+        import omlx.adapter.output_parser as output_parser_module
+
+        seen = {}
+
+        class RecordingSession:
+            def __init__(self, tokenizer, model_path=None):
+                seen["model_path"] = model_path
+
+        monkeypatch.setattr(
+            output_parser_module, "MiniMaxM3OutputParserSession", RecordingSession
+        )
+        tokenizer = CohereTokenizer({})
+        tokenizer.convert_tokens_to_ids = lambda text: -1
+        tokenizer.unk_token_id = -1
+
+        factory = detect_output_parser(
+            "MiniMax-M3-4bit",
+            tokenizer,
+            {"model_type": "minimax_m3_vl"},
+            model_path="/models/minimax-m3",
+        )
+        factory.create_session(tokenizer)
+        assert seen["model_path"] == "/models/minimax-m3"
+
+    def test_session_falls_back_to_model_name_without_model_path(self, monkeypatch):
+        """dflash/vlm engines pass their filesystem path as model_name and no
+        model_path, so the session fallback must keep using model_name."""
+        import omlx.adapter.output_parser as output_parser_module
+
+        seen = {}
+
+        class RecordingSession:
+            def __init__(self, tokenizer, model_path=None):
+                seen["model_path"] = model_path
+
+        monkeypatch.setattr(
+            output_parser_module, "MiniMaxM3OutputParserSession", RecordingSession
+        )
+        tokenizer = CohereTokenizer({})
+        tokenizer.convert_tokens_to_ids = lambda text: -1
+        tokenizer.unk_token_id = -1
+
+        factory = detect_output_parser(
+            "/models/MiniMax-M3-4bit",
+            tokenizer,
+            {"model_type": "minimax_m3_vl"},
+        )
+        factory.create_session(tokenizer)
+        assert seen["model_path"] == "/models/MiniMax-M3-4bit"
 
     def test_detects_gemma4_unified_by_config(self):
         tokenizer = GemmaTokenizer({1: "x"})

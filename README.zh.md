@@ -52,23 +52,45 @@
 
 ## 安装
 
-### macOS 应用 (从源码构建)
+### macOS 应用
 
-为了确保您的安全和对构建链的完全控制，**本仓库不提供预构建的二进制文件或 DMG 文件**。这并非是对社区的“不信任”，而是一种深思熟虑的“双重检查（Double Check）”，旨在尊重并保护每一位用户。
+从 [Releases](https://github.com/jundot/omlx/releases) 下载 `.dmg`，拖到 Applications 即可。应用支持自动更新，后续升级只需一键完成。macOS 应用也会安装轻量的 `~/.omlx/bin/omlx` CLI shim，因此可以从终端命令或 Apple Shortcuts 控制由应用管理的服务器。
 
+### Homebrew
 
-- **隐私验证**: oMLX 从底层设计上就致力于尊重您的隐私。通过要求从源码构建，我们为您提供了一种透明的方式来验证软件的运行完全符合文档说明——您的数据绝不会离开您的机器。
-- **完全控制**: 您可以完全掌控构建链路。您清楚地知道正在编译和执行的代码内容，从而消除了受损二进制文件带来的风险，并鼓励使用我们经过审计的安全构建脚本。
+```bash
+brew tap jundot/omlx https://github.com/jundot/omlx
+brew install omlx
 
-要创建 macOS 应用：
-1. 克隆此仓库。
-2. 运行安全构建脚本：
-   ```bash
-   ./build_tahoe.sh
-   ```
-3. 最终生产就绪的 DMG 将位于 `packaging/dist/` 中。将生成的 `oMLX.app` 拖到您的 Applications 文件夹中。
+# 升级到最新版本
+brew update && brew upgrade omlx
 
-需要 macOS 15.0+ (Sequoia), Python 3.11+ (建议) 和 Apple Silicon (M1/M2/M3/M4)。
+# 作为后台服务运行（崩溃时自动重启）
+brew services start omlx
+
+# 可选：MCP（Model Context Protocol）支持
+/opt/homebrew/opt/omlx/libexec/bin/pip install mcp
+```
+
+可选的 GLM-5.2 / MiniMax M3 原生自定义内核目前需要 HEAD 构建：
+
+```bash
+brew install omlx --HEAD --with-custom-kernel
+```
+
+### 从源码安装
+
+```bash
+git clone https://github.com/jundot/omlx.git
+cd omlx
+pip install -e .          # 仅核心
+pip install -e ".[mcp]"   # 含 MCP（Model Context Protocol）支持
+
+# 可选：GLM-5.2 / MiniMax M3 原生自定义内核
+OMLX_WITH_CUSTOM_KERNEL=1 pip install -e .
+```
+
+需要 macOS 15.0+ (Sequoia), Python 3.10+ 和 Apple Silicon（M1/M2/M3/M4）。
 
 ## 快速开始
 
@@ -83,12 +105,28 @@
 
 ### CLI
 
-如果您想使用 CLI，`omlx` 命令可以在应用程序包内部找到，或者在构建后从仓库运行。
+```bash
+omlx serve --model-dir ~/models
+```
+
+服务器会自动从子目录中发现 LLM、VLM、嵌入模型和重排序模型。任何 OpenAI 兼容客户端都可以连接到 `http://localhost:8000/v1`。内置聊天 UI 也可在 `http://localhost:8000/admin/chat` 使用。
+
+### Homebrew 服务
+
+如果通过 Homebrew 安装，可以将 oMLX 作为托管后台服务运行：
 
 ```bash
-# 构建后从源码目录运行的示例
-./.build_venv/bin/omlx serve --model-dir ~/models
+brew services start omlx    # 启动（崩溃时自动重启）
+brew services stop omlx     # 停止
+brew services restart omlx  # 重启
+brew services info omlx     # 查看状态
 ```
+
+服务使用默认配置运行 `omlx serve`（`~/.omlx/models`，端口 8000）。要自定义，可以设置环境变量（`OMLX_MODEL_DIR`、`OMLX_PORT` 等），或运行一次 `omlx serve --model-dir /your/path` 将设置保存到 `~/.omlx/settings.json`。
+
+日志写入两个位置：
+- **服务日志**: `$(brew --prefix)/var/log/omlx.log`（stdout/stderr）
+- **服务器日志**: `~/.omlx/logs/server.log`（结构化应用日志）
 
 ## 功能
 
@@ -141,6 +179,7 @@
 
 - **模型别名**: 设置自定义 API 显示名称。`/v1/models` 返回别名，请求时别名和目录名均可使用。
 - **模型类型覆盖**: 无论自动检测结果如何，手动设置为 LLM 或 VLM。
+- **配置文件**: 保存每个模型的命名设置组合，并在管理后台中切换。配置文件可以选择性地作为独立模型公开：`/v1/models` 随后也会列出 `<模型>:<配置文件>`（例如 `qwen3-8b:thinking`），它在与基础模型相同的引擎上运行，并按请求叠加该配置文件的设置 — 无需额外内存，无需重新加载。当基础模型有别名时，公开的 ID 以 `<别名>:<配置文件>` 形式呈现；目录名形式仍然有效，与基础模型一样。
 
 <p align="center">
   <img src="docs/images/omlx_ChatTemplateKwargs.png" alt="oMLX 聊天模板参数" width="480">
@@ -320,12 +359,14 @@ open apps/omlx-mac/build/Stage/oMLX.app
 
 # 强制重建 venvstacks（默认按指纹缓存）
 apps/omlx-mac/Scripts/build.sh release --rebuild-donor
+
+# 暂存包含可选 GLM-5.2 / MiniMax M3 原生自定义内核的应用
+apps/omlx-mac/Scripts/build.sh release --with-custom-kernel
 ```
 
 首次 cold 构建需要 10–20 分钟（venvstacks Python 层组装）。后续构建复用 `packaging/_export/` 缓存，约 4 分钟完成。层配置请参阅 [packaging/README.md](packaging/README.md)，Swift 源码请参阅 [apps/omlx-mac/](apps/omlx-mac/)。
 
 ## 贡献
-
 
 欢迎贡献！详情请参阅[贡献指南](docs/CONTRIBUTING.md)。
 
@@ -341,6 +382,7 @@ apps/omlx-mac/Scripts/build.sh release --rebuild-donor
 
 - [MLX](https://github.com/ml-explore/mlx) 和 [mlx-lm](https://github.com/ml-explore/mlx-lm) by Apple
 - [mlx-vlm](https://github.com/Blaizzy/mlx-vlm) - Apple Silicon 上的视觉语言模型推理
+- [vllm-mlx](https://github.com/waybarrios/vllm-mlx) - oMLX 从 vllm-mlx v0.1.0 起步，经过大幅演进，增加了多模型服务、分层 KV 缓存、完整分页缓存支持的 VLM、管理后台和 macOS 菜单栏应用
 - [venvstacks](https://venvstacks.lmstudio.ai) - macOS 应用包的便携 Python 环境分层
 - [mlx-embeddings](https://github.com/Blaizzy/mlx-embeddings) - Apple Silicon 嵌入模型支持
 - [dflash-mlx](https://github.com/bstnxbt/dflash-mlx) - Apple Silicon 上的块扩散推测解码 (Block diffusion speculative decoding)

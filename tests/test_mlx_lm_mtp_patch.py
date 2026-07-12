@@ -309,11 +309,13 @@ class TestQwen35MtpNormShift:
 
     def test_oq_discovery_keeps_mtp_norm_shift_on_raw_hf_source(self):
         """oQ streaming-plan discovery runs sanitize on no-data _TrackedTensor
-        placeholders where the per-key magnitude can't be read. The helper
-        must record a conditional replay transform for MTP norms so the
-        materialization path can still decide from the real tensor value.
-        Otherwise full-precision Qwen3.6 sources with mixed MTP norm
-        conventions can be double-shifted or left unshifted."""
+        placeholders. On a raw-HF source (unsanitized conv1d present) every
+        Qwen3-Next RMSNorm gamma is zero-centered, so MTP-head norms record
+        the same unconditional +1 "add" transform as the backbone norms.
+        (The old conditional add_if_mean_lt_0_5 misclassified q_norm/k_norm
+        [raw mean ~0.75] and mtp.norm [raw ~1.27], costing ~14pp of draft
+        acceptance on Qwen3.6-27B.) Pre-converted sources — no unsanitized
+        conv1d — keep the per-key conditional for mixed-convention bundles."""
         import mlx.core as mx
 
         from omlx.oq import _discover_sanitize_plan
@@ -336,14 +338,10 @@ class TestQwen35MtpNormShift:
         }
         plan = _discover_sanitize_plan(m.sanitize, _FakeIdx(meta))
 
-        # Backbone still has a fixed +1 add from the raw-HF conv1d signal.
-        # MTP norms need per-key value checks at materialization time.
+        # Raw-HF source: backbone AND head norms all take the fixed +1 add.
         assert plan["model.layers.0.input_layernorm.weight"]["transform"] == "add"
-        assert (
-            plan["mtp.layers.0.input_layernorm.weight"]["transform"]
-            == "add_if_mean_lt_0_5"
-        )
-        assert plan["mtp.norm.weight"]["transform"] == "add_if_mean_lt_0_5"
+        assert plan["mtp.layers.0.input_layernorm.weight"]["transform"] == "add"
+        assert plan["mtp.norm.weight"]["transform"] == "add"
 
 
 class TestQwen35MoeSanitize:
@@ -458,6 +456,55 @@ class TestQwen35MoeSanitize:
         assert f"{pfx}.shared_expert.gate_proj.weight" in result
         # No bogus switch_mlp keys synthesized for the dense layer.
         assert f"{pfx}.switch_mlp.gate_proj.weight" not in result
+
+    def test_sanitize_backbone_per_expert_form(self, moe_model):
+        """Ornith / raw Qwen3.5 ship *backbone* MoE layers as per-expert
+        tensors. Sanitize must stack them into switch_mlp, leaving no orphan
+        ``experts.{N}.*`` keys behind."""
+        import mlx.core as mx
+
+        weights = {"language_model.model.embed_tokens.weight": mx.zeros((256, 64))}
+        for layer in range(2):
+            pfx = f"language_model.model.layers.{layer}.mlp"
+            for e in range(4):
+                weights[f"{pfx}.experts.{e}.gate_proj.weight"] = mx.zeros((128, 64))
+                weights[f"{pfx}.experts.{e}.up_proj.weight"] = mx.zeros((128, 64))
+                weights[f"{pfx}.experts.{e}.down_proj.weight"] = mx.zeros((64, 128))
+
+        result = moe_model.sanitize(weights)
+
+        for layer in range(2):
+            pfx = f"language_model.model.layers.{layer}.mlp"
+            # Per-expert weights stacked: leading dim == num_experts (4).
+            assert result[f"{pfx}.switch_mlp.gate_proj.weight"].shape == (4, 128, 64)
+            assert result[f"{pfx}.switch_mlp.up_proj.weight"].shape == (4, 128, 64)
+            assert result[f"{pfx}.switch_mlp.down_proj.weight"].shape == (4, 64, 128)
+            # No orphan per-expert keys survive.
+            assert not any(f"{pfx}.experts." in k for k in result)
+
+    def test_sanitize_backbone_per_expert_quantized(self, moe_model):
+        """A per-expert *quantized* backbone carries ``.scales``/``.biases``
+        alongside ``.weight``. All three must be stacked, or the leftover
+        per-expert scales/biases trip 'Received N parameters not in model'."""
+        import mlx.core as mx
+
+        pfx = "language_model.model.layers.0.mlp"
+        weights = {"language_model.model.embed_tokens.weight": mx.zeros((256, 64))}
+        for e in range(4):
+            for proj in ("gate_proj", "up_proj", "down_proj"):
+                weights[f"{pfx}.experts.{e}.{proj}.weight"] = mx.zeros((128, 16))
+                weights[f"{pfx}.experts.{e}.{proj}.scales"] = mx.zeros((128, 2))
+                weights[f"{pfx}.experts.{e}.{proj}.biases"] = mx.zeros((128, 2))
+
+        result = moe_model.sanitize(weights)
+
+        for proj in ("gate_proj", "up_proj", "down_proj"):
+            for suffix in ("weight", "scales", "biases"):
+                key = f"{pfx}.switch_mlp.{proj}.{suffix}"
+                assert key in result, key
+                assert result[key].shape[0] == 4  # stacked over experts
+        # No orphan per-expert metadata survives.
+        assert not any(f"{pfx}.experts." in k for k in result)
 
 
 class TestDeepseekV4Model:
@@ -1252,9 +1299,12 @@ class TestModelSettingsMtp:
         with pytest.raises(ValueError, match="speculative-decoding"):
             ModelSettings(mtp_enabled=True, dflash_enabled=True)
 
-    def test_mutual_exclusion_with_turboquant(self):
-        with pytest.raises(ValueError, match="TurboQuant"):
-            ModelSettings(mtp_enabled=True, turboquant_kv_enabled=True)
+    def test_mtp_with_turboquant_allowed(self):
+        # TurboQuant's attention patch routes MTP's decode-shaped multi-row
+        # verify through the quantized decode kernels, so the combo is valid.
+        s = ModelSettings(mtp_enabled=True, turboquant_kv_enabled=True)
+        assert s.mtp_enabled is True
+        assert s.turboquant_kv_enabled is True
 
     def test_mtp_with_specprefill_allowed(self):
         # SpecPrefill targets a different code path (sparse prefill scoring),

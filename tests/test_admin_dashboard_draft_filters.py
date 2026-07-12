@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Regression tests for admin speculative draft-model filters."""
 
 from pathlib import Path

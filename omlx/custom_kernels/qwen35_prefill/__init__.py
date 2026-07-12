@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Qwen3.5/3.6 prefill kernels used by oMLX runtime patches."""
 
 from . import fast

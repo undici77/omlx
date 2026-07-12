@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Fast GLM kernels with a fallback to patched ``mlx.core.fast`` symbols."""
 
 from __future__ import annotations

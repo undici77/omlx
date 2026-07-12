@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Fast MiniMax M3 kernels with optional native extension dispatch."""
 
 from __future__ import annotations

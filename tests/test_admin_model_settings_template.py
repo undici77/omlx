@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Regression tests for admin model-settings UI gates."""
 
 from pathlib import Path

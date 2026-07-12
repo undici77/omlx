@@ -118,6 +118,16 @@ def pytest_collection_modifyitems(config, items):
         ("test_scheduler_logits_processors", "MLX mock active — GenerationBatch.filter unavailable in mock"),
         # Gemma-4 real parser (uses MLX regex engine)
         ("test_tool_calling", "MLX mock active — Gemma-4 real parser uses MLX regex"),
+        # New MLX-dependent test files failing with mock
+        ("test_glm_moe_dsa_patch", "MLX mock active — GLM MoE/DSA patch internals unavailable"),
+        ("test_mlx_vlm_minimax_m3_compat", "MLX mock active — MiniMax M3 loader/architecture fallback unavailable"),
+        ("test_qwen35_fa256_attention", "MLX mock active — Qwen 3.5 attention patch internals unavailable"),
+        ("test_qwen35_gdn_prefill", "MLX mock active — Qwen 3.5 prefill patch internals unavailable"),
+        ("test_qwen35_moe_weighted_sum", "MLX mock active — Qwen 3.5 MoE weighted sum unavailable"),
+        ("test_qwen35_q4_mlp", "MLX mock active — Qwen 3.5 Q4 MLP patch internals unavailable"),
+        ("test_scheduler", "MLX mock active — Scheduler SSD/TurboQuant cache layout signatures require real MLX"),
+        ("test_sdpa256_attention", "MLX mock active — SDPA 256 attention patch internals unavailable"),
+        ("test_glm_mtp_patch", "MLX mock active — GLM MTP patch internals unavailable"),
     ]
 
     _mock_skip = pytest.mark.skip(

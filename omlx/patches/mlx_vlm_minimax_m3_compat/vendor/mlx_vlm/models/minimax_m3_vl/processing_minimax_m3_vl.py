@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """
 Torch-free processor for MiniMax M3 VL.
 

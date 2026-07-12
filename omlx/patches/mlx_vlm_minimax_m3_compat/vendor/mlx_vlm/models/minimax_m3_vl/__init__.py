@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 from .config import ModelConfig, TextConfig, VisionConfig
 from .language import LanguageModel
 from .minimax_m3_vl import Model

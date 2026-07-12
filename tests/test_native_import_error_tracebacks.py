@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 def _assert_detached(exc):
     if exc is None:
         return

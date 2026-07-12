@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Fast Qwen3.5/3.6 prefill kernels with optional native dispatch."""
 
 from __future__ import annotations

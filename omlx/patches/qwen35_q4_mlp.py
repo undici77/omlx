@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 # ruff: noqa: N806
 """Qwen3.5/3.6 quantized MLP prefill matmul patch.
 

@@ -1,7 +1,7 @@
 # oMLX Security Audit & Compliance Guide
 
-**Version:** 1.1
-**Last Updated:** May 27, 2026
+**Version:** 1.2
+**Last Updated:** June 18, 2026
 **Project:** oMLX (Open MLX Inference Server)
 
 ---
@@ -165,6 +165,7 @@ def _default_func(*args, _n=_captured_name, **kwargs):
 | `pytest.skip()` in fixture | Tests requiring external data (vocab files, network) | Offline CI must not fail on missing downloads |
 | Inline mock override | **Never** inline `sys.meta_path` hacks in test files | Use `omlx/utils/mlx_mock.py` exclusively |
 | **Harmony token ID tests** | **Skip automatically via conftest.py** — do NOT add mock implementations for `HarmonyEncoding`, `StreamableParser`, etc. | Mock cannot produce exact token IDs; conftest.py `pytest_collection_modifyitems` auto-skips all tests whose file path or method name contains "harmony" when the MLX mock is active |
+| **MLX-dependent tests on Linux** | **Skip automatically via conftest.py `_MLX_SKIP_REASONS`** — do NOT maintain mock implementations for MLX internals (RotatingKVCache, PoolingCache, GenerationBatch.filter, mx.quantize shapes, etc.) | Mock is NumPy-backed and cannot reproduce real MLX C++ internals; maintaining per-function shims is fragile and unmaintainable. See `tests/conftest.py` for the skip list. |
 
 > **⚠️ Critical: Skip, don't maintain Harmony mocks.**
 > The MLX mock cannot produce the exact token IDs that the real `openai_harmony`
@@ -173,6 +174,20 @@ def _default_func(*args, _n=_captured_name, **kwargs):
 > Instead, `tests/conftest.py` automatically skips any test file or method whose
 > name/path contains "harmony" when the mock is active. This keeps test files
 > unchanged — zero modifications needed.
+
+> **⚠️ Critical: Skip, don't maintain MLX internal mocks.**
+> The MLX mock cannot reproduce real MLX C++ internals such as:
+> - `RotatingKVCache.is_trimmable`, `PoolingCache.accumulate_windows`
+> - `GenerationBatch.filter()` proper uid/logits_processors alignment
+> - `mx.quantize()` return shape for mxfp4 (3-tuple vs 2-tuple)
+> - Gemma-4 real regex parser (uses MLX's regex engine)
+>
+> **Never add mock implementations for these MLX internals.**
+> Instead, `tests/conftest.py` automatically skips test files listed in
+> `_MLX_SKIP_REASONS` when the MLX mock is active. This keeps test files
+> unchanged — zero modifications needed. When a new test file depends on
+> real MLX internals, add it to `_MLX_SKIP_REASONS` in conftest.py rather
+> than extending the mock.
 
 `pytest.ini` enforces: `addopts = -m "not slow and not integration"` — the default CI run must yield **zero failures**.
 

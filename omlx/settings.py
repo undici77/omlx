@@ -47,8 +47,8 @@ def get_system_memory() -> int:
     """
     Return total system RAM in bytes.
 
-    Uses os.sysconf first so macOS does not depend on psutil's VM stats
-    adapter, which can lag new HOST_VM_INFO64 layouts.
+    Uses os.sysconf first, then psutil_compat so macOS does not depend on
+    psutil's VM stats adapter, which can lag new HOST_VM_INFO64 layouts.
 
     Returns:
         Total RAM in bytes.
@@ -63,13 +63,13 @@ def get_system_memory() -> int:
         pass
 
     try:
-        import psutil
+        from .utils import psutil_compat
 
-        return psutil.virtual_memory().total
-    except ImportError:
-        pass
+        memory = int(psutil_compat.get_total_memory())
+        if memory > 0:
+            return memory
     except Exception as exc:  # noqa: BLE001
-        logger.warning("psutil failed to detect system memory: %s", exc)
+        logger.warning("psutil_compat failed to detect system memory: %s", exc)
 
     # Default to 16GB if detection fails
     logger.warning("Could not detect system memory, defaulting to 16GB")
@@ -148,6 +148,7 @@ class ServerSettings:
     sse_keepalive_mode: str = "chunk"
     auto_start_on_launch: bool = True
     burst_decode_mode: str = DEFAULT_BURST_DECODE_MODE
+    preserve_mid_system_cache: bool = True
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
@@ -168,6 +169,7 @@ class ServerSettings:
             sse_keepalive_mode=data.get("sse_keepalive_mode", "chunk"),
             auto_start_on_launch=data.get("auto_start_on_launch", True),
             burst_decode_mode=data.get("burst_decode_mode", DEFAULT_BURST_DECODE_MODE),
+            preserve_mid_system_cache=data.get("preserve_mid_system_cache", True),
         )
 
 
@@ -700,7 +702,7 @@ class IntegrationSettings:
     copilot_model: str | None = None
     openclaw_tools_profile: str = "coding"
     markitdown_enabled: bool = True
-    markitdown_expose_model: bool = True
+    markitdown_expose_model: bool = False
     markitdown_max_file_size_mb: int = 25
     markitdown_max_files_per_request: int = 5
     markitdown_pdf_processing_engine: str = "markitdown"
@@ -734,7 +736,7 @@ class IntegrationSettings:
             copilot_model=data.get("copilot_model"),
             openclaw_tools_profile=data.get("openclaw_tools_profile", "coding"),
             markitdown_enabled=data.get("markitdown_enabled", True),
-            markitdown_expose_model=data.get("markitdown_expose_model", True),
+            markitdown_expose_model=data.get("markitdown_expose_model", False),
             markitdown_max_file_size_mb=data.get("markitdown_max_file_size_mb", 25),
             markitdown_max_files_per_request=data.get(
                 "markitdown_max_files_per_request", 5
@@ -893,6 +895,10 @@ class GlobalSettings:
             self.server.check_updates = check_updates.lower() in ("true", "1", "yes")
         if check_statuskit := os.getenv("OMLX_CHECK_STATUSKIT"):
             self.server.check_statuskit = check_statuskit.lower() in ("true", "1", "yes")
+        if preserve_mid_system_cache := os.getenv("OMLX_PRESERVE_MID_SYSTEM_CACHE"):
+            self.server.preserve_mid_system_cache = (
+                preserve_mid_system_cache.strip().lower() in {"1", "true", "yes", "on"}
+            )
 
         # Model settings
         if model_dir := os.getenv("OMLX_MODEL_DIR"):

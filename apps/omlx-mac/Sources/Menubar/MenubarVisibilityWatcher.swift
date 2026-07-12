@@ -20,6 +20,27 @@ final class MenubarVisibilityWatcher {
     private let logURL = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent("Library/Application Support/oMLX/logs/menubar.log")
 
+    /// URL of the user preferences file that stores the menubar-icon alert
+    /// toggle alongside the StatusKit auto-approve setting.
+    private let prefsURL: URL = {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library")
+            .appendingPathComponent("Application Support")
+            .appendingPathComponent("oMLX")
+            .appendingPathComponent("statuskit-prefs.json")
+    }()
+
+    /// Whether the user has opted in to see the "Menubar Icon Hidden" alert.
+    /// Defaults to `false` (alert suppressed) when the preference file does
+    /// not exist or the key is missing.
+    private var menubarAlertEnabled: Bool {
+        guard let data = try? Data(contentsOf: prefsURL),
+              let dict = try? JSONDecoder().decode([String: AnyDecodable].self, from: data) else {
+            return false
+        }
+        return dict["menubarAlert"]?.value as? Bool ?? false
+    }
+
     private struct AutoFixOutcome {
         let success: Bool
         let message: String
@@ -83,6 +104,7 @@ final class MenubarVisibilityWatcher {
 
     private func showHiddenAlert() {
         guard !didAlertOnce else { return }
+        guard menubarAlertEnabled else { return }
 
         // Bring our process forward so the alert isn't behind another window.
         NSApp.activate(ignoringOtherApps: true)

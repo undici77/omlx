@@ -24,6 +24,7 @@ struct SecurityScreen: View {
             AuthenticationSection(vm: vm, client: services.client)
             SubKeysSection(vm: vm, client: services.client)
             StatusKitSection()
+            MenubarAlertSection()
 
             if let error = vm.lastError {
                 Text(error)
@@ -48,12 +49,15 @@ struct SecurityScreen: View {
               let dict = try? JSONDecoder().decode([String: AnyDecodable].self, from: data) else {
             return
         }
-        // Store in a @State inside StatusKitSection — we use a simple
-        // NotificationCenter to broadcast the value since we can't easily
-        // reach into that view's @State from here.
+        // Broadcast StatusKit auto-approve value to StatusKitSection.
         NotificationCenter.default.post(
             name: Notification.Name("OMLXStatusKitPrefsLoaded"),
             object: dict["enabled"] as? Bool ?? false
+        )
+        // Broadcast menubar alert preference to MenubarAlertSection.
+        NotificationCenter.default.post(
+            name: Notification.Name("OMLXMenubarAlertPrefsLoaded"),
+            object: dict["menubarAlert"] as? Bool ?? false
         )
     }
 }
@@ -621,6 +625,106 @@ private struct StatusKitSection: View {
         guard let data = try? JSONEncoder().encode(dict) else { return }
         do {
             try data.write(to: prefsURL, options: [.atomic])
+            lastError = nil
+        } catch {
+            lastError = error.localizedDescription
+        }
+    }
+}
+
+// MARK: - Menubar alert toggle
+
+/// Controls whether the "Menubar Icon Hidden" escalation alert is shown.
+/// Defaults to suppressed; users can opt in via this toggle.
+private struct MenubarAlertSection: View {
+    @State private var enabled: Bool = false
+    @State private var saving: Bool = false
+    @State private var lastError: String?
+
+    @Environment(\.omlxTheme) private var theme
+
+    private let prefsURL: URL = {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library")
+            .appendingPathComponent("Application Support")
+            .appendingPathComponent("oMLX")
+            .appendingPathComponent("statuskit-prefs.json")
+    }()
+
+    var body: some View {
+        SectionHeader(
+            String(localized: "security.section.menubar_alert",
+                   defaultValue: "Menubar Icon Alert",
+                   comment: "Section header for the menubar icon hidden alert toggle"),
+            subtitle: String(localized: "security.section.menubar_alert.sub",
+                             defaultValue: "Show a dialog when the oMLX menubar icon is hidden. Disabled by default.",
+                             comment: "Subtitle for the menubar alert section")
+        )
+
+        ListGroup {
+            Row(
+                label: String(localized: "security.menubar_alert.toggle",
+                              defaultValue: "Show Hidden Icon Alert",
+                              comment: "Row label for the menubar icon alert toggle"),
+                sublabel: String(localized: "security.menubar_alert.toggle.sub",
+                                 defaultValue: "Suppressed by default. Enable to be notified when the menubar icon cannot be seen.",
+                                 comment: "Sublabel for the menubar alert toggle"),
+                isLast: true
+            ) {
+                Toggle("", isOn: $enabled)
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .onChange(of: enabled) { _, newValue in
+                        Task { await save(newValue) }
+                    }
+            }
+        }
+        .task { load() }
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("OMLXMenubarAlertPrefsLoaded"))) { notification in
+            if let value = notification.object as? Bool {
+                enabled = value
+            }
+        }
+
+        if let error = lastError {
+            Text(error)
+                .font(.omlxText(11))
+                .foregroundStyle(.red)
+                .padding(.horizontal, 18)
+                .padding(.top, 8)
+        }
+    }
+
+    private func load() {
+        guard let data = try? Data(contentsOf: prefsURL),
+              let dict = try? JSONDecoder().decode([String: AnyDecodable].self, from: data) else {
+            return
+        }
+        enabled = dict["menubarAlert"]?.value as? Bool ?? false
+    }
+
+    private func save(_ value: Bool) async {
+        saving = true
+        defer { saving = false }
+        guard let data = try? Data(contentsOf: prefsURL) else {
+            // File doesn't exist yet — write a fresh dict with both keys.
+            let dict: [String: AnyEncodable] = ["enabled": AnyEncodable(false), "menubarAlert": AnyEncodable(value)]
+            guard let encoded = try? JSONEncoder().encode(dict) else { return }
+            do {
+                try encoded.write(to: prefsURL, options: [.atomic])
+                lastError = nil
+            } catch {
+                lastError = error.localizedDescription
+            }
+            return
+        }
+        guard var dict = try? JSONDecoder().decode([String: AnyDecodable].self, from: data) else { return }
+        dict["menubarAlert"] = AnyDecodable(value)
+        // AnyDecodable does not conform to Encodable — convert to AnyEncodable first.
+        let encodable: [String: AnyEncodable] = dict.mapValues { AnyEncodable($0.value) }
+        guard let encoded = try? JSONEncoder().encode(encodable) else { return }
+        do {
+            try encoded.write(to: prefsURL, options: [.atomic])
             lastError = nil
         } catch {
             lastError = error.localizedDescription

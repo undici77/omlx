@@ -37,6 +37,7 @@ from typing import TYPE_CHECKING, Any
 
 import mlx.core as mx
 
+from . import settings as _settings
 from .utils import psutil_compat
 from .utils.proc_memory import get_phys_footprint
 
@@ -70,6 +71,24 @@ _ACTIVE_RECLAIM_RATIO: dict[str, float] = {
     "safe": 0.2,
     "balanced": 0.5,
     "aggressive": 0.8,
+}
+
+# Default soft watermark per tier. A saved 0.85 from older configs is treated
+# as the legacy default so balanced / aggressive can move to their tier defaults.
+_LEGACY_SOFT_THRESHOLD = 0.85
+_SOFT_THRESHOLD_BY_TIER: dict[str, float] = {
+    "safe": 0.85,
+    "balanced": 0.90,
+    "aggressive": 0.925,
+    "custom": 0.85,
+}
+
+# Fraction of the hard ceiling used by the adaptive prefill chunk sizer.
+_PREFILL_HEADROOM_SAFETY: dict[str, float] = {
+    "safe": 0.90,
+    "balanced": 0.90,
+    "aggressive": 0.925,
+    "custom": 0.90,
 }
 
 # Fraction of the effective physical cap used by the pre-chunk prediction
@@ -162,6 +181,33 @@ def get_effective_metal_cap_bytes() -> int:
     return _get_max_metal_working_set_bytes()
 
 
+def _wired_limit_suggestion_bytes(desired_bytes: int) -> int:
+    """Clamp a wired-limit recommendation to leave the OS 5% of RAM.
+
+    Wiring within a few GiB of physical RAM invites jetsam during a
+    large-model load burst, and a jetsammed/hard-killed process strands
+    its wired allocation at kernel level until reboot (#2184). 5% matches
+    the field-stable margin from that report (488 GiB stable on a 512 GiB
+    box, 510 GiB crash-looped). On small-memory machines 5% is below the
+    tier static reserve, so their recommendation is unchanged.
+
+    Only shapes the suggested sysctl value in logs and the admin banner;
+    the enforcement path still honors whatever the kernel sysctl allows,
+    including user-set values above this recommendation.
+
+    Resolved through the settings module at call time so tests that patch
+    omlx.settings.get_system_memory control this the same way they control
+    the static ceiling.
+    """
+    try:
+        total = int(_settings.get_system_memory())
+    except Exception:  # noqa: BLE001
+        return desired_bytes
+    if total <= 0:
+        return desired_bytes
+    return max(0, min(desired_bytes, total - total // 20))
+
+
 def _apply_metal_wired_limit(desired_bytes: int) -> tuple[int, int | None]:
     """Try to raise Metal wired limit for this process to `desired_bytes`.
 
@@ -170,9 +216,11 @@ def _apply_metal_wired_limit(desired_bytes: int) -> tuple[int, int | None]:
     is lower); `previous_bytes` is what MLX reports the prior limit was,
     or None on failure / older macOS where the call is unavailable.
 
-    Emits a WARNING when the kernel sysctl caps us below `desired_bytes`
-    so the user sees the hint in logs in addition to the admin UI red
-    banner.
+    Emits a WARNING when the kernel sysctl caps us below the recommended
+    wired limit so the user sees the hint in logs in addition to the admin
+    UI red banner. The recommended value is clamped below physical RAM
+    (_wired_limit_suggestion_bytes) so following it cannot push the OS
+    into jetsam during a large-model load (#2184).
 
     When iogpu.wired_limit_mb is unset (0), leave Apple's default Metal
     cap active instead of calling mx.set_wired_limit with the same default
@@ -183,10 +231,11 @@ def _apply_metal_wired_limit(desired_bytes: int) -> tuple[int, int | None]:
     if desired_bytes <= 0:
         return 0, None
 
+    suggestion = _wired_limit_suggestion_bytes(desired_bytes)
     sysctl_cap = get_iogpu_wired_limit_bytes()
     if sysctl_cap <= 0:
         effective_cap = get_effective_metal_cap_bytes()
-        if effective_cap > 0 and effective_cap < desired_bytes:
+        if effective_cap > 0 and effective_cap < suggestion:
             logger.warning(
                 "Metal cap (%s, Apple max_recommended_working_set_size) is "
                 "below the oMLX static ceiling (%s); leaving Apple's default "
@@ -194,7 +243,7 @@ def _apply_metal_wired_limit(desired_bytes: int) -> tuple[int, int | None]:
                 "Raise it with: sudo sysctl iogpu.wired_limit_mb=%d",
                 _format_gb(effective_cap),
                 _format_gb(desired_bytes),
-                desired_bytes // (1024**2),
+                suggestion // (1024**2),
             )
         else:
             logger.debug(
@@ -205,12 +254,34 @@ def _apply_metal_wired_limit(desired_bytes: int) -> tuple[int, int | None]:
             )
         return 0, None
 
+    try:
+        _total = int(_settings.get_system_memory())
+    except Exception:  # noqa: BLE001
+        _total = 0
+    if _total > 0:
+        _reserve = _total // 20
+        if sysctl_cap > _total - _reserve:
+            # The kernel cap leaves the OS less headroom than the
+            # recommendation floor. A big-model load burst can jetsam the
+            # server at this setting, and the stranded wired memory then
+            # needs a reboot to reclaim (#2184).
+            logger.warning(
+                "iogpu.wired_limit_mb (%s) leaves the OS less than %s of "
+                "physical RAM (%s); a large model load can trigger jetsam "
+                "at this setting and strand the wired memory until reboot "
+                "(#2184). Recommended maximum: %d MB.",
+                _format_gb(sysctl_cap),
+                _format_gb(_reserve),
+                _format_gb(_total),
+                (_total - _reserve) // (1024**2),
+            )
+
     effective_cap = sysctl_cap
     capped = effective_cap > 0 and effective_cap < desired_bytes
     applied = effective_cap if capped else desired_bytes
     try:
         previous = mx.set_wired_limit(applied)
-        if capped:
+        if capped and effective_cap < suggestion:
             logger.warning(
                 "Metal cap (%s, %s) is below the oMLX static ceiling (%s); "
                 "Metal will clamp allocations to the cap and panic if a "
@@ -219,7 +290,7 @@ def _apply_metal_wired_limit(desired_bytes: int) -> tuple[int, int | None]:
                 _format_gb(effective_cap),
                 "kernel iogpu.wired_limit_mb",
                 _format_gb(desired_bytes),
-                desired_bytes // (1024**2),
+                suggestion // (1024**2),
             )
         return applied, int(previous)
     except Exception as exc:  # noqa: BLE001
@@ -250,7 +321,7 @@ class ProcessMemoryEnforcer:
         settings_manager: ModelSettingsManager | None = None,
         prefill_memory_guard: bool = True,
         global_settings: GlobalSettings | None = None,
-        soft_threshold: float = 0.90,
+        soft_threshold: float | None = None,
         hard_threshold: float = 0.95,
         prefill_safe_zone_ratio: float = 0.89,
         prefill_min_chunk_tokens: int = 256,
@@ -273,8 +344,9 @@ class ProcessMemoryEnforcer:
             prefill_memory_guard: When False, returns a ceiling of 0 so
                 callers treat the limit as disabled.
             global_settings: Optional global settings for idle timeout.
-            soft_threshold: Fraction of ceiling that triggers soft action
-                (LRU non-pinned eviction + admission pause; in-flight allowed).
+            soft_threshold: Optional explicit fraction of ceiling that triggers
+                soft action. None, or the legacy 0.85 default, uses the tier
+                default instead.
             hard_threshold: Fraction of ceiling that triggers hard action
                 (LRU/non-pinned aborts, loading aborts, and idle reclaim).
             prefill_safe_zone_ratio: Fraction of hard cap below which prefill
@@ -293,8 +365,12 @@ class ProcessMemoryEnforcer:
         self._settings_manager = settings_manager
         self._prefill_memory_guard = prefill_memory_guard
         self._global_settings = global_settings
-        self._soft_threshold = soft_threshold
+        self._soft_threshold_override = self._normalize_soft_threshold_override(
+            soft_threshold
+        )
+        self._soft_threshold = self._get_soft_threshold()
         self._hard_threshold = hard_threshold
+        self._prefill_headroom_safety = self._get_prefill_headroom_safety()
         self._prefill_safe_zone_ratio = prefill_safe_zone_ratio
         self._prefill_min_chunk_tokens = prefill_min_chunk_tokens
         self._task: asyncio.Task | None = None
@@ -327,6 +403,29 @@ class ProcessMemoryEnforcer:
             return "balanced"
         return t
 
+    @staticmethod
+    def _normalize_soft_threshold_override(value: float | None) -> float | None:
+        if value is None:
+            return None
+        threshold = float(value)
+        if threshold <= 0:
+            return None
+        if abs(threshold - _LEGACY_SOFT_THRESHOLD) < 1e-9:
+            return None
+        return threshold
+
+    def _refresh_tier_thresholds(self) -> None:
+        self._soft_threshold = self._get_soft_threshold()
+        self._prefill_headroom_safety = self._get_prefill_headroom_safety()
+
+    def _get_soft_threshold(self) -> float:
+        if self._soft_threshold_override is not None:
+            return self._soft_threshold_override
+        return _SOFT_THRESHOLD_BY_TIER[self._memory_guard_tier]
+
+    def _get_prefill_headroom_safety(self) -> float:
+        return _PREFILL_HEADROOM_SAFETY[self._memory_guard_tier]
+
     @property
     def memory_guard_tier(self) -> str:
         return self._memory_guard_tier
@@ -338,6 +437,7 @@ class ProcessMemoryEnforcer:
             return
         old = self._memory_guard_tier
         self._memory_guard_tier = new_tier
+        self._refresh_tier_thresholds()
         if self._running:
             if self._prefill_memory_guard:
                 self._refresh_effective_metal_cap_bytes()
@@ -389,11 +489,16 @@ class ProcessMemoryEnforcer:
         if self._prefill_memory_guard:
             static_ceiling = self._get_static_ceiling()
             applied, previous = _apply_metal_wired_limit(static_ceiling)
-            # Store the *desired* limit (= static ceiling) rather than the
-            # post-clamp applied value. The admin UI compares this against
-            # the live iogpu.wired_limit_mb so a kernel cap below the
-            # desired limit triggers the red sysctl-command banner.
-            self._metal_wired_limit_request = static_ceiling
+            # Store the *recommended* limit (static ceiling clamped below
+            # physical RAM, see _wired_limit_suggestion_bytes) rather than
+            # the post-clamp applied value. The admin UI compares this
+            # against the live iogpu.wired_limit_mb so a kernel cap below
+            # the recommendation triggers the red sysctl-command banner;
+            # clamping keeps the banner from telling users to wire nearly
+            # all of physical RAM (#2184).
+            self._metal_wired_limit_request = _wired_limit_suggestion_bytes(
+                static_ceiling
+            )
             if applied > 0:
                 logger.info(
                     "Metal wired limit raised: %s -> %s "
@@ -979,6 +1084,7 @@ class ProcessMemoryEnforcer:
             scheduler._memory_guard_tier = self._memory_guard_tier
             scheduler._prefill_memory_guard = self._prefill_memory_guard
             scheduler._admission_paused = admission_paused
+            scheduler._prefill_headroom_safety = self._prefill_headroom_safety
             scheduler._prefill_safe_zone_ratio = self._prefill_safe_zone_ratio
             scheduler._prefill_min_chunk_tokens = self._prefill_min_chunk_tokens
             bg = getattr(scheduler, "batch_generator", None)
@@ -1286,6 +1392,14 @@ class ProcessMemoryEnforcer:
                             and hasattr(entry.engine, "abort_all_requests")
                         ):
                             aborted = await entry.engine.abort_all_requests()
+                        if not emergency:
+                            logger.warning(
+                                "Hard memory pressure: aborted %d request(s) on "
+                                "'%s' and kept model loaded",
+                                aborted,
+                                busy_victim,
+                            )
+                            break
                         if entry is not None:
                             self._engine_pool._mark_pending_unload_locked(
                                 busy_victim,

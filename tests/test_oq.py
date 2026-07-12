@@ -11,41 +11,53 @@ import pytest
 
 try:
     import mlx.core as mx
+    import mlx.nn as nn
 
     HAS_MLX = True
 except ImportError:
     HAS_MLX = False
 
 from omlx.oq import (
-    OQ_LEVELS,
     _LEVEL_BITS,
+    _LEVEL_EXPERT_DOWN_BOOST,
     _MAX_MODEL_RAM_FRACTION,
     _OQ_BPW_TARGETS,
     _PROXY_QUANT_BITS,
     _PROXY_QUANT_GROUP_SIZE,
-    _DiscoveredPlan,
-    _TrackedTensor,
+    _ROUTED_LAYER_BOOST_LEVELS,
+    OQ_LEVELS,
     _bpw_targets_for_level,
     _build_proxy_for_sensitivity,
-    _build_streaming_proxy_for_sensitivity,
     _build_quant_plan,
+    _build_streaming_proxy_for_sensitivity,
+    _config_expects_moe_expert_counts,
     _discover_sanitize_plan,
+    _DiscoveredPlan,
     _extract_layer_index,
     _format_size,
     _forward_layer,
     _forward_layer_result,
     _get_predicate_bits,
+    _ImatrixCaptureWrapper,
+    _imatrix_expert_coverage_stats,
+    _imatrix_expert_coverage_sufficient,
+    _imatrix_requires_expert_counts,
     _is_audio_tensor,
     _is_moe_router,
     _is_vision_tensor,
     _LazyTensorIndex,
     _measure_sensitivity,
+    _measure_sensitivity_from_quantized_model,
     _normalize_quant_path,
     _perturb_bits_for,
     _progress_total_bytes,
     _quantize_chunked,
+    _sensitivity_lm_config_override,
     _should_quantize_tensor,
+    _TrackedTensor,
     _validate_oq_dtype_for_model,
+    OQImatrixCollector,
+    OQImatrixEntry,
     estimate_bpw_and_size,
     estimate_memory,
     make_predicate,
@@ -513,6 +525,12 @@ class TestResolveOutputName:
             resolve_output_name("Qwen3.5-122B-A10B-oQ4e", 2) == "Qwen3.5-122B-A10B-oQ2"
         )
 
+    def test_enhanced_appends_e_suffix(self):
+        assert (
+            resolve_output_name("Qwen3.5-122B-A10B", 4, enhanced=True)
+            == "Qwen3.5-122B-A10B-oQ4e"
+        )
+
     def test_all_levels(self):
         for level in OQ_LEVELS:
             result = resolve_output_name("Model-7B", level)
@@ -731,8 +749,14 @@ class TestValidateQuantizable:
     def test_already_quantized(self):
         assert validate_quantizable({"quantization": {"bits": 4}}) is False
 
-    def test_quantization_config(self):
-        assert validate_quantizable({"quantization_config": {"bits": 4}}) is False
+    def test_quantization_config_with_known_method(self):
+        # Real HF quantization configs always carry quant_method
+        assert (
+            validate_quantizable(
+                {"quantization_config": {"quant_method": "gptq", "bits": 4}}
+            )
+            is False
+        )
 
     def test_fp8_native_is_quantizable(self):
         # Native FP8 models (MiniMax, DeepSeek) should be quantizable
@@ -747,6 +771,79 @@ class TestValidateQuantizable:
             validate_quantizable({"quantization_config": {"quant_method": "gptq"}})
             is False
         )
+
+    def test_qat_no_quant_method_is_quantizable(self):
+        # QAT models have quantization_config with no quant_method — full-precision weights
+        assert (
+            validate_quantizable({"quantization_config": {"quant_type": "q4_0"}})
+            is True
+        )
+
+    def test_empty_quantization_config_not_quantizable(self):
+        # Empty config has no quant_type — not a QAT config, not quantizable
+        assert validate_quantizable({"quantization_config": {}}) is False
+
+    def test_legacy_bits_config_not_quantizable(self):
+        # Legacy configs with only {"bits": N} lack quant_type and are not QAT
+        assert validate_quantizable({"quantization_config": {"bits": 4}}) is False
+
+    def test_awq_not_quantizable(self):
+        assert (
+            validate_quantizable({"quantization_config": {"quant_method": "awq"}})
+            is False
+        )
+
+
+# =============================================================================
+# Test _sensitivity_lm_config_override
+# =============================================================================
+
+
+class TestSensitivityLmConfigOverride:
+    def test_no_quantization_config(self):
+        assert _sensitivity_lm_config_override({"model_type": "llama"}) is None
+
+    def test_qat_config_top_level(self):
+        # QAT config with no quant_method → should override
+        result = _sensitivity_lm_config_override(
+            {"quantization_config": {"quant_type": "q4_0"}}
+        )
+        assert result == {"quantization_config": None}
+
+    def test_qat_config_in_text_config(self):
+        # QAT config nested in text_config (VLM layout) → should override
+        result = _sensitivity_lm_config_override(
+            {"text_config": {"quantization_config": {"quant_type": "q4_0"}}}
+        )
+        assert result == {"quantization_config": None}
+
+    def test_fp8_config_no_override(self):
+        # FP8 has quant_method set — not a QAT config, no override needed
+        assert (
+            _sensitivity_lm_config_override(
+                {"quantization_config": {"quant_method": "fp8"}}
+            )
+            is None
+        )
+
+    def test_known_method_no_override(self):
+        assert (
+            _sensitivity_lm_config_override(
+                {"quantization_config": {"quant_method": "gptq"}}
+            )
+            is None
+        )
+
+    def test_non_qat_config_without_quant_method_no_override(self):
+        # Legacy bits-only config has no quant_type — not a QAT config, no override
+        assert (
+            _sensitivity_lm_config_override({"quantization_config": {"bits": 4}})
+            is None
+        )
+
+    def test_empty_quantization_config(self):
+        # Empty dict: no quant_method but also nothing to process — no override
+        assert _sensitivity_lm_config_override({"quantization_config": {}}) is None
 
 
 # =============================================================================
@@ -913,21 +1010,22 @@ class TestLevelBudgetPlan:
 
     def test_bpw_targets_for_level_returns_correct_values(self):
         assert _bpw_targets_for_level(2.5) == (3.1, 3.3)
-        assert _bpw_targets_for_level(2.7) == (3.35, 3.45)
+        assert _bpw_targets_for_level(2.7) == (3.25, 3.35)
         assert _bpw_targets_for_level(3) == (3.5, 3.7)
         assert _bpw_targets_for_level(3.5) == (3.8, 4.0)
         assert _bpw_targets_for_level(4) == (4.6, 4.7)
         assert _bpw_targets_for_level(5) == (5.5, 5.7)
         assert _bpw_targets_for_level(6) == (6.5, 6.7)
+        assert _bpw_targets_for_level(2.8) is None
 
-    def test_oq25_base_bits_is_2(self):
+    def test_oq2_fractional_base_bits_are_2(self):
         assert _LEVEL_BITS[2.5] == 2
         assert _LEVEL_BITS[2.7] == 2
 
-    @pytest.mark.parametrize("oq_level,expected_bits", [(2.5, 3), (2.7, 4), (3.5, 4)])
-    def test_half_level_mandatory_expert_down_proj_boost(self, oq_level, expected_bits):
-        """Fractional levels protect routed expert down_proj above base bits
+    def test_oq35_mandatory_expert_down_proj_boost(self):
+        """oQ3.5 protects routed expert down_proj above base bits
         even with negligible sensitivity scores."""
+        oq_level = 3.5
         named_shapes = {
             "model.layers.0.mlp.switch_mlp.down_proj": (8, 256, 256),
             "model.layers.0.mlp.switch_mlp.gate_proj": (8, 256, 256),
@@ -945,11 +1043,24 @@ class TestLevelBudgetPlan:
         )
         boost = plan.boost_map.get("model.layers.0.mlp.switch_mlp.down_proj")
         assert boost is not None
-        assert boost["bits"] == expected_bits
+        assert boost["bits"] == 4
 
-    @pytest.mark.parametrize("oq_level,expected_bits", [(2.5, 3), (2.7, 4), (3.5, 4)])
-    def test_predicate_floor_for_expert_down_proj(self, oq_level, expected_bits):
-        """The non-budget predicate floor mirrors the mandatory boost."""
+    def test_oq35_predicate_floor_for_expert_down_proj(self):
+        """The non-budget predicate floor mirrors the oQ3.5 mandatory boost."""
+        config = {
+            "num_hidden_layers": 32,
+            "num_experts": 8,
+            "hidden_size": 1024,
+        }
+        result = universal_quant_predicate(
+            "model.layers.5.mlp.switch_mlp.down_proj", None, config, 3.5
+        )
+        assert isinstance(result, dict)
+        assert result["bits"] == 4
+
+    @pytest.mark.parametrize("oq_level", [2.5, 2.7])
+    def test_oq2x_predicate_keeps_routed_down_proj_at_base_without_plan(self, oq_level):
+        """oQ2.5/oQ2.7 use budget-planned routed boosts."""
         config = {
             "num_hidden_layers": 32,
             "num_experts": 8,
@@ -958,8 +1069,7 @@ class TestLevelBudgetPlan:
         result = universal_quant_predicate(
             "model.layers.5.mlp.switch_mlp.down_proj", None, config, oq_level
         )
-        assert isinstance(result, dict)
-        assert result["bits"] == expected_bits
+        assert result is True
 
     def test_bpw_targets_for_level_returns_none_for_minimal(self):
         assert _bpw_targets_for_level(8) is None
@@ -971,6 +1081,14 @@ class TestLevelBudgetPlan:
     def test_budget_plan_oq2_enabled(self):
         assert 2 in _OQ_BPW_TARGETS
         assert _bpw_targets_for_level(2) == (2.8, 3.0)
+
+    def test_oq2_fractional_levels_use_routed_layer_boosts(self):
+        for level in (2.5, 2.7):
+            assert level in OQ_LEVELS
+            assert level in _ROUTED_LAYER_BOOST_LEVELS
+            assert level not in _LEVEL_EXPERT_DOWN_BOOST
+        assert 2.8 not in OQ_LEVELS
+        assert 2.8 not in _ROUTED_LAYER_BOOST_LEVELS
 
     def test_budget_plan_oq8_not_enabled(self):
         assert 8 not in _OQ_BPW_TARGETS
@@ -1075,6 +1193,63 @@ class TestLevelBudgetPlan:
         )
         for k in plan.boost_map:
             assert "switch_mlp" not in k
+
+    @pytest.mark.parametrize("oq_level", [2.5, 2.7])
+    def test_oq2x_boosts_routed_down_proj_by_layer_sensitivity(self, oq_level):
+        """oQ2.5/oQ2.7 boost routed projections by whole layer modules."""
+        named_shapes = {}
+        for i in range(2):
+            named_shapes[f"model.layers.{i}.ffn.switch_mlp.gate_proj"] = (8, 64, 64)
+            named_shapes[f"model.layers.{i}.ffn.switch_mlp.up_proj"] = (8, 64, 64)
+            named_shapes[f"model.layers.{i}.ffn.switch_mlp.down_proj"] = (8, 64, 64)
+        config = {
+            "num_hidden_layers": 2,
+            "_oq_use_budget_plan": True,
+            "_oq_sensitivity_map": {"0": 1.0, "1": 0.1},
+        }
+        plan = _build_quant_plan(
+            named_shapes, config, oq_level, target_bpw=2.65, hard_cap_bpw=2.7
+        )
+        assert plan.boost_map["model.layers.0.ffn.switch_mlp.down_proj"]["bits"] == 3
+        assert "model.layers.1.ffn.switch_mlp.down_proj" not in plan.boost_map
+
+    @pytest.mark.parametrize("oq_level", [2.5, 2.7])
+    def test_oq2x_boosts_gate_up_pair_after_routed_down_proj(self, oq_level):
+        """After routed w2/down_proj, oQ2.5/oQ2.7 boost gate+up as a pair."""
+        named_shapes = {
+            "model.layers.0.ffn.switch_mlp.gate_proj": (8, 64, 64),
+            "model.layers.0.ffn.switch_mlp.up_proj": (8, 64, 64),
+            "model.layers.0.ffn.switch_mlp.down_proj": (8, 64, 64),
+        }
+        config = {
+            "num_hidden_layers": 1,
+            "_oq_use_budget_plan": True,
+            "_oq_sensitivity_map": {"0": 1.0},
+        }
+        plan = _build_quant_plan(
+            named_shapes, config, oq_level, target_bpw=3.4, hard_cap_bpw=3.6
+        )
+        assert plan.boost_map["model.layers.0.ffn.switch_mlp.down_proj"]["bits"] == 3
+        assert plan.boost_map["model.layers.0.ffn.switch_mlp.gate_proj"]["bits"] == 3
+        assert plan.boost_map["model.layers.0.ffn.switch_mlp.up_proj"]["bits"] == 3
+
+    @pytest.mark.parametrize("oq_level", [2.5, 2.7])
+    def test_oq2x_prioritizes_dense_greedy_before_routed_fallback(self, oq_level):
+        """oQ2.5/oQ2.7 spend target budget on dense sensitivity first."""
+        named_shapes = {
+            "model.layers.0.ffn.switch_mlp.down_proj": (8, 64, 64),
+            "model.layers.0.mlp.gate_proj": (8, 64, 64),
+        }
+        config = {
+            "num_hidden_layers": 2,
+            "_oq_use_budget_plan": True,
+            "_oq_sensitivity_map": {"0": 1.0, "1": 0.1},
+        }
+        plan = _build_quant_plan(
+            named_shapes, config, oq_level, target_bpw=3.0, hard_cap_bpw=3.01
+        )
+        assert plan.boost_map["model.layers.0.mlp.gate_proj"]["bits"] == 3
+        assert "model.layers.0.ffn.switch_mlp.down_proj" not in plan.boost_map
 
     def test_oq2_budget_plan_respects_cap(self):
         """oQ2 with budget plan should stay within hard cap."""
@@ -1397,6 +1572,262 @@ class TestQuantizeChunked:
         assert qw.shape[0] == 16
         assert scales.shape[0] == 16
 
+    def test_uniform_importance_matches_mx_quantize(self):
+        w = mx.random.normal((8, 64)).astype(mx.float16)
+        mx.eval(w)
+        qw_ref, scales_ref, *rest_ref = mx.quantize(
+            w, group_size=64, bits=4, mode="affine"
+        )
+        biases_ref = rest_ref[0] if rest_ref else None
+
+        qw, scales, biases = _quantize_chunked(
+            w,
+            group_size=64,
+            bits=4,
+            mode="affine",
+            importance=mx.ones((64,), dtype=mx.float32),
+        )
+
+        np.testing.assert_array_equal(np.array(qw), np.array(qw_ref))
+        np.testing.assert_array_equal(np.array(scales), np.array(scales_ref))
+        np.testing.assert_array_equal(np.array(biases), np.array(biases_ref))
+
+    def test_weighted_importance_reduces_weighted_error(self):
+        vals = np.array(
+            [
+                8.0,
+                -0.9835515,
+                -1.0129286,
+                -0.9208264,
+                -0.933982,
+                -0.96833235,
+                -1.1101755,
+                -0.99739856,
+                -0.96581566,
+                -0.9498019,
+                -0.62327445,
+                0.04132598,
+            ]
+            + [0.0] * 52,
+            dtype=np.float32,
+        )
+        w = mx.array(vals.reshape(1, 64), dtype=mx.float16)
+        importance = np.full((64,), 0.1, dtype=np.float32)
+        importance[1:10] = 100.0
+        imp = mx.array(importance)
+
+        qw_ref, scales_ref, biases_ref = mx.quantize(
+            w, group_size=64, bits=2, mode="affine"
+        )
+        y_ref = mx.dequantize(
+            qw_ref,
+            scales_ref,
+            biases_ref,
+            group_size=64,
+            bits=2,
+            mode="affine",
+        )
+
+        qw, scales, biases = _quantize_chunked(
+            w,
+            group_size=64,
+            bits=2,
+            mode="affine",
+            importance=imp,
+        )
+        y_weighted = mx.dequantize(
+            qw,
+            scales,
+            biases,
+            group_size=64,
+            bits=2,
+            mode="affine",
+        )
+        ref_err = mx.sum(((w - y_ref) ** 2) * imp)
+        weighted_err = mx.sum(((w - y_weighted) ** 2) * imp)
+        mx.eval(ref_err, weighted_err)
+        assert weighted_err.item() < ref_err.item()
+
+    def test_weighted_3d_expert_importance_chunked(self, monkeypatch):
+        monkeypatch.setattr("omlx.oq._QUANTIZE_CHUNK_BYTES", 128)
+        w = mx.random.normal((4, 2, 64)).astype(mx.float16)
+        importance = mx.arange(4 * 64, dtype=mx.float32).reshape(4, 64) + 1.0
+        mx.eval(w, importance)
+
+        qw, scales, biases = _quantize_chunked(
+            w,
+            group_size=64,
+            bits=4,
+            mode="affine",
+            importance=importance,
+        )
+
+        assert qw.shape == (4, 2, 8)
+        assert scales.shape == (4, 2, 1)
+        assert biases.shape == (4, 2, 1)
+
+
+@pytest.mark.skipif(not HAS_MLX, reason="MLX not available")
+class TestOQImatrixCollector:
+    def test_capture_wrapper_delegates_without_init_recursion(self):
+        module = nn.Linear(4, 3, bias=False)
+        collector = OQImatrixCollector()
+
+        wrapper = _ImatrixCaptureWrapper(module, "linear", collector)
+        y = wrapper(mx.ones((2, 4)))
+        mx.eval(y)
+
+        assert wrapper.weight is module.weight
+        assert "linear" in collector.entries
+        assert collector.entries["linear"].counts[0] == 2
+
+    def test_switch_topk_capture_accumulates_per_expert(self):
+        class SwitchModule:
+            weight = mx.zeros((3, 2, 4))
+
+        collector = OQImatrixCollector()
+        x = mx.array(
+            [
+                [1.0, 2.0, 3.0, 4.0],
+                [5.0, 6.0, 7.0, 8.0],
+            ],
+            dtype=mx.float32,
+        )
+        indices = mx.array([[0, 1], [1, 2]], dtype=mx.int32)
+
+        collector.collect_switch("switch", SwitchModule(), x, indices)
+
+        entry = collector.entries["switch"]
+        expected_sq = np.asarray(
+            [
+                [1.0, 4.0, 9.0, 16.0],
+                [26.0, 40.0, 58.0, 80.0],
+                [25.0, 36.0, 49.0, 64.0],
+            ],
+            dtype=np.float32,
+        )
+        np.testing.assert_array_equal(entry.counts, np.array([1, 2, 1]))
+        np.testing.assert_allclose(entry.in_sum2, expected_sq)
+
+    def test_expert_coverage_stats_gate_adaptive_collection(self):
+        insufficient = {
+            "experts": OQImatrixEntry(
+                in_sum2=np.zeros((4, 8), dtype=np.float32),
+                counts=np.array([0, 16, 32, 48], dtype=np.int64),
+            )
+        }
+        stats = _imatrix_expert_coverage_stats(insufficient)
+
+        assert stats["has_expert_counts"] is True
+        assert stats["zero_count_experts"] == 1
+        assert _imatrix_expert_coverage_sufficient(stats) is False
+
+        sufficient = {
+            "experts": OQImatrixEntry(
+                in_sum2=np.zeros((4, 8), dtype=np.float32),
+                counts=np.array([16, 16, 32, 48], dtype=np.int64),
+            )
+        }
+        stats = _imatrix_expert_coverage_stats(sufficient)
+
+        assert stats["zero_count_experts"] == 0
+        assert stats["p05_count"] >= 16
+        assert _imatrix_expert_coverage_sufficient(stats) is True
+
+    def test_expert_coverage_requires_counts_for_moe_config(self):
+        dense_only = {
+            "dense": OQImatrixEntry(
+                in_sum2=np.zeros((8,), dtype=np.float32),
+                counts=np.array([1024], dtype=np.int64),
+            )
+        }
+        stats = _imatrix_expert_coverage_stats(dense_only)
+
+        assert stats["has_expert_counts"] is False
+        assert _imatrix_expert_coverage_sufficient(stats) is True
+        assert (
+            _imatrix_expert_coverage_sufficient(stats, require_expert_counts=True)
+            is False
+        )
+        assert _config_expects_moe_expert_counts({"n_routed_experts": 256}) is True
+        assert _imatrix_requires_expert_counts({"n_routed_experts": 256}, 0) is False
+        assert _imatrix_requires_expert_counts({"n_routed_experts": 256}, 3) is True
+
+    @pytest.mark.skipif(not HAS_MLX, reason="MLX not installed")
+    def test_quantized_switch_linear_capture_uses_logical_input_dims(self):
+        class QuantizedSwitchLinear:
+            weight = mx.zeros((3, 2, 1), dtype=mx.uint32)
+
+            @property
+            def input_dims(self):
+                return 4
+
+            @property
+            def num_experts(self):
+                return 3
+
+        module = QuantizedSwitchLinear()
+        collector = OQImatrixCollector()
+        x = mx.array([[[1.0, 2.0, 3.0, 4.0], [5.0, 6.0, 7.0, 8.0]]])
+        indices = mx.array([[[0, 2], [2, 1]]], dtype=mx.int32)
+
+        assert collector._is_capture_module(module) is True
+        collector.collect_switch("experts", module, x, indices)
+
+        entry = collector.entries["experts"]
+        np.testing.assert_array_equal(entry.counts, np.array([1, 1, 2]))
+        np.testing.assert_allclose(entry.in_sum2[0], np.array([1.0, 4.0, 9.0, 16.0]))
+        np.testing.assert_allclose(entry.in_sum2[1], np.array([25.0, 36.0, 49.0, 64.0]))
+        np.testing.assert_allclose(entry.in_sum2[2], np.array([26.0, 40.0, 58.0, 80.0]))
+
+
+class TestOQECalibrationData:
+    @staticmethod
+    def _rough_est_tokens(text: str) -> int:
+        total = 0.0
+        for ch in text:
+            o = ord(ch)
+            if 0x3040 <= o <= 0x30FF or 0x3400 <= o <= 0x9FFF or 0xAC00 <= o <= 0xD7AF:
+                total += 1 / 1.3
+            elif ch.isspace():
+                continue
+            elif o < 128:
+                total += 1 / 4
+            else:
+                total += 1 / 2
+        return int(total)
+
+    def test_oqe_calibration_json_is_balanced_and_multilingual(self):
+        p = Path(__file__).parent.parent / "omlx" / "oqe_calibration_data.json"
+        with open(p, encoding="utf-8") as f:
+            data = json.load(f)
+
+        required = {
+            "tool_calling",
+            "chat",
+            "mixed",
+            "reasoning",
+            "code",
+            "en",
+            "ko",
+            "zh",
+            "ja",
+            "bartowski",
+        }
+        assert required.issubset(data.keys())
+
+        tokens = {
+            key: sum(self._rough_est_tokens(text) for text in data[key])
+            for key in required
+        }
+        total = sum(tokens.values())
+        shares = {key: value / total for key, value in tokens.items()}
+
+        multilingual_share = sum(shares[key] for key in ("en", "ko", "zh", "ja"))
+        assert multilingual_share >= 0.25
+        assert shares["tool_calling"] <= 0.18
+        assert max(shares.values()) <= 0.18
+
 
 # =============================================================================
 # Test _TrackedTensor
@@ -1490,6 +1921,19 @@ class TestTrackedTensor:
         assert r.transform == "transpose_0_2_1"
         assert r.sources == ["a"]
         assert r.recipe == [("transpose", (0, 2, 1))]
+
+    def test_expand_dims_method(self):
+        t = _TrackedTensor((2, 3), "F16", sources=["a"])
+        r = t.expand_dims(axis=0)
+        assert r.shape == (1, 2, 3)
+        assert r.transform == "expand_dims"
+        assert r.recipe == [("expand_dims", (0,))]
+
+    def test_expand_dims_multiple_axes(self):
+        t = _TrackedTensor((2, 3), "F16", sources=["a"])
+        r = t.expand_dims(axis=(0, -2))
+        assert r.shape == (1, 2, 1, 3)
+        assert r.recipe == [("expand_dims", (0, 2))]
 
     def test_getitem_ellipsis_half_split(self):
         # Sanitize patterns like gate_up[..., :mid, :] must round-trip through
@@ -1656,6 +2100,115 @@ class TestDiscoverSanitizePlan:
             atol=1e-3,
         )
 
+    def test_expand_dims_sanitize_replays(self, tmp_path):
+        path = tmp_path / "weights.safetensors"
+        tensor = np.arange(6, dtype=np.float16).reshape(2, 3)
+        _write_safetensors(str(path), {"shared_down.weight": tensor})
+        idx = _LazyTensorIndex([str(path)])
+
+        def sanitize(weights):
+            return {
+                "shared_down.weight": mx.expand_dims(
+                    weights["shared_down.weight"], axis=0
+                )
+            }
+
+        plan = _discover_sanitize_plan(sanitize, idx)
+        assert plan["shared_down.weight"]["shape"] == (1, 2, 3)
+        assert plan["shared_down.weight"]["recipe"] == [("expand_dims", (0,))]
+
+        result = _DiscoveredPlan(plan, idx).pop("shared_down.weight")
+        np.testing.assert_array_equal(np.array(result), tensor[None, :, :])
+
+    def test_minimax_shared_expert_sanitize_replays(self, tmp_path):
+        path = tmp_path / "weights.safetensors"
+        tensors = {}
+        for name, start in (
+            ("experts.0.w1.weight", 0),
+            ("experts.1.w1.weight", 10),
+            ("experts.0.w3.weight", 20),
+            ("experts.1.w3.weight", 30),
+            ("shared.gate.weight", 40),
+            ("shared.up.weight", 50),
+            ("experts.0.w2.weight", 60),
+            ("experts.1.w2.weight", 70),
+            ("shared.down.weight", 80),
+        ):
+            tensors[name] = (np.arange(6, dtype=np.float16) + start).reshape(2, 3)
+        _write_safetensors(str(path), tensors)
+        idx = _LazyTensorIndex([str(path)])
+
+        def sanitize(weights):
+            weights = dict(weights)
+            gate = mx.stack(
+                [weights.pop("experts.0.w1.weight"), weights.pop("experts.1.w1.weight")]
+            )
+            up = mx.stack(
+                [weights.pop("experts.0.w3.weight"), weights.pop("experts.1.w3.weight")]
+            )
+            routed_gate_up = mx.concatenate([gate, up], axis=1)
+            shared_gate_up = mx.expand_dims(
+                mx.concatenate(
+                    [
+                        weights.pop("shared.gate.weight"),
+                        weights.pop("shared.up.weight"),
+                    ],
+                    axis=0,
+                ),
+                axis=0,
+            )
+            down = mx.stack(
+                [weights.pop("experts.0.w2.weight"), weights.pop("experts.1.w2.weight")]
+            )
+            shared_down = mx.expand_dims(weights.pop("shared.down.weight"), axis=0)
+            return {
+                "switch.gate_up.weight": mx.concatenate(
+                    [routed_gate_up, shared_gate_up], axis=0
+                ),
+                "switch.down.weight": mx.concatenate([down, shared_down], axis=0),
+            }
+
+        plan = _discover_sanitize_plan(sanitize, idx)
+        assert plan["switch.gate_up.weight"]["transform"] == "expr"
+        assert plan["switch.gate_up.weight"]["shape"] == (3, 4, 3)
+        assert plan["switch.down.weight"]["transform"] == "expr"
+        assert plan["switch.down.weight"]["shape"] == (3, 2, 3)
+
+        discovered = _DiscoveredPlan(plan, idx)
+        gate = np.stack(
+            [tensors["experts.0.w1.weight"], tensors["experts.1.w1.weight"]]
+        )
+        up = np.stack([tensors["experts.0.w3.weight"], tensors["experts.1.w3.weight"]])
+        expected_gate_up = np.concatenate(
+            [
+                np.concatenate([gate, up], axis=1),
+                np.concatenate(
+                    [tensors["shared.gate.weight"], tensors["shared.up.weight"]],
+                    axis=0,
+                )[None, :, :],
+            ],
+            axis=0,
+        )
+        expected_down = np.concatenate(
+            [
+                np.stack(
+                    [
+                        tensors["experts.0.w2.weight"],
+                        tensors["experts.1.w2.weight"],
+                    ]
+                ),
+                tensors["shared.down.weight"][None, :, :],
+            ],
+            axis=0,
+        )
+
+        np.testing.assert_array_equal(
+            np.array(discovered.pop("switch.gate_up.weight")), expected_gate_up
+        )
+        np.testing.assert_array_equal(
+            np.array(discovered.pop("switch.down.weight")), expected_down
+        )
+
     def test_conditional_mtp_norm_add_materializes_by_mean(self, tmp_path):
         path = tmp_path / "mtp_norms.safetensors"
         tensors = {
@@ -1761,8 +2314,17 @@ class TestBuildProxyForSensitivity:
 
         calls = []
 
-        def _fake_build(model_path, output_path, *, dtype, trust_remote_code=False):
-            calls.append((model_path, output_path, dtype, trust_remote_code))
+        def _fake_build(
+            model_path,
+            output_path,
+            *,
+            dtype,
+            trust_remote_code=False,
+            preserve_mtp=False,
+        ):
+            calls.append(
+                (model_path, output_path, dtype, trust_remote_code, preserve_mtp)
+            )
             output_path.mkdir()
 
         monkeypatch.setattr(_oq, "_build_streaming_proxy_for_sensitivity", _fake_build)
@@ -1773,7 +2335,7 @@ class TestBuildProxyForSensitivity:
         )
 
         assert calls == [
-            (str(tmp_path / "src_model"), proxy_dir, "bfloat16", True)
+            (str(tmp_path / "src_model"), proxy_dir, "bfloat16", True, False)
         ]
         assert proxy_dir.exists()
 
@@ -1887,12 +2449,11 @@ class TestBuildProxyForSensitivity:
             str(src / "model.safetensors"),
         )
 
-        with patch("omlx.oq._build_model_sanitizer", return_value=None), patch(
-            "omlx.oq._build_non_quantizable_set", return_value=set()
+        with (
+            patch("omlx.oq._build_model_sanitizer", return_value=None),
+            patch("omlx.oq._build_non_quantizable_set", return_value=set()),
         ):
-            _build_streaming_proxy_for_sensitivity(
-                str(src), out, dtype="bfloat16"
-            )
+            _build_streaming_proxy_for_sensitivity(str(src), out, dtype="bfloat16")
 
         config = json.loads((out / "config.json").read_text(encoding="utf-8"))
         assert config["quantization"]["bits"] == _PROXY_QUANT_BITS
@@ -2727,9 +3288,9 @@ class TestQuantizeOqStreamingFp8:
 
     def test_exceeds_ram_no_scratch_files(self, tmp_path):
         """On-the-fly dequant produces zero scratch/temp shard files."""
-        from unittest.mock import patch
-        import tempfile
         import os
+        import tempfile
+        from unittest.mock import patch
 
         src = tmp_path / "src"
         src.mkdir()
@@ -3007,6 +3568,75 @@ class TestBuildModelSanitizerTextOnly:
             info_messages = [str(c) for c in mock_logger.info.call_args_list]
             all_messages = " ".join(debug_messages + info_messages)
             assert "mlx-vlm full sanitize" not in all_messages
+
+
+class TestBuildModelSanitizerMiniMaxCompat:
+    def test_minimax_vlm_applies_compat_before_model_lookup(self, monkeypatch):
+        pytest.importorskip("mlx_vlm.utils")
+        from types import SimpleNamespace
+
+        import mlx_vlm.utils as vlm_utils
+
+        from omlx.oq import _build_model_sanitizer
+
+        class _Cfg:
+            def __init__(self, **fields):
+                self.__dict__.update(fields)
+
+            @classmethod
+            def from_dict(cls, fields):
+                return cls(**fields)
+
+        class _FakeModel:
+            @staticmethod
+            def sanitize(proxy, weights):
+                assert proxy.config.text_config.num_hidden_layers == 1
+                return weights
+
+        fake_module = SimpleNamespace(
+            Model=_FakeModel,
+            ModelConfig=_Cfg,
+            VisionConfig=_Cfg,
+            TextConfig=_Cfg,
+            VisionModel=object,
+            LanguageModel=object,
+        )
+
+        def unsupported_get_model_and_args(_config):
+            raise ValueError("Model type minimax_m3_vl not supported")
+
+        def apply_compat_patch():
+            vlm_utils.get_model_and_args = lambda _config: (
+                fake_module,
+                "minimax_m3_vl",
+            )
+            return True
+
+        monkeypatch.setattr(
+            vlm_utils,
+            "get_model_and_args",
+            unsupported_get_model_and_args,
+        )
+        monkeypatch.setattr(
+            "omlx.patches.mlx_vlm_minimax_m3_compat."
+            "apply_mlx_vlm_minimax_m3_compat_patch",
+            apply_compat_patch,
+        )
+        monkeypatch.setattr(
+            "mlx_vlm.utils.sanitize_weights",
+            lambda _model, weights, _config: weights,
+        )
+
+        config = {
+            "architectures": ["MiniMaxM3SparseForConditionalGeneration"],
+            "model_type": "minimax_m3_vl",
+            "text_config": {"num_hidden_layers": 1, "hidden_size": 16},
+            "vision_config": {"hidden_size": 8},
+        }
+        sanitize = _build_model_sanitizer(config, text_only=False)
+
+        assert sanitize is not None
+        assert sanitize({"weight": 1}) == {"weight": 1}
 
 
 # =============================================================================
@@ -3303,10 +3933,18 @@ class TestMeasureSensitivityVlmMtp:
         mock_set_active.assert_not_called()
 
     def test_text_load_forwards_trust_remote_code(self, monkeypatch):
-        """Text sensitivity load forwards the mlx-lm custom-code opt-in."""
+        """Text sensitivity load forwards the mlx-lm custom-code opt-in when
+        the installed mlx-lm supports it."""
+        import omlx.utils.model_loading as real_ml
+
         self._patch_common(monkeypatch, has_mtp=True)
         mock_load = MagicMock(return_value=(MagicMock(), MagicMock()))
         monkeypatch.setitem(sys.modules, "mlx_lm", MagicMock(load=mock_load))
+        # _patch_common swapped model_loading for a MagicMock; oq imports
+        # lm_load_compat from it. Expose the real shim and pin the capability
+        # flag so forwarding is deterministic regardless of installed mlx-lm.
+        monkeypatch.setattr(real_ml, "_LM_LOAD_ACCEPTS_TRC", True)
+        sys.modules["omlx.utils.model_loading"].lm_load_compat = real_ml.lm_load_compat
 
         _measure_sensitivity(
             "/fake/text",
@@ -3316,6 +3954,60 @@ class TestMeasureSensitivityVlmMtp:
         )
 
         assert mock_load.call_args.kwargs["trust_remote_code"] is True
+
+
+class TestMeasureSensitivityQuantizedVlm:
+    def test_quantized_vlm_proxy_uses_vlm_loader(self, monkeypatch):
+        from omlx import oq as oq_mod
+
+        maybe_apply = MagicMock()
+        monkeypatch.setitem(
+            sys.modules,
+            "omlx.utils.model_loading",
+            MagicMock(
+                maybe_apply_pre_load_patches=maybe_apply,
+                _has_mtp_heads=MagicMock(return_value=False),
+                _checkpoint_has_mtp_weights=MagicMock(return_value=False),
+            ),
+        )
+
+        vlm_load = MagicMock(return_value=MagicMock())
+        tokenizer_load = MagicMock(return_value=MagicMock())
+        lm_load = MagicMock(side_effect=AssertionError("mlx-lm loader used for VLM"))
+
+        monkeypatch.setitem(sys.modules, "mlx_vlm", MagicMock())
+        monkeypatch.setitem(
+            sys.modules,
+            "mlx_vlm.utils",
+            MagicMock(load_model=vlm_load),
+        )
+        monkeypatch.setitem(sys.modules, "mlx_lm", MagicMock(load=lm_load))
+        monkeypatch.setitem(
+            sys.modules,
+            "mlx_lm.tokenizer_utils",
+            MagicMock(load=tokenizer_load),
+        )
+        monkeypatch.setattr(
+            oq_mod,
+            "_load_calibration_data",
+            MagicMock(return_value=None),
+        )
+
+        result = _measure_sensitivity_from_quantized_model(
+            "/fake/minimax-proxy",
+            {"vision_config": {}, "model_type": "minimax_m3_vl"},
+            3.5,
+            trust_remote_code=True,
+        )
+
+        assert result == {}
+        maybe_apply.assert_called_once_with("/fake/minimax-proxy", for_vlm=True)
+        vlm_load.assert_called_once()
+        assert vlm_load.call_args.args[0] == Path("/fake/minimax-proxy")
+        assert vlm_load.call_args.kwargs["lazy"] is True
+        assert vlm_load.call_args.kwargs["trust_remote_code"] is True
+        tokenizer_load.assert_called_once_with(Path("/fake/minimax-proxy"))
+        lm_load.assert_not_called()
 
 
 # =============================================================================
@@ -3556,7 +4248,7 @@ class TestReplayChainGuards:
 
 
 # =============================================================================
-# End-to-end: oQ2.5 half-level
+# End-to-end: oQ2.5 routed-layer boost
 # =============================================================================
 
 
@@ -3564,7 +4256,7 @@ class TestReplayChainGuards:
 class TestQuantizeOqStreamingOq25:
     def test_oq25_end_to_end_synthetic_moe(self, tmp_path):
         """oQ2.5 output: 2-bit affine base with routed expert down_proj
-        protected at 3-bit via the mandatory half-level boost."""
+        selected at 3-bit through the routed-layer budget plan."""
         from safetensors.numpy import save_file as np_save
 
         src = tmp_path / "src"
@@ -3576,6 +4268,9 @@ class TestQuantizeOqStreamingOq25:
                     8, h, h
                 ).astype(np.float32),
                 "model.layers.0.mlp.switch_mlp.gate_proj.weight": np.random.randn(
+                    8, h, h
+                ).astype(np.float32),
+                "model.layers.0.mlp.switch_mlp.up_proj.weight": np.random.randn(
                     8, h, h
                 ).astype(np.float32),
                 "model.layers.0.self_attn.q_proj.weight": np.random.randn(h, h).astype(
@@ -3619,3 +4314,4 @@ class TestQuantizeOqStreamingOq25:
             tensors.update(mx.load(str(sf)))
         assert "model.layers.0.mlp.switch_mlp.down_proj.scales" in tensors
         assert "model.layers.0.mlp.switch_mlp.gate_proj.scales" in tensors
+        assert "model.layers.0.mlp.switch_mlp.up_proj.scales" in tensors

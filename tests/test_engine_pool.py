@@ -4,7 +4,7 @@
 import asyncio
 import json
 import logging
-from pathlib import Path
+import shutil
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -16,6 +16,7 @@ from omlx.exceptions import (
     ModelLoadingError,
     ModelNotFoundError,
     ModelTooLargeError,
+    ModelUnavailableError,
 )
 from omlx.scheduler import PrefillEvictionRequest
 
@@ -294,6 +295,19 @@ class TestEnginePoolErrors:
         assert exc_info.value.model_id == "model-a"
         assert exc_info.value.ceiling == 100
 
+    def test_missing_model_path_removes_unloaded_entry(self, small_mock_model_dir):
+        """A deleted model directory is removed and reported as not found."""
+        pool = _make_pool(ceiling=10 * 1024**3)
+        pool.discover_models(str(small_mock_model_dir))
+
+        shutil.rmtree(small_mock_model_dir / "model-a")
+
+        with pytest.raises(ModelNotFoundError) as exc_info:
+            asyncio.run(pool.get_engine("model-a"))
+
+        assert exc_info.value.model_id == "model-a"
+        assert pool.get_entry("model-a") is None
+
 
 class TestEnginePoolStatus:
     """Tests for EnginePool status reporting."""
@@ -533,8 +547,8 @@ class TestVLMFallback:
         self, small_mock_model_dir
     ):
         """When VLM start fails AND the LLM fallback also fails, the raised
-        RuntimeError should embed both messages and chain ``__cause__`` to the
-        original VLM error (PR #1283)."""
+        unavailable error should embed both messages and preserve the original
+        fallback RuntimeError in the cause chain (PR #1283)."""
         pool = _make_pool(ceiling=10 * 1024**3)
         pool.discover_models(str(small_mock_model_dir))
 
@@ -556,7 +570,7 @@ class TestVLMFallback:
         with (
             patch("omlx.engine_pool.VLMBatchedEngine", return_value=mock_vlm_engine),
             patch("omlx.engine_pool.BatchedEngine", return_value=mock_batched_engine),
-            pytest.raises(RuntimeError) as excinfo,
+            pytest.raises(ModelUnavailableError) as excinfo,
         ):
             await pool._load_engine("model-a")
 
@@ -565,17 +579,20 @@ class TestVLMFallback:
         assert "Missing vision_tower parameters" in msg
         assert "LLM fallback also failed" in msg
         assert "Model type lfm2_vl not supported" in msg
-        # __cause__ chain preserves the original VLM error
         assert excinfo.value.__cause__ is not None
-        assert "Missing vision_tower parameters" in str(excinfo.value.__cause__)
+        assert isinstance(excinfo.value.__cause__, RuntimeError)
+        assert excinfo.value.__cause__.__cause__ is not None
+        assert "Missing vision_tower parameters" in str(
+            excinfo.value.__cause__.__cause__
+        )
 
     @pytest.mark.asyncio
     async def test_force_lm_fallback_to_vlm_both_fail_surfaces_both_errors(
         self, small_mock_model_dir
     ):
         """force_lm path: LM start fails AND VLM fallback also fails. Both
-        error messages should land in the raised RuntimeError, with the LM
-        error as ``__cause__`` (PR #1283)."""
+        error messages should land in the unavailable error, with the LM
+        error preserved in the cause chain (PR #1283)."""
         pool = _make_pool(ceiling=10 * 1024**3)
         pool.discover_models(str(small_mock_model_dir))
 
@@ -600,7 +617,7 @@ class TestVLMFallback:
         with (
             patch("omlx.engine_pool.BatchedEngine", return_value=mock_batched_engine),
             patch("omlx.engine_pool.VLMBatchedEngine", return_value=mock_vlm_engine),
-            pytest.raises(RuntimeError) as excinfo,
+            pytest.raises(ModelUnavailableError) as excinfo,
         ):
             await pool._load_engine("model-a", force_lm=True)
 
@@ -610,7 +627,8 @@ class TestVLMFallback:
         assert "tie_word_embeddings" in msg
         assert "VLM fallback also failed" in msg
         assert "vision encoder weights missing" in msg
-        assert isinstance(excinfo.value.__cause__, TypeError)
+        assert isinstance(excinfo.value.__cause__, RuntimeError)
+        assert isinstance(excinfo.value.__cause__.__cause__, TypeError)
 
 
 class TestEnginePoolLRU:
@@ -804,6 +822,34 @@ class TestEnginePoolAsync:
         assert pool.current_model_memory > 0
 
     @pytest.mark.asyncio
+    async def test_load_failure_is_cached_until_discovery_refresh(
+        self, pool_with_mock_engines, small_mock_model_dir
+    ):
+        """A failed model load is not retried until the model list is refreshed."""
+        pool = pool_with_mock_engines
+
+        mock_engine = MagicMock()
+        mock_engine.start = AsyncMock(side_effect=RuntimeError("broken weights"))
+        mock_engine.stop = AsyncMock()
+
+        with patch("omlx.engine_pool.BatchedEngine", return_value=mock_engine):
+            with pytest.raises(ModelUnavailableError):
+                await pool.get_engine("model-a")
+            with pytest.raises(ModelUnavailableError):
+                await pool.get_engine("model-a")
+
+        assert mock_engine.start.await_count == 1
+        entry = pool.get_entry("model-a")
+        assert entry is not None
+        assert entry.load_failed is True
+        assert "broken weights" in (entry.load_failure_message or "")
+
+        pool.discover_models(str(small_mock_model_dir))
+        refreshed = pool.get_entry("model-a")
+        assert refreshed is not None
+        assert refreshed.load_failed is False
+
+    @pytest.mark.asyncio
     async def test_runtime_settings_signature_reload(self, pool_with_mock_engines):
         """A profile runtime variant with engine fields reloads the base engine."""
         from omlx.model_settings import ModelSettings
@@ -975,6 +1021,7 @@ class TestEnginePoolAsync:
 
         model_path = tmp_path / "embed-model"
         model_path.mkdir()
+        (model_path / "config.json").write_text(json.dumps({"model_type": "bert"}))
         scheduler_config = SchedulerConfig(
             completion_batch_size=6,
             embedding_batch_size=4,
@@ -1012,6 +1059,7 @@ class TestEnginePoolAsync:
         """A bare EnginePool should pass its fallback scheduler config consistently."""
         model_path = tmp_path / "embed-model"
         model_path.mkdir()
+        (model_path / "config.json").write_text(json.dumps({"model_type": "bert"}))
         pool = _make_pool(ceiling=10 * 1024**3)
         pool._entries["embed-model"] = EngineEntry(
             model_id="embed-model",
@@ -1245,6 +1293,100 @@ class TestEnginePoolEviction:
         assert pool._entries["model-a"].engine is None
         assert pool._entries["model-b"].engine is not None
         assert pool.loaded_model_count == 1
+
+    @pytest.fixture
+    def residue_memory_pool(self, small_mock_model_dir, monkeypatch):
+        """Pool where phys_footprint lags high after an eviction.
+
+        Reproduces the false-507-on-swap bug: the macOS phys_footprint ledger
+        still counts reclaimable residue (dirty file-backed / IOAccelerator
+        pages from a just-evicted model) that the kernel has not yet reaped,
+        while both `mx.get_active_memory()` and the tracked accumulator
+        (`_current_model_memory`) have already dropped. We model that as a
+        high-water mark that never falls on its own.
+        """
+        pool = _make_pool(ceiling=2500)  # each model fits alone, not both
+        pool.discover_models(str(small_mock_model_dir))
+        hwm = {"v": 0}
+
+        def lagging_footprint():
+            hwm["v"] = max(hwm["v"], pool._current_model_memory)
+            return hwm["v"]
+
+        monkeypatch.setattr(
+            "omlx.engine_pool.get_phys_footprint", lagging_footprint
+        )
+        monkeypatch.setattr("omlx.engine_pool.mx.get_active_memory", lambda: 0)
+        return pool
+
+    @pytest.mark.asyncio
+    async def test_swap_admits_when_footprint_lags_after_eviction(
+        self, residue_memory_pool
+    ):
+        """A model that fits cleanly must load after eviction even when
+        phys_footprint still reflects the evicted model's reclaimable residue.
+
+        Without the committed-baseline recheck, admission sees
+        `current = max(0, lagging_footprint, 0)` still pinned at the evicted
+        model's size, projects past the ceiling with nothing left to evict, and
+        wrongly raises InsufficientMemoryError (the 507 on swap).
+        """
+        pool = residue_memory_pool
+
+        mock_engine_a = MagicMock()
+        mock_engine_a.start = AsyncMock()
+        mock_engine_a.stop = AsyncMock()
+        mock_engine_a.has_active_requests.return_value = False
+
+        mock_engine_b = MagicMock()
+        mock_engine_b.start = AsyncMock()
+        mock_engine_b.has_active_requests.return_value = False
+
+        def create_engine(*args, **kwargs):
+            if "model-a" in str(kwargs.get("model_name", args[0] if args else "")):
+                return mock_engine_a
+            return mock_engine_b
+
+        with patch("omlx.engine_pool.BatchedEngine", side_effect=create_engine):
+            await pool.get_engine("model-a")
+            assert pool.loaded_model_count == 1
+
+            # Swap to model-b: model-a is evicted, but phys_footprint still
+            # reports model-a's residue. model-b fits alone, so it must load.
+            await pool.get_engine("model-b")
+
+        mock_engine_a.stop.assert_called_once()
+        assert pool._entries["model-a"].engine is None
+        assert pool._entries["model-b"].engine is not None
+        assert pool.loaded_model_count == 1
+
+    @pytest.mark.asyncio
+    async def test_high_footprint_without_eviction_still_blocks_first_load(
+        self, small_mock_model_dir
+    ):
+        """Do not discount phys_footprint unless this admission evicted a model.
+
+        A high footprint with no evicted victim may be unrelated process pressure,
+        not reclaimable model residue. The committed-baseline retry must not let
+        the first model load past the process memory ceiling.
+        """
+        pool = _make_pool(ceiling=2500)
+        pool.discover_models(str(small_mock_model_dir))
+
+        mock_engine = MagicMock()
+        mock_engine.start = AsyncMock()
+
+        with (
+            patch("omlx.engine_pool.BatchedEngine", return_value=mock_engine) as cls,
+            patch("omlx.engine_pool.get_phys_footprint", return_value=2000),
+            patch("omlx.engine_pool.mx.get_active_memory", return_value=0),
+        ):
+            with pytest.raises(InsufficientMemoryError) as exc_info:
+                await pool.get_engine("model-a")
+
+        assert exc_info.value.current == 2000
+        cls.assert_not_called()
+        assert pool.loaded_model_count == 0
 
     @pytest.mark.asyncio
     async def test_insufficient_memory_all_pinned(self, tight_memory_pool):
@@ -2315,6 +2457,23 @@ class TestEnginePoolInUseLease:
                 raise RuntimeError("boom")
         assert entry.in_use == 0  # no leaked lease
 
+    @pytest.mark.asyncio
+    async def test_get_engine_rejects_loaded_llm_without_tokenizer(self):
+        """A stale/half-loaded LLM engine must not reach chat tokenization."""
+        from omlx.engine.batched import BatchedEngine
+
+        pool = _make_pool(ceiling=0)
+        engine = BatchedEngine.__new__(BatchedEngine)
+        engine._tokenizer = None
+        entry = self._loaded_entry("model-a")
+        entry.engine = engine
+        entry.model_type = "llm"
+        entry.engine_type = "batched"
+        pool._entries = {"model-a": entry}
+
+        with pytest.raises(ModelLoadingError, match="usable tokenizer"):
+            await pool.get_engine("model-a")
+
 
 class TestResetActivityTracking:
     """Tests for BaseNonStreamingEngine._reset_activity_tracking (#1595)."""
@@ -2390,3 +2549,136 @@ class TestResetActivityTracking:
         # Teardown reset the leaked counter (getattr-guarded reset called).
         assert engine._active_count == 0
         assert engine.has_active_requests() is False
+
+
+class TestFailedLoadReclaim:
+    """Failed model loads schedule a deferred memory reclaim.
+
+    Weights loaded before a load failure can remain reachable only through
+    the propagating exception's traceback frames, so synchronous
+    gc/clear_cache at raise time cannot free them. The pool schedules a
+    background task (_schedule_failed_load_reclaim) that retries reclaim
+    after the exception has been handled and dropped.
+    """
+
+    async def test_reclaim_settles_when_memory_returns(self):
+        pool = _make_pool()
+        gauge = {"active": 80 * 1024**3}
+
+        def _fake_active():
+            return gauge["active"]
+
+        def _drop_on_clear():
+            # Simulate the leaked buffers becoming collectable after the
+            # first gc + clear_cache round.
+            gauge["active"] = 1 * 1024**3
+
+        import concurrent.futures
+
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        try:
+            with (
+                patch(
+                    "omlx.engine_pool.mx.get_active_memory",
+                    side_effect=_fake_active,
+                ),
+                patch("omlx.engine_pool.mx.synchronize"),
+                patch(
+                    "omlx.engine_pool.mx.clear_cache",
+                    side_effect=_drop_on_clear,
+                ),
+                patch("omlx.engine_pool.get_phys_footprint", return_value=0),
+                patch(
+                    "omlx.engine_pool.get_mlx_executor", return_value=executor
+                ),
+                patch(
+                    "omlx.engine_pool.asyncio.sleep",
+                    new=AsyncMock(return_value=None),
+                ),
+            ):
+                pool._schedule_failed_load_reclaim(
+                    "model-x", pre_load_memory=1 * 1024**3
+                )
+                await asyncio.wait_for(
+                    pool._failed_load_reclaim_task, timeout=10
+                )
+        finally:
+            executor.shutdown(wait=False)
+
+        assert gauge["active"] == 1 * 1024**3
+
+    async def test_reclaim_gives_up_after_max_rounds(self):
+        """A permanently-inflated gauge must not hang the reclaim task."""
+        pool = _make_pool()
+
+        import concurrent.futures
+
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        try:
+            with (
+                patch(
+                    "omlx.engine_pool.mx.get_active_memory",
+                    return_value=80 * 1024**3,
+                ),
+                patch("omlx.engine_pool.mx.synchronize"),
+                patch("omlx.engine_pool.mx.clear_cache"),
+                patch("omlx.engine_pool.get_phys_footprint", return_value=0),
+                patch(
+                    "omlx.engine_pool.get_mlx_executor", return_value=executor
+                ),
+                patch(
+                    "omlx.engine_pool.asyncio.sleep",
+                    new=AsyncMock(return_value=None),
+                ),
+            ):
+                pool._schedule_failed_load_reclaim(
+                    "model-x", pre_load_memory=1 * 1024**3
+                )
+                await asyncio.wait_for(
+                    pool._failed_load_reclaim_task, timeout=10
+                )
+        finally:
+            executor.shutdown(wait=False)
+
+    async def test_failed_load_schedules_reclaim(self, small_mock_model_dir):
+        pool = _make_pool(ceiling=10 * 1024**3)
+        pool.discover_models(str(small_mock_model_dir))
+
+        failing_engine = MagicMock()
+        failing_engine.start = AsyncMock(side_effect=RuntimeError("boom"))
+        failing_engine.stop = AsyncMock()
+
+        with (
+            patch("omlx.engine_pool.BatchedEngine", return_value=failing_engine),
+            patch.object(pool, "_schedule_failed_load_reclaim") as scheduled,
+            pytest.raises(ModelUnavailableError),
+        ):
+            await pool._load_engine("model-a")
+
+        scheduled.assert_called_once()
+        args = scheduled.call_args[0]
+        assert args[0] == "model-a"
+
+
+class TestSchedulerConfigModelId:
+    """engine_pool sets model_name=model_id and model_path=entry.model_path
+    on the shared scheduler config so the scheduler uses the engine pool's
+    canonical model_id (not a filesystem snapshot hash) for tracker lookups."""
+
+    async def test_wires_model_name_and_model_path(self, small_mock_model_dir):
+        """engine_pool sets model_name=model_id and model_path on the
+        scheduler config when loading an engine."""
+        pool = _make_pool(ceiling=10 * 1024**3)
+        pool.discover_models(str(small_mock_model_dir))
+
+        mock_engine = MagicMock()
+        mock_engine.start = AsyncMock()
+
+        with patch(
+            "omlx.engine_pool.BatchedEngine",
+            return_value=mock_engine,
+        ):
+            await pool.get_engine("model-a")
+
+        assert pool._scheduler_config.model_name == "model-a"
+        assert pool._scheduler_config.model_path == str(small_mock_model_dir / "model-a")

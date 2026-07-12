@@ -51,7 +51,12 @@ from ..utils.image import (
     compute_per_image_hashes,
     extract_images_from_messages,
 )
-from .base import BaseEngine, GenerationOutput, _warn_scheduler_unreachable_once
+from .base import (
+    BaseEngine,
+    GenerationOutput,
+    _clear_teardown_references,
+    _warn_scheduler_unreachable_once,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -712,6 +717,12 @@ def _force_minimax_m3_moe_sanitize_on_load(model_dir: Path):
         yield
         return
 
+    from ..patches.mlx_vlm_minimax_m3_compat import (
+        apply_mlx_vlm_minimax_m3_compat_patch,
+    )
+
+    apply_mlx_vlm_minimax_m3_compat_patch()
+
     import safetensors
     from mlx_vlm.models.minimax_m3_vl import minimax_m3_vl as _minimax_m3_vl
 
@@ -1020,10 +1031,9 @@ def _smart_resize_tokens(
 def _read_image_dims(part: dict) -> Optional[tuple]:
     """Best-effort, decode-free ``(width, height)`` for an OpenAI image part.
 
-    Handles ``data:`` base64 URIs, raw base64, and local file paths via a lazy
-    ``PIL.Image.open`` (reads the header only, not pixels). Returns ``None`` for
-    anything that would need a network fetch or that fails to parse, so callers
-    fall back to the conservative per-image upper bound."""
+    Handles only ``data:`` base64 URIs. Returns ``None`` for anything else so
+    callers fall back to the conservative per-image upper bound without opening
+    request-supplied paths or fetching remote URLs."""
     import base64 as _b64
     import binascii
     import io as _io
@@ -1033,32 +1043,34 @@ def _read_image_dims(part: dict) -> Optional[tuple]:
     obj = part.get("image_url")
     if obj is None:
         obj = part.get("input_image") or part.get("image")
-    url = obj if isinstance(obj, str) else (obj.get("url") if isinstance(obj, dict) else None)
+    url = (
+        obj
+        if isinstance(obj, str)
+        else (obj.get("url") if isinstance(obj, dict) else None)
+    )
     if not isinstance(url, str) or not url:
         return None
 
     raw = None
     s = url.strip()
     if s.startswith("data:"):
-        _, sep, encoded = s.partition(",")
-        if sep == ",":
-            try:
-                raw = _b64.b64decode(encoded, validate=True)
-            except (binascii.Error, ValueError):
-                return None
-    elif s.startswith(("http://", "https://")):
-        return None  # no network in preflight
-    else:
+        prefix, sep, encoded = s.partition(",")
+        prefix_lower = prefix.lower()
+        if (
+            sep != ","
+            or not prefix_lower.startswith("data:image/")
+            or ";base64" not in prefix_lower
+        ):
+            return None
         try:
-            raw = _b64.b64decode(s, validate=True)
+            raw = _b64.b64decode(encoded, validate=True)
         except (binascii.Error, ValueError):
-            raw = None  # not base64 -> treat as path below
+            return None
+    else:
+        return None
 
     try:
-        if raw is not None:
-            with _Image.open(_io.BytesIO(raw)) as im:
-                return im.size  # (width, height)
-        with _Image.open(s) as im:
+        with _Image.open(_io.BytesIO(raw)) as im:
             return im.size
     except Exception:
         return None
@@ -1431,6 +1443,12 @@ class VLMBatchedEngine(BaseEngine):
             self._tokenizer = copy.deepcopy(self._processor.tokenizer)
         else:
             self._tokenizer = copy.deepcopy(self._processor)
+        if self._tokenizer is None or not callable(
+            getattr(self._tokenizer, "encode", None)
+        ):
+            raise RuntimeError(
+                f"VLM processor for {self._model_name} did not provide a usable tokenizer"
+            )
 
         if self.is_diffusion_model:
             self._inject_tool_calling(self._tokenizer)
@@ -1449,7 +1467,6 @@ class VLMBatchedEngine(BaseEngine):
             if self._scheduler_config
             else SchedulerConfig()
         )
-        scheduler_config.model_name = self._model_name
 
         engine_config = EngineConfig(
             model_name=self._model_name,
@@ -1485,6 +1502,98 @@ class VLMBatchedEngine(BaseEngine):
                 )
                 scheduler._set_model_info_for_monitor()
                 logger.info(f"TurboQuant KV cache enabled for VLM: {tq_bits} bits")
+
+        # head_dim=256 long-context prefill -> O(L) tiled SDPA kernel. See
+        # batched.py for rationale. Passthrough-safe; strictly gated route.
+        if getattr(self._model_settings, "sdpa256_prefill_enabled", True) is not False:
+            try:
+                from ..patches.sdpa256_attention import (
+                    apply_sdpa256_attention_patch,
+                )
+
+                apply_sdpa256_attention_patch()
+            except Exception:
+                logger.debug("sdpa256 attention patch not applied", exc_info=True)
+
+        # Qwen3.5/3.6 head_dim=256 causal prefill -> native steel FA kernel.
+        # Installed after sdpa256 so matched Qwen dense attention takes the
+        # simdgroup-MMA path, while unsupported cases fall through unchanged.
+        if (
+            getattr(self._model_settings, "fa256_steel_prefill_enabled", True)
+            is not False
+        ):
+            try:
+                from ..patches.qwen35_fa256_attention import (
+                    apply_qwen35_fa256_attention_patch,
+                )
+
+                apply_qwen35_fa256_attention_patch()
+            except Exception:
+                logger.debug("Qwen FA-256 steel patch not applied", exc_info=True)
+
+        # Qwen3.5/3.6 Gated DeltaNet prefill -> optimized Metal kernel.
+        # Decode and masked paths keep the original mlx-vlm kernel.
+        gdn_prefill_enabled = getattr(
+            self._model_settings,
+            "gdn_prefill_enabled",
+            getattr(self._model_settings, "gdn_chunked_prefill_enabled", True),
+        )
+        if gdn_prefill_enabled is not False:
+            try:
+                from ..patches.qwen35_gdn_chunked import (
+                    apply_qwen35_gdn_prefill_patch,
+                )
+
+                apply_qwen35_gdn_prefill_patch()
+            except Exception:
+                logger.debug("GDN prefill patch not applied", exc_info=True)
+
+        # Qwen3.5/3.6 q4 MLP prefill -> native qmm tile tuned for long batches.
+        # Decode and target-verify paths keep the original QuantizedLinear.
+        if (
+            getattr(self._model_settings, "qwen35_q4_mlp_prefill_enabled", True)
+            is not False
+        ):
+            try:
+                from ..patches.qwen35_q4_mlp import (
+                    apply_qwen35_q4_mlp_patch,
+                    apply_qwen35_q4_prefill_linear_patch,
+                )
+
+                apply_qwen35_q4_mlp_patch()
+                apply_qwen35_q4_prefill_linear_patch()
+            except Exception:
+                logger.debug("Qwen q4 MLP prefill patch not applied", exc_info=True)
+
+        # Qwen3.5/3.6 sparse MoE prefill -> native weighted-sum after sorted
+        # SwitchGLU. Decode and target-verify keep the original path.
+        if (
+            getattr(self._model_settings, "qwen35_moe_weighted_sum_enabled", True)
+            is not False
+        ):
+            try:
+                from ..patches.qwen35_moe_weighted_sum import (
+                    apply_qwen35_moe_weighted_sum_patch,
+                )
+
+                apply_qwen35_moe_weighted_sum_patch()
+            except Exception:
+                logger.debug(
+                    "Qwen MoE weighted-sum patch not applied", exc_info=True
+                )
+
+        if (
+            getattr(self._model_settings, "qwen35_ragged_decode_fallback_enabled", True)
+            is not False
+        ):
+            try:
+                from ..patches.qwen35_ragged_decode import (
+                    apply_qwen35_ragged_decode_patch,
+                )
+
+                apply_qwen35_ragged_decode_patch()
+            except Exception:
+                logger.debug("qwen3_5 ragged decode patch not applied", exc_info=True)
         scheduler.refresh_ssd_layer_signature()
 
         # SpecPrefill: load draft model and pass to scheduler
@@ -1497,9 +1606,10 @@ class VLMBatchedEngine(BaseEngine):
             )
             if specprefill_enabled and specprefill_draft:
                 try:
-                    from mlx_lm import load as mlx_lm_load
-
-                    from ..utils.model_loading import maybe_load_custom_quantization
+                    from ..utils.model_loading import (
+                        lm_load_compat as mlx_lm_load,
+                        maybe_load_custom_quantization,
+                    )
                     from ..utils.tokenizer import get_tokenizer_config
 
                     def _load_draft():
@@ -1592,26 +1702,47 @@ class VLMBatchedEngine(BaseEngine):
 
     async def stop(self) -> None:
         """Stop the engine and cleanup resources."""
-        if self._engine:
-            await self._engine.stop()
-            if hasattr(self._engine, "engine") and self._engine.engine is not None:
-                try:
-                    self._engine.engine.close()
-                except Exception as e:
-                    logger.warning(f"Error closing engine: {e}")
-        if self._vision_cache is not None:
-            self._vision_cache.close()
-            self._vision_cache = None
+        engine = self._engine
+
         for cancel_event in getattr(self, "_diffusion_cancel_events", ()):
             cancel_event.set()
+
+        if engine:
+            await engine.stop()
+
+        if self._vision_cache is not None:
+            try:
+                self._vision_cache.close()
+            except Exception:
+                logger.warning("Error closing vision feature cache", exc_info=True)
+            self._vision_cache = None
+
+        # Drop wrapper-side references before EngineCore.close() performs its
+        # final worker-thread MLX reclaim. Otherwise the VLM wrapper can keep
+        # model weights or cached feature arrays alive until after the reclaim
+        # pass has already run.
+        _clear_teardown_references(
+            self,
+            none_attrs=(
+                "_engine",
+                "_vlm_model",
+                "_processor",
+                "_adapter",
+                "_tokenizer",
+                "_grammar_compiler",
+                "_vlm_mtp_drafter",
+                "_diffusion_family",
+            ),
+            false_attrs=("_grammar_compiler_init_attempted",),
+        )
+
+        if engine:
+            if hasattr(engine, "engine") and engine.engine is not None:
+                try:
+                    engine.engine.close()
+                except Exception as e:
+                    logger.warning(f"Error closing engine: {e}")
         self._diffusion_cancel_events = set()
-        self._engine = None
-        self._vlm_model = None
-        self._processor = None
-        self._adapter = None
-        self._tokenizer = None
-        self._vlm_mtp_drafter = None
-        self._diffusion_family = None
         self._diffusion_active_requests = 0
         self._loaded = False
         logger.info("VLMBatchedEngine stopped")
@@ -2137,7 +2268,7 @@ class VLMBatchedEngine(BaseEngine):
         Args:
             messages: Chat messages (text-only, media already extracted)
             images: List of PIL Image objects
-            audio: List of audio data (BytesIO, file paths, or numpy arrays)
+            audio: List of audio data (BytesIO buffers, tuples, or numpy arrays)
 
         Returns:
             Tuple of (
@@ -2172,9 +2303,8 @@ class VLMBatchedEngine(BaseEngine):
             )
 
         # Normalize audio to numpy float32 arrays expected by processor.
-        # extract_images_from_messages produces BytesIO / file-path strings, but
-        # the processor's __call__ expects numpy arrays or (array, sample_rate)
-        # tuples. load_audio handles all three source types.
+        # Request-facing string paths are rejected before this point; remaining
+        # sources are inline buffers, arrays, or (array, sample_rate) tuples.
         if audio:
             if any(not isinstance(a, tuple) for a in audio):
                 from ..patches.mlx_audio_compat import (
@@ -2803,6 +2933,8 @@ class VLMBatchedEngine(BaseEngine):
                     finish_reason=output.finish_reason,
                     tool_calls=output.tool_calls,
                     cached_tokens=output.cached_tokens,
+                    generated_at=getattr(output, "generated_at", None),
+                    generated_until=getattr(output, "generated_until", None),
                 )
         except GeneratorExit:
             logger.info(f"[vlm_stream_generate] GeneratorExit for request {request_id}")

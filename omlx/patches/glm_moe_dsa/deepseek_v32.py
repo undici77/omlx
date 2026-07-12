@@ -103,6 +103,17 @@ class ModelArgs(BaseModelArgs):
     rope_theta: float = 10000.0
     rope_scaling: Dict = None
     attention_bias: bool = False
+    indexer_rope_interleave: bool = False
+
+
+# Decode-shaped multi-row forwards (MTP draft verify, L = depth clamp 8 + 1
+# rows at most) must not enter the prefill-shaped fused scores kernel: its
+# grid is sized for many query rows, runs ~5x slower than the plain matmul +
+# fused reduce at tiny L, and the gap grows with context length (~3 ms per
+# indexer layer at 128k). Below this floor the s > 1 scoring falls through to
+# the q @ k.T + fused_index_score_reduce path, whose causal fill uses the
+# same decode offsets. 16 mirrors the sdpa256/fa256 prefill-routing floors.
+_FUSED_SCORES_MIN_S = 16
 
 
 class Indexer(nn.Module):
@@ -141,7 +152,7 @@ class Indexer(nn.Module):
         self.rope = initialize_rope(
             dims=args.qk_rope_head_dim,
             base=args.rope_theta,
-            traditional=True,
+            traditional=args.indexer_rope_interleave,
             max_position_embeddings=args.max_position_embeddings,
             scaling_config=args.rope_scaling,
         )
@@ -262,7 +273,7 @@ class Indexer(nn.Module):
         causal_valid_prefix_topk = fuse_causal_mask
 
         scores = None
-        if s > 1 and (mask is None or fuse_causal_mask):
+        if s >= _FUSED_SCORES_MIN_S and (mask is None or fuse_causal_mask):
             scores_feed_exact_topk = causal_valid_prefix_topk and use_fast_topk
             candidate_prefix_rows = 0
             if use_fast_topk and scores_feed_exact_topk:
@@ -760,63 +771,6 @@ class Model(nn.Module):
     ):
         out = self.model(inputs, cache)
         return self.lm_head(out)
-
-    def update_quantization_config(self, config):
-        if _use_glm_shared_fused_gate_up(self.args):
-            for key in ("quantization", "quantization_config"):
-                quantization = config.get(key)
-                if not isinstance(quantization, dict):
-                    continue
-                for l in range(self.args.num_hidden_layers):
-                    prefix = f"model.layers.{l}.mlp.shared_experts"
-                    gate_path = f"{prefix}.gate_proj"
-                    up_path = f"{prefix}.up_proj"
-                    fused_path = f"{prefix}.gate_up_proj"
-                    gate_spec = quantization.get(gate_path)
-                    up_spec = quantization.get(up_path)
-                    if gate_spec is not None and gate_spec == up_spec:
-                        quantization[fused_path] = dict(gate_spec)
-                        quantization.pop(gate_path, None)
-                        quantization.pop(up_path, None)
-
-        dequant_mla_proj = _dequant_mla_proj_mode(self.args)
-        dequant_embed_q = dequant_mla_proj in {
-            "1",
-            "true",
-            "all",
-            "both",
-            "embed",
-            "embed_q",
-        }
-        dequant_unembed_out = dequant_mla_proj in {
-            "1",
-            "true",
-            "all",
-            "both",
-            "unembed",
-            "unembed_out",
-            "out",
-        }
-        if not (dequant_embed_q or dequant_unembed_out):
-            return
-        skip_quantization = config.setdefault("_skip_quantization_paths", set())
-        if not isinstance(skip_quantization, set):
-            skip_quantization = set(skip_quantization)
-            config["_skip_quantization_paths"] = skip_quantization
-        for key in ("quantization", "quantization_config"):
-            quantization = config.get(key)
-            if not isinstance(quantization, dict):
-                continue
-            for l in range(self.args.num_hidden_layers):
-                prefix = f"model.layers.{l}.self_attn"
-                if dequant_embed_q:
-                    path = f"{prefix}.embed_q"
-                    skip_quantization.add(path)
-                    quantization.pop(path, None)
-                if dequant_unembed_out:
-                    path = f"{prefix}.unembed_out"
-                    skip_quantization.add(path)
-                    quantization.pop(path, None)
 
     def sanitize(self, weights):
         # Remove multi-token prediction layers

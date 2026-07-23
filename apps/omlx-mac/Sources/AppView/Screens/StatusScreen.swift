@@ -589,7 +589,7 @@ private struct ActiveNowList: View {
 /// opt-in for update checks. Tapping "I understand" grants consent and
 /// lets the auto-check / auto-download toggles become active.
 private struct ConsentNoticeRow: View {
-    @ObservedObject var updates: UpdateController
+    @Bindable var updates: UpdateController
     @Environment(\.omlxTheme) private var theme
 
     var body: some View {

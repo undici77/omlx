@@ -114,7 +114,7 @@ final class UpdateController {
     var autoNotify: Bool {
         didSet { if !suspendPersist { persist() } }
     }
-    @Published var consentGiven: Bool {
+    var consentGiven: Bool {
         didSet { if !suspendPersist { persist() } }
     }
 

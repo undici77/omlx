@@ -27,6 +27,14 @@ import openai_harmony
 # import-time torch references so the package can load.
 from omlx._torch_stub import install as _install_torch_stub
 _install_torch_stub()
+
+# Run tests under the same M5 sorted gather_qmm reroute the server
+# installs at model load (issue #2267). Without it, kernel-sensitive
+# tests (e.g. the SwitchGLU fusion bit-exactness test, whose inter=32
+# down_proj runs at K=32) fail on M5 hardware. No-op elsewhere.
+from omlx.patches.m5_gather_qmm import apply_m5_gather_qmm_workaround
+apply_m5_gather_qmm_workaround()
+
 from omlx.request import Request, SamplingParams
 
 
@@ -128,6 +136,25 @@ def pytest_collection_modifyitems(config, items):
         ("test_scheduler", "MLX mock active — Scheduler SSD/TurboQuant cache layout signatures require real MLX"),
         ("test_sdpa256_attention", "MLX mock active — SDPA 256 attention patch internals unavailable"),
         ("test_glm_mtp_patch", "MLX mock active — GLM MTP patch internals unavailable"),
+        # Bonsai quantized kernels (quantized_matmul, to_fp8, etc.)
+        ("test_bonsai_qmv", "MLX mock active — Bonsai quantized kernel ops unavailable"),
+        ("test_bonsai_t5_load", "MLX mock active — Bonsai T5 quantized ops unavailable"),
+        # Laguna (FP8/nvfp4 sanitize requires real MLX dequantize)
+        ("test_laguna_patch", "MLX mock active — Laguna sanitize requires real MLX"),
+        # Vendored VLM patches (need real mlx-vlm model classes)
+        ("test_mlx_vlm_pixtral_torch_free", "MLX mock active — vendored mlx-vlm classes unavailable"),
+        ("test_mlx_vlm_unlimited_ocr_compat", "MLX mock active — vendored mlx-vlm classes unavailable"),
+        # Nemotron-H MTP (needs real NemotronH mixer class)
+        ("test_nemotron_mtp_patch", "MLX mock active — NemotronH mixer class unavailable in mock"),
+        # Qwen3.5 MoE fused gate_up (needs real SwitchGLU / mlx.randint)
+        ("test_qwen35_moe_gate_up", "MLX mock active — SwitchGLU / randint unavailable in mock"),
+        # Prefix cache TurboQuant reconstruction (needs real MLX array ops)
+        ("test_prefix_cache", "MLX mock active — TQ reconstruction needs real MLX array ops"),
+        ("test_per_engine_threads", "MLX mock active — prefix cache stream ops need real MLX"),
+        # Model loading (materialize_lazy_state needs real tree_flatten on mlx.array)
+        ("test_model_loading", "MLX mock active — lazy state materialization needs real MLX"),
+        # Server main (integration-style, depends on full server stack)
+        ("test_server_main", "MLX mock active — server entry point needs full stack"),
     ]
 
     _mock_skip = pytest.mark.skip(

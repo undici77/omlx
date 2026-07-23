@@ -65,12 +65,18 @@ def check_readme_privacy():
     return all(results)
 
 def check_license_headers():
-    """Verify all .py files have the Apache-2.0 license header."""
+    """Verify all .py files have the Apache-2.0 license header.
+
+    Skips vendored third-party code (under ``vendor/`` directories) which
+    carry their own licenses (e.g. MIT from Blaizzy/mlx-vlm).
+    """
     print("\n--- Verifying License Headers ---")
     py_files = list(Path("omlx").rglob("*.py")) + list(Path("tests").rglob("*.py"))
     missing = []
     for f in py_files:
         if "__pycache__" in str(f): continue
+        # Skip vendored third-party code — they carry their own licenses
+        if "/vendor/" in str(f): continue
         content = f.read_text()
         if "# SPDX-License-Identifier: Apache-2.0" not in content:
             missing.append(f)

@@ -1650,16 +1650,19 @@ async def run_benchmark(run: BenchmarkRun, engine_pool: Any) -> None:
                 await _upload_to_omlx_ai(run, engine_pool)
             except Exception as e:
                 logger.warning(f"Benchmark upload to omlx.ai failed: {e}")
-                await _send_event(run, {
-                    "type": "upload_done",
-                    "data": {
-                        "owner_hash": None,
-                        "total": 0,
-                        "success": 0,
-                        "failed": 0,
-                        "error": str(e),
+                await _send_event(
+                    run,
+                    {
+                        "type": "upload_done",
+                        "data": {
+                            "owner_hash": None,
+                            "total": 0,
+                            "success": 0,
+                            "failed": 0,
+                            "error": str(e),
+                        },
                     },
-                })
+                )
         else:
             logger.info("Benchmark: upload to omlx.ai skipped (no user consent)")
 

@@ -237,6 +237,7 @@ final class MenubarVisibilityWatcher {
         }
         return dict["enabled"]?.value as? Bool ?? false
     }
+}
 
     private func runAutofixFlow() {
         // Respect user's explicit opt-in: only fix if StatusKit toggle is on.
@@ -363,7 +364,118 @@ enum MenubarIconRecovery {
     /// Auto-Fix button of the launch-time alert.
     static func runAutofixFlow() {
         MenubarLog.write("auto-fix requested from hidden-icon alert")
-        let result = fixStatusKitPermission()
+
+/// `~/Library/Application Support/oMLX/logs/menubar.log`. The pre-Swift app
+/// wrote this file and both the hidden-icon alert and `omlx diagnose
+/// menubar` still send people to it, so the Swift port owes it the same
+/// content. Kept separate from server.log, which is the Python child's own
+/// stdout/stderr handle.
+@MainActor
+enum MenubarLog {
+    /// Settable so tests can redirect the writer at a temp file instead of
+    /// appending to (and trimming) the user's real log.
+    static var url = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent("Library/Application Support/oMLX/logs/menubar.log")
+
+    /// Trim threshold and the tail we keep when we cross it. The file only
+    /// takes a handful of lines per launch, so this is a runaway guard
+    /// rather than real rotation.
+    static let maxBytes = 256 * 1024
+    static let keepBytes = 64 * 1024
+
+    private static let timestampFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        return formatter
+    }()
+
+    static func write(_ message: String) {
+        let line = "\(timestampFormatter.string(from: Date())) \(message)\n"
+        guard let data = line.data(using: .utf8) else { return }
+
+        let fileManager = FileManager.default
+        do {
+            try fileManager.createDirectory(
+                at: url.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+        } catch {
+            return
+        }
+        if !fileManager.fileExists(atPath: url.path) {
+            fileManager.createFile(atPath: url.path, contents: nil)
+        }
+
+        trimIfNeeded()
+
+        guard let handle = try? FileHandle(forWritingTo: url) else { return }
+        defer { try? handle.close() }
+        _ = try? handle.seekToEnd()
+        try? handle.write(contentsOf: data)
+    }
+
+    /// Opens the log for the alert's View Log button. Writes a line first so
+    /// a first-ever click never lands on a missing file.
+    static func open() {
+        if !FileManager.default.fileExists(atPath: url.path) {
+            write("log opened before any probe ran")
+        }
+        NSWorkspace.shared.open(url)
+    }
+
+    private static func trimIfNeeded() {
+        let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
+        guard let size = (attributes?[.size] as? NSNumber)?.intValue, size > maxBytes else {
+            return
+        }
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return }
+        try? handle.seek(toOffset: UInt64(max(0, size - keepBytes)))
+        var tail = (try? handle.readToEnd()) ?? Data()
+        try? handle.close()
+        // The cut lands mid-line; drop the fragment so every line in the
+        // file stays complete and parseable by `omlx diagnose menubar`.
+        if let newline = tail.firstIndex(of: UInt8(ascii: "\n")) {
+            tail = tail[tail.index(after: newline)...]
+        }
+        try? tail.write(to: url, options: [.atomic])
+    }
+}
+
+/// StatusKit repair shared by the launch-time hidden-icon alert and the
+/// Appearance screen's "Restore" button. Everything here is best-effort and
+/// user-triggered: on Tahoe the menu bar belongs to ControlCenter, so the
+/// only thing the app can do is flip its own approval flag back on and let
+/// the user finish in System Settings.
+@MainActor
+enum MenubarIconRecovery {
+
+    static var isTahoeOrNewer: Bool {
+        ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 26
+    }
+
+    struct AutoFixOutcome {
+        let success: Bool
+        let message: String
+        let needsFullDiskAccess: Bool
+
+        init(success: Bool, message: String, needsFullDiskAccess: Bool = false) {
+            self.success = success
+            self.message = message
+            self.needsFullDiskAccess = needsFullDiskAccess
+        }
+    }
+
+    private static let statusKitPlistURL = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent(
+            "Library/Group Containers/group.com.apple.controlcenter/Library/Preferences/group.com.apple.controlcenter.plist"
+        )
+
+    // MARK: - Entry points
+
+    /// Auto-Fix button of the launch-time alert.
+    static func runAutofixFlow() {
+        MenubarLog.write("auto-fix requested from hidden-icon alert")
+let result = fixStatusKitPermission()
         MenubarLog.write(
             "auto-fix result: success=\(result.success) fda=\(result.needsFullDiskAccess) — \(oneLine(result.message))"
         )

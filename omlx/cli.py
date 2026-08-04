@@ -94,9 +94,7 @@ def _has_cli_overrides(args) -> bool:
     if hasattr(args, "ca_bundle") and args.ca_bundle is not None:
         return True
     # --no_cache is the only persistable boolean flag with a False default.
-    if hasattr(args, "no_cache") and args.no_cache:
-        return True
-    return False
+    return bool(getattr(args, "no_cache", False))
 
 
 def serve_command(args):

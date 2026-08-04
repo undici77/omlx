@@ -424,7 +424,7 @@ let result = fixStatusKitPermission()
     }
 
     /// Alert copy is written as a wrapped paragraph; the log wants one line.
-    private static func oneLine(_ message: String) -> String {
+    fileprivate static func oneLine(_ message: String) -> String {
         message
             .replacingOccurrences(of: "\n", with: " ")
             .replacingOccurrences(of: "  ", with: " ")
@@ -433,7 +433,7 @@ let result = fixStatusKitPermission()
 
     // MARK: - StatusKit Auto-Fix
 
-    private static func fixStatusKitPermission() -> AutoFixOutcome {
+    fileprivate static func fixStatusKitPermission() -> AutoFixOutcome {
         let fileManager = FileManager.default
 
         guard fileManager.fileExists(atPath: statusKitPlistURL.path) else {
@@ -820,7 +820,7 @@ let result = fixStatusKitPermission()
         }
     }
 
-    private static func showStatusKitAccessDeniedAlert() {
+    fileprivate static func showStatusKitAccessDeniedAlert() {
         NSApp.activate(ignoringOtherApps: true)
 
         let alert = NSAlert()
@@ -848,7 +848,7 @@ let result = fixStatusKitPermission()
         }
     }
 
-    private static func showAutofixResultAlert(success: Bool, message: String) {
+    fileprivate static func showAutofixResultAlert(success: Bool, message: String) {
         NSApp.activate(ignoringOtherApps: true)
 
         let alert = NSAlert()

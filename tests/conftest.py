@@ -155,6 +155,22 @@ def pytest_collection_modifyitems(config, items):
         ("test_model_loading", "MLX mock active — lazy state materialization needs real MLX"),
         # Server main (integration-style, depends on full server stack)
         ("test_server_main", "MLX mock active — server entry point needs full stack"),
+        # New MLX-dependent test files from merge
+        ("test_deepseek_v4_dspark", "MLX mock active — dSpark quantized kernel ops unavailable"),
+        ("test_gemma4_verify_attention", "MLX mock active — Gemma-4 verify kernel unavailable"),
+        ("test_gemma4_vlm_mtp_runtime", "MLX mock active — Gemma-4 VLM MTP internals unavailable"),
+        ("test_mlx_vlm_inkling_compat", "MLX mock active — Inkling VLM vendor classes unavailable"),
+        ("test_mtp_prompt_priming", "MLX mock active — MTP prompt priming needs real MLX model"),
+        ("test_step3p7_patch", "MLX mock active — Step3.7 MTP sanitize needs real MLX"),
+        ("test_dflash_laguna", "MLX mock active — DFlash/Laguna sanitize needs real MLX"),
+        ("test_gemma4_text_model", "MLX mock active — Gemma-4 text model needs real MLX"),
+        ("test_inkling_vlm_mtp", "MLX mock active — Inkling VLM MTP needs real MLX"),
+        ("test_mimo_v2_patch", "MLX mock active — MIMO v2 quantized ops unavailable"),
+        ("test_pooling_cache_delta", "MLX mock active — PoolingCache delta needs real MLX"),
+        ("test_cache_ntuple_state", "MLX mock active — PoolingCache state arity differs in mock"),
+        ("test_specprefill", "MLX mock active — specprefill array ops need real MLX"),
+        ("test_engine_keepalive", "MLX mock active — MLXEmbeddingModel compile needs real MLX"),
+        ("test_utils_tokenizer", "MLX mock active — tokenizer decode needs real MLX"),
     ]
 
     _mock_skip = pytest.mark.skip(

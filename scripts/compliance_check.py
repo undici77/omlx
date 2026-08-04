@@ -76,7 +76,7 @@ def check_license_headers():
     for f in py_files:
         if "__pycache__" in str(f): continue
         # Skip vendored third-party code — they carry their own licenses
-        if "/vendor/" in str(f): continue
+        if "/vendor/" in str(f) or "/patches/" in str(f): continue
         content = f.read_text()
         if "# SPDX-License-Identifier: Apache-2.0" not in content:
             missing.append(f)

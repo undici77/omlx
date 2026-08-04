@@ -1575,6 +1575,8 @@ class TestGlobalSettings:
                 assert runtime.cache.enabled is False
                 runtime.save_cli_overrides(args)
 
+            # Clear env overrides so the persisted load reflects file state only.
+            os.environ.pop("OMLX_API_KEY", None)
             persisted = GlobalSettings.load(base_path=base_path)
             assert persisted.server.port == 8765
             assert persisted.auth.api_key == "stored-key"

@@ -15,6 +15,7 @@ import concurrent.futures
 import copy
 import gc
 import importlib
+import inspect
 import logging
 import os
 import threading
@@ -22,7 +23,7 @@ import time
 from array import array
 from collections import OrderedDict, defaultdict, deque
 from collections.abc import Callable
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -49,7 +50,7 @@ from mlx_lm.sample_utils import make_logits_processors
 from .cache.observability import CacheRateTracker
 from .cache.paged_cache import PagedCacheManager
 from .cache.pooling_delta import compact_pooling_cache_snapshot
-from .cache.prefix_cache import BlockAwarePrefixCache
+from .cache.prefix_cache import BlockAwarePrefixCache, cachelist_pm_member_plan
 from .exceptions import (
     PrefillMemoryExceededError,
     describe_ceiling_binding,
@@ -59,7 +60,15 @@ from .patches.sdpa256_attention import set_unfused_headroom_provider
 from .prefill_progress import get_prefill_tracker
 from .prefill_transient_tracker import PrefillTransientTracker
 from .request import Request, RequestOutput, RequestStatus, SamplingParams
-from .speculative.vlm_mtp import VLMMTPDrafter, run_vlm_mtp_decode
+from .speculative.processing_sampler import (
+    MTPProcessingSampler,
+    supports_vlm_mtp_processing,
+)
+from .speculative.vlm_mtp import (
+    VLMMTPDrafter,
+    run_vlm_mtp_decode,
+    vlm_mtp_positioned_sampling_available,
+)
 from .utils.fatal import FATAL_TEARDOWN_TIMEOUT_S, fatal_exit
 from .utils.generation_config import load_generation_config_token_ids
 from .utils.hardware import format_bytes
@@ -348,6 +357,7 @@ try:
         MemoryMonitor,
         collect_kv_layer_specs,
         estimate_mla_kv_bytes_per_token,
+        make_prefill_memory_profile,
     )
 
     HAS_TIERED_CACHE = True
@@ -357,6 +367,7 @@ except ImportError:
     MemoryMonitor = None
     collect_kv_layer_specs = None
     estimate_mla_kv_bytes_per_token = None
+    make_prefill_memory_profile = None
     HAS_TIERED_CACHE = False
 
 # Import cache type handlers for hybrid cache support
@@ -497,11 +508,12 @@ class _CacheFreshnessWait:
 
 
 # ---------------------------------------------------------------------------
-# Monkey-patch GenerationBatch._step to call grammar accept_token() after
-# sampling.  In the pipelined _step(), logits processors fill the bitmask
-# (constrain NEXT token) but can't know which token was just sampled.
-# After _original_step returns, self._next_tokens holds the freshly sampled
-# tokens.  We eval them synchronously and accept in grammar processors.
+# Monkey-patch GenerationBatch._step to feed grammar processors the token
+# that was sampled from their bitmask.  In the pipelined _step(), logits
+# processors fill the bitmask (constrain the NEXT token) but can't know which
+# token was just drawn from it; only the step can, via self._next_tokens.
+# The accept runs at the TOP of the following step, where _next_tokens is
+# about to become the model input anyway — see _omlx_advance_grammar_rows.
 # ---------------------------------------------------------------------------
 # Authoritative per-uid row state for the generation batch.
 #
@@ -668,6 +680,49 @@ def _omlx_realign_generation_batch_rows(self) -> None:
     self.samplers = new_samplers
 
 
+def _omlx_advance_grammar_rows(self) -> None:
+    """Accept the token each grammar row sampled during the previous step.
+
+    ``_next_tokens`` still holds the previous step's samples here, and the
+    original step is what promotes them to the model input, so this is both
+    the last point at which the matcher can still be advanced in time for
+    the next bitmask and the first at which reading the ids costs nothing:
+    the forward pass about to run needs them evaluated regardless.
+
+    Doing it here rather than immediately after the previous dispatch is
+    what keeps mlx-lm's one-step lookahead intact.  The old placement forced
+    ``mx.eval`` on the freshly dispatched samples, so every bit of host work
+    that follows a step — ``next()``'s epilogue, stop-token matching,
+    ``filter``, detokenisation, the output collector, SSE streaming — ran
+    with the GPU idle instead of behind it.  That serialisation, not the
+    bitmask itself, is where constrained decoding lost its throughput.
+    """
+    from .api.grammar import GrammarConstraintProcessor
+
+    rows = [
+        (e, proc)
+        for e, procs in enumerate(self.logits_processors)
+        for proc in procs
+        if isinstance(proc, GrammarConstraintProcessor) and proc.pending
+    ]
+    if not rows:
+        return
+
+    # filter([]) leaves _next_tokens as None (mlx-lm generate.py), and a row
+    # count that disagrees with uids means the positional state is mid-drift;
+    # in both cases there is no id this row can be told to accept.
+    next_tokens = self._next_tokens
+    if next_tokens is None or not (
+        len(next_tokens) == len(self.uids) == len(self.logits_processors)
+    ):
+        return
+
+    mx.eval(next_tokens)
+    sampled = next_tokens.tolist()
+    for e, proc in rows:
+        proc.accept_token(sampled[e])
+
+
 _original_generation_batch_step = GenerationBatch._step
 
 
@@ -701,28 +756,12 @@ def _patched_generation_batch_step(self):
     # See #934 / #1747.
     _omlx_realign_generation_batch_rows(self)
 
-    result = _original_generation_batch_step(self)
+    # Must run after the realignment: it reads self.logits_processors[e] as
+    # the row state for uids[e], which is exactly what the realignment above
+    # is there to guarantee.
+    _omlx_advance_grammar_rows(self)
 
-    # self._next_tokens contains the just-sampled tokens (async eval pending).
-    # We need to accept them NOW so the next __call__ fills the correct bitmask.
-    if any(self.logits_processors):
-        from .api.grammar import GrammarConstraintProcessor
-
-        has_grammar = any(
-            isinstance(p, GrammarConstraintProcessor)
-            for procs in self.logits_processors
-            for p in procs
-        )
-        if has_grammar:
-            # Force eval of the sampled tokens so we can read them.
-            mx.eval(self._next_tokens)
-            sampled = self._next_tokens.tolist()
-            for e in range(len(self.uids)):
-                for proc in self.logits_processors[e]:
-                    if isinstance(proc, GrammarConstraintProcessor):
-                        proc.accept_token(sampled[e])
-
-    return result
+    return _original_generation_batch_step(self)
 
 
 GenerationBatch._omlx_realign_rows = _omlx_realign_generation_batch_rows
@@ -1423,6 +1462,10 @@ class SchedulerConfig:
     paged_ssd_cache_max_size: int = 100 * 1024 * 1024 * 1024  # 100GB default
     hot_cache_max_size: int = 0  # In-memory hot cache size in bytes (0 = disabled)
     hot_cache_budget: Any | None = None  # Shared process-wide hot cache budget
+    # Store top-level ArraysCache recurrent state as SSD sidecars while the
+    # ordinary block retains only KV/sliceable payloads.
+    gdn_ssd_split_enabled: bool = False
+    gdn_ssd_pending_max_bytes: int = 512 * 1024 * 1024
 
     # Model identification (for cache isolation between different models)
     model_name: str = ""  # OpenAI API model name (e.g., "mlx-community/Llama-3.2-3B")
@@ -1471,11 +1514,13 @@ class _BoundarySnapshotProvider:
         request_id: str,
         valid_tcs: list[int],
         in_memory_snapshots: dict[int, Any],
+        paged_ssd_manager: Any | None = None,
     ) -> None:
         self._store = store
         self._request_id = request_id
         self._valid_tcs = set(valid_tcs)
         self._in_memory = in_memory_snapshots
+        self._paged_ssd_manager = paged_ssd_manager
 
     def __contains__(self, tc: int) -> bool:
         return tc in self._valid_tcs
@@ -1500,6 +1545,46 @@ class _BoundarySnapshotProvider:
             snap = self._in_memory.get(tc)
             if snap is not None:
                 yield snap
+
+    def commit_gdn_checkpoint(
+        self,
+        token_count: int,
+        source_block_hash: bytes,
+        *,
+        layer_cache_types: list[str] | None,
+        layer_meta_states: list[Any] | None,
+        model_name: str,
+        block_size: int,
+    ) -> bool:
+        """Promote one request-local boundary snapshot to durable sidecar storage."""
+        if self._store is None or self._paged_ssd_manager is None:
+            return False
+        staged_path = self._store.take_staged_file(self._request_id, token_count)
+        if staged_path is None:
+            return False
+        try:
+            signature = self._paged_ssd_manager.cache_signature_for(
+                model_name=model_name,
+                num_layers=len(layer_cache_types or []),
+                block_size=block_size,
+                layer_cache_types=layer_cache_types or [],
+            )
+            committed = self._paged_ssd_manager.commit_gdn_checkpoint_file(
+                source_block_hash,
+                staged_path,
+                token_count=token_count,
+                model_name=model_name,
+                cache_signature=signature,
+                block_size=block_size,
+            )
+            if committed is None:
+                with suppress(OSError):
+                    staged_path.unlink()
+            return committed is not None
+        except Exception:
+            with suppress(OSError):
+                staged_path.unlink()
+            return False
 
 
 class Scheduler:
@@ -1888,6 +1973,7 @@ class Scheduler:
             self.block_aware_cache = BlockAwarePrefixCache(
                 model=model,
                 paged_cache_manager=self.paged_cache_manager,
+                gdn_ssd_split_enabled=self.config.gdn_ssd_split_enabled,
             )
 
             # Initialize paged SSD cache. If the backing directory is not
@@ -2286,6 +2372,14 @@ class Scheduler:
                     gate.note_done()
                 drained = True
         self._pending_async_removes = pending
+        if drained:
+            # The completion-time deferred clear may have already fired while
+            # the async store worker still owned extracted KV buffers. Anchor
+            # another ordinary deferred clear to the point where those final
+            # references are actually released; clearing earlier cannot
+            # reclaim them and leaves the next route preflight charging both
+            # requests until macOS eventually settles the footprint.
+            self._schedule_deferred_metal_clear()
         return drained
 
     def _calculate_max_blocks(self) -> int:
@@ -2351,12 +2445,48 @@ class Scheduler:
 
         return window_sizes
 
+    def _detect_pooling_cache(self) -> bool:
+        """Return True if model.make_cache() contains a PoolingCache."""
+        if not hasattr(self.model, "make_cache"):
+            return False
+
+        try:
+            cache_list = self.model.make_cache()
+        except Exception as e:
+            logger.debug(f"Failed to inspect model pooling caches: {e}")
+            return False
+
+        if cache_list is None:
+            return False
+
+        return any(
+            self._cache_tree_has_pooling_cache(cache_obj) for cache_obj in cache_list
+        )
+
+    @staticmethod
+    def _cache_tree_has_pooling_cache(cache_obj: Any) -> bool:
+        """Return True if cache_obj contains PoolingCache (recursively)."""
+        sub_caches = getattr(cache_obj, "caches", None)
+        if isinstance(sub_caches, (list, tuple)):
+            return any(
+                Scheduler._cache_tree_has_pooling_cache(sub) for sub in sub_caches
+            )
+        return type(cache_obj).__name__ in ("PoolingCache", "BatchPoolingCache")
+
     # Target range for RotatingKVCache block size alignment.
     # Using a multiple of window_size within this range reduces SSD I/O
     # overhead (fewer, larger block files) while keeping cache restore
     # reprocessing reasonable.
     _ROTATING_BLOCK_SIZE_MIN = 512
     _ROTATING_BLOCK_SIZE_MAX = 1024
+
+    # Models with a PoolingCache (DeepSeek V4 family) get 2048 instead.
+    # Prefill chunks are clamped to the block boundary, and the native
+    # ratio-128 attention and MXFP4 block kernels only reach their measured
+    # gains at 2048-token chunks (+12-19% cold prefill vs 512 on M3 Ultra,
+    # cache-on matching cache-off). The cost is coarser warm-hit flooring:
+    # cached prefixes floor to 2048-token multiples instead of 512.
+    _POOLING_ROTATING_BLOCK_SIZE = 2048
 
     def _align_block_size_with_rotating_window(self) -> None:
         """
@@ -2369,6 +2499,10 @@ class Scheduler:
         many small files. Instead we pick the smallest multiple of
         window_size that falls within [_ROTATING_BLOCK_SIZE_MIN,
         _ROTATING_BLOCK_SIZE_MAX].
+
+        Models with a PoolingCache (DeepSeek V4 family) target
+        _POOLING_ROTATING_BLOCK_SIZE instead, since their prefill
+        kernels need 2048-token chunks to reach the measured gains.
         """
         if not self.config.paged_ssd_cache_dir:
             return
@@ -2390,6 +2524,8 @@ class Scheduler:
         # If window_size itself is already >= max, just use window_size.
         lo = self._ROTATING_BLOCK_SIZE_MIN
         hi = self._ROTATING_BLOCK_SIZE_MAX
+        if self._detect_pooling_cache():
+            lo = hi = self._POOLING_ROTATING_BLOCK_SIZE
 
         if window_size >= hi or window_size >= lo:
             target_block_size = window_size
@@ -2635,9 +2771,22 @@ class Scheduler:
             return None
 
         if request_id not in self._output_parser_sessions:
-            self._output_parser_sessions[request_id] = (
-                self._output_parser_factory.create_session(self.tokenizer)
-            )
+            request = self.requests.get(request_id)
+            create_with_tools = self._output_parser_factory.create_session_with_tools
+            if create_with_tools is not None:
+                parser_session = create_with_tools(
+                    self.tokenizer,
+                    request.tools if request is not None else None,
+                )
+            else:
+                parser_session = self._output_parser_factory.create_session(
+                    self.tokenizer
+                )
+            if request is not None and getattr(request, "needs_think_prefix", False):
+                notify = getattr(parser_session, "notify_prefilled_thought", None)
+                if callable(notify):
+                    notify()
+            self._output_parser_sessions[request_id] = parser_session
         return self._output_parser_sessions[request_id]
 
     def _cleanup_output_parser_session(self, request_id: str):
@@ -3218,6 +3367,8 @@ class Scheduler:
                         model_kwargs["vlm_extra_kwargs"] = _slice_vlm_extra(
                             extra_kwargs, n_to_process
                         )
+                if self._supports_skip_lm_head():
+                    model_kwargs["skip_lm_head"] = True
                 self.model(
                     input_arr[:, :n_to_process],
                     cache=prompt_cache,
@@ -3447,6 +3598,8 @@ class Scheduler:
         if n_tokens <= 0:
             return 0.0
         per_token = 0.0
+        static_per_token = 0.0
+        recent_reclaim = 0
         tracker = self._prefill_transient_tracker
         if tracker is not None:
             if tracker.last_n_tokens > 0 and tracker.last_delta_bytes > 0:
@@ -3455,13 +3608,20 @@ class Scheduler:
                 )
             if tracker.bytes_per_token > 0:
                 per_token = max(per_token, tracker.bytes_per_token)
+            recent_reclaim = tracker.recent_reclaim_bytes
         if self.memory_monitor is not None:
             static = self.memory_monitor.estimate_chunk_transient_bytes(
                 n_tokens, kv_len + n_tokens
             )
             static += self.memory_monitor.estimate_prompt_kv_bytes(n_tokens)
-            per_token = max(per_token, float(static) / n_tokens)
-        return per_token * n_tokens * self._PREFILL_TRANSIENT_SAFETY
+            static_per_token = float(static) / n_tokens
+            per_token = max(per_token, static_per_token)
+        base_prediction = per_token * n_tokens * self._PREFILL_TRANSIENT_SAFETY
+        reallocation_prediction = (
+            static_per_token * n_tokens * self._PREFILL_TRANSIENT_SAFETY
+            + recent_reclaim
+        )
+        return max(base_prediction, reallocation_prediction)
 
     def _admission_transient_bound(self, n_tokens: int, kv_len: int) -> float:
         """Transient charge for admission and the guard's pass/abort gates.
@@ -4199,6 +4359,11 @@ class Scheduler:
         has to stay conservative. Keeping kv_len in the log is what made that
         analysis possible.
 
+        Negative deltas remain excluded from the per-token EWMA, but their
+        released footprint is retained until the next positive sample. The
+        next predictor prices that one-shot reallocation risk without treating
+        it as a negative per-token cost.
+
         Under speed priority, only a complete requested step is representative
         of the full-size chunks used for admission. A shorter tail or
         boundary-alignment chunk must not replace the last full-step sample:
@@ -4207,6 +4372,15 @@ class Scheduler:
         charge.
         """
         delta = post_bytes - pre_bytes
+        # The reclaim ledger sees every measurement, including samples the
+        # EWMA gates below skip: a release on a sub-floor tail must still be
+        # priced, and any positive growth confirms the pool reallocation and
+        # drops the one-shot charge — leaving it armed after the footprint
+        # recovered would double count against the guard's gates.
+        if delta <= 0:
+            self._prefill_transient_tracker.record_reclaim(-delta)
+        else:
+            self._prefill_transient_tracker.clear_reclaim()
         min_chunk = max(1, self._prefill_min_chunk_tokens)
         if n_tokens < min_chunk:
             logger.debug(
@@ -4221,7 +4395,8 @@ class Scheduler:
             return
         if delta <= 0:
             logger.debug(
-                "[throttle:%s] measure rid=%s n=%d delta=%dB (skipped: <=0)",
+                "[throttle:%s] measure rid=%s n=%d delta=%dB "
+                "(excluded from EWMA; tracked as reclaim)",
                 loop_label,
                 request_id,
                 n_tokens,
@@ -4258,6 +4433,34 @@ class Scheduler:
             self._prefill_transient_tracker.observed_max_bytes / 1024**2,
             self._prefill_transient_tracker.samples,
         )
+
+    def _supports_skip_lm_head(self) -> bool:
+        """Whether the loaded model accepts ``skip_lm_head=True``.
+
+        Chunked prefill discards every chunk's logits (the prompt's final
+        token is scored by the first decode step), so models whose patched
+        ``__call__`` accepts the flag can skip the full-vocabulary
+        projection for every prefill chunk — for a 129k-vocab model that
+        GEMM is the single largest per-chunk matmul and was pure waste.
+        Detected once per scheduler; unknown models keep stock behavior.
+        """
+        supported = getattr(self, "_skip_lm_head_supported", None)
+        if supported is None:
+            try:
+                call = getattr(type(self.model), "__call__", None)
+                supported = bool(
+                    call is not None
+                    and "skip_lm_head" in inspect.signature(call).parameters
+                )
+            except Exception:
+                supported = False
+            self._skip_lm_head_supported = supported
+            if supported:
+                logger.info(
+                    "Prefill lm_head skip enabled: chunk logits are discarded, "
+                    "vocabulary projection deferred to first decode step."
+                )
+        return supported
 
     def _maybe_record_fixed_state_bytes(self, cache_list: Any) -> None:
         """Measure the GDN/Mamba fixed recurrent-state footprint once.
@@ -4478,7 +4681,10 @@ class Scheduler:
         with mx.stream(self._stream):
             chunk = state.tokens_remaining[:, :n]
             state.tokens_remaining = state.tokens_remaining[:, n:]
-            self.model(chunk, cache=state.cache)
+            if self._supports_skip_lm_head():
+                self.model(chunk, cache=state.cache, skip_lm_head=True)
+            else:
+                self.model(chunk, cache=state.cache)
             mx.eval([c.state for c in state.cache])
         _throttle_post = get_phys_footprint()
         self._record_chunk_transient(
@@ -5488,7 +5694,7 @@ class Scheduler:
         """
         if not snapshot_cache:
             return
-        extracted, _ = self._extract_cache_states(snapshot_cache)
+        extracted, _ = self._extract_snapshot_cache_states(snapshot_cache)
         leaves = self._collect_arrays_from_extracted_cache(extracted)
         if leaves:
             with mx.stream(self._stream):
@@ -5539,7 +5745,7 @@ class Scheduler:
                     request_id,
                     token_count,
                     snapshot_cache,
-                    self._extract_cache_states,
+                    self._extract_snapshot_cache_states,
                     block_size=block_size,
                 )
             if saved:
@@ -5587,6 +5793,45 @@ class Scheduler:
         self._eval_snapshot_cache(snapshot_cache)
         return snapshot_cache
 
+    def _extract_snapshot_cache_states(
+        self, snapshot_cache: list[Any]
+    ) -> tuple[list[dict[str, Any]], Any]:
+        """Extract snapshot states with sliceable CacheList members blanked.
+
+        Boundary snapshots exist for non-sliceable state; for mixed
+        CacheList layers eligible for per-member block storage the KV
+        member is sliced from the live cache at store time and never read
+        from the snapshot. Persisting it anyway made every boundary
+        snapshot carry the full KV prefix — quadratic in context length
+        across a request's snapshots (RAM transients and the boundary
+        SSD store). Blank those members to ``()``;
+        ``_merge_boundary_with_full_cache`` refills them member-wise when
+        a snapshot is promoted to a store source.
+        """
+        extracted, tokens = self._extract_cache_states(snapshot_cache)
+        for layer in extracted or []:
+            if not isinstance(layer, dict):
+                continue
+            if str(layer.get("class_name") or "") != "CacheList":
+                continue
+            state = layer.get("state")
+            meta = layer.get("meta_state")
+            if not (
+                isinstance(state, list)
+                and isinstance(meta, (list, tuple))
+                and len(meta) >= 1
+                and isinstance(meta[0], (list, tuple))
+            ):
+                continue
+            plan = cachelist_pm_member_plan([str(n) for n in meta[0]], state)
+            if plan is None:
+                continue
+            layer["state"] = [
+                () if mode == "slice" else sub_state
+                for mode, sub_state in zip(plan, state)
+            ]
+        return extracted, tokens
+
     def _decode_boundary_snapshot_value(
         self, snapshot_cache: list[Any], token_count: int, block_size: int
     ) -> Any:
@@ -5598,12 +5843,18 @@ class Scheduler:
         PoolingCache case so its cumulative ``pooled`` tensor can be stored as
         a single-block delta.
         """
+        # Extract eagerly instead of retaining raw cache objects: a raw
+        # CacheList keeps its full KV member alive for every recorded
+        # boundary, which reintroduces the quadratic RAM cost in the
+        # SSD-store-unavailable fallback (#2551). The extraction path runs
+        # the per-member snapshot filter (_extract_snapshot_cache_states),
+        # so pm-eligible layers hold only their small non-sliceable state.
+        value = self._prefill_snapshot_value(snapshot_cache)
         if not _contains_pooling_cache(snapshot_cache):
-            self._eval_snapshot_cache(snapshot_cache)
-            return snapshot_cache
+            return value
 
         return _compact_boundary_snapshot_value(
-            self._prefill_snapshot_value(snapshot_cache),
+            value,
             token_count,
             block_size,
             self._stream,
@@ -5643,7 +5894,7 @@ class Scheduler:
                 mx.default_device()
             )
             with mx.stream(stream):
-                extracted, _ = self._extract_cache_states(snapshot_cache)
+                extracted, _ = self._extract_snapshot_cache_states(snapshot_cache)
                 if not extracted:
                     return None
                 for layer_state in extracted:
@@ -5837,7 +6088,7 @@ class Scheduler:
                     request.request_id,
                     total_tokens,
                     snapshot_cache,
-                    self._extract_cache_states,
+                    self._extract_snapshot_cache_states,
                     block_size=block_size,
                 )
             if saved:
@@ -5977,7 +6228,7 @@ class Scheduler:
                 provider_tcs.append(tc)
                 continue
 
-            extracted_snapshot, _ = self._extract_cache_states(snap)
+            extracted_snapshot, _ = self._extract_snapshot_cache_states(snap)
             if extracted_snapshot:
                 extracted_in_memory[tc] = extracted_snapshot
                 provider_tcs.append(tc)
@@ -5987,6 +6238,7 @@ class Scheduler:
             request_id=request_id,
             valid_tcs=provider_tcs,
             in_memory_snapshots=extracted_in_memory,
+            paged_ssd_manager=self.paged_ssd_cache_manager,
         )
 
         token_sequence = (
@@ -6024,6 +6276,31 @@ class Scheduler:
             if isinstance(state, tuple) and len(state) == 0:
                 # Take full cache layer instead.
                 merged.append(fc)
+                continue
+            # Member-filtered CacheList snapshots
+            # (_extract_snapshot_cache_states) blank sliceable members to
+            # ``()``. Refill those member-wise from the full extracted
+            # layer so the store path sees real KV tensors to slice; the
+            # snapshot's non-sliceable members stay authoritative.
+            full_state = fc.get("state") if isinstance(fc, dict) else None
+            if (
+                isinstance(state, list)
+                and isinstance(full_state, list)
+                and len(state) == len(full_state)
+                and any(
+                    isinstance(s, (list, tuple)) and len(s) == 0 for s in state
+                )
+            ):
+                refilled = dict(bc)
+                refilled["state"] = [
+                    (
+                        full_sub
+                        if isinstance(sub, (list, tuple)) and len(sub) == 0
+                        else sub
+                    )
+                    for sub, full_sub in zip(state, full_state)
+                ]
+                merged.append(refilled)
             else:
                 merged.append(bc)
         return merged
@@ -6034,6 +6311,68 @@ class Scheduler:
             return False
         state = layer_state.get("state", ())
         return isinstance(state, tuple) and len(state) == 0
+
+    @staticmethod
+    def _has_blanked_cachelist_members(layer_state: Any) -> bool:
+        """True for a member-filtered CacheList layer (some sub states ``()``).
+
+        ``_extract_snapshot_cache_states`` blanks the sliceable members of
+        pm-eligible CacheList layers; such a layer is not a whole-layer
+        placeholder (``state`` is a list), so ``_is_empty_boundary_placeholder``
+        does not see it.
+        """
+        if not isinstance(layer_state, dict):
+            return False
+        state = layer_state.get("state")
+        if not isinstance(state, list):
+            return False
+        return any(
+            isinstance(sub, (list, tuple)) and len(sub) == 0 for sub in state
+        )
+
+    @staticmethod
+    def _refill_blanked_cachelist_members(
+        boundary_cache: list[dict[str, Any]],
+        live_cache: list[dict[str, Any]],
+    ) -> list[dict[str, Any]] | None:
+        """Refill member-blanked CacheList layers from the live extracted cache.
+
+        A store source assembled from a member-filtered snapshot needs its
+        blanked sliceable subs refilled before storing — the store path
+        slices KV positionally, so the longer live sequence is a valid
+        source. Only member-blanked CacheList layers are touched;
+        whole-layer placeholders keep going through
+        ``_fill_boundary_placeholders_from_live_cache`` and its
+        sliceable-proof guard. Returns None when the live cache cannot
+        supply a blanked member, so the caller skips the store instead of
+        persisting a partial composite.
+        """
+        if len(boundary_cache) != len(live_cache):
+            return None
+        merged: list[dict[str, Any]] = []
+        for boundary_layer, live_layer in zip(boundary_cache, live_cache):
+            if not Scheduler._has_blanked_cachelist_members(boundary_layer):
+                merged.append(boundary_layer)
+                continue
+            state = boundary_layer.get("state")
+            live_state = (
+                live_layer.get("state") if isinstance(live_layer, dict) else None
+            )
+            if not isinstance(live_state, list) or len(live_state) != len(state):
+                return None
+            refilled = dict(boundary_layer)
+            refilled["state"] = [
+                (
+                    live_sub
+                    if isinstance(sub, (list, tuple)) and len(sub) == 0
+                    else sub
+                )
+                for sub, live_sub in zip(state, live_state)
+            ]
+            if Scheduler._has_blanked_cachelist_members(refilled):
+                return None
+            merged.append(refilled)
+        return merged
 
     @staticmethod
     def _extracted_layer_type_name(layer_state: dict[str, Any]) -> str:
@@ -6196,10 +6535,18 @@ class Scheduler:
                 intermediate_snapshots,
             ) = boundary_override
 
-            live_payload = None
-            if any(
+            needs_placeholder_fill = any(
                 self._is_empty_boundary_placeholder(layer) for layer in boundary_cache
-            ):
+            )
+            # Member-filtered snapshots blank the sliceable subs of
+            # pm-eligible CacheList layers to ``()``. Storing them unfilled
+            # drops the KV member from the block payload, and the resulting
+            # short-payload blocks stay a permanent miss for that prefix
+            # through token-hash dedup until restart.
+            needs_member_refill = any(
+                self._has_blanked_cachelist_members(layer) for layer in boundary_cache
+            )
+            if needs_placeholder_fill or needs_member_refill:
                 live_payload = self._extract_live_request_cache_for_store(
                     request_id,
                     uid,
@@ -6208,12 +6555,21 @@ class Scheduler:
                 if live_payload is None:
                     return None
                 live_cache, live_model_config = live_payload
-                cache_to_store = self._fill_boundary_placeholders_from_live_cache(
-                    boundary_cache,
-                    live_cache,
-                )
-                if cache_to_store is None:
-                    return None
+                cache_to_store = boundary_cache
+                if needs_member_refill:
+                    cache_to_store = self._refill_blanked_cachelist_members(
+                        cache_to_store,
+                        live_cache,
+                    )
+                    if cache_to_store is None:
+                        return None
+                if needs_placeholder_fill:
+                    cache_to_store = self._fill_boundary_placeholders_from_live_cache(
+                        cache_to_store,
+                        live_cache,
+                    )
+                    if cache_to_store is None:
+                        return None
                 model_cache_config = boundary_model_config or live_model_config
             else:
                 cache_to_store = boundary_cache
@@ -6288,6 +6644,29 @@ class Scheduler:
         if isinstance(cache, list):
             if len(cache) == 0:
                 return False
+
+            # Variable-state caches must keep the arity declared by the live
+            # model. Older model implementations can persist an ArraysCache
+            # with fewer (or zero) slots under the same class name; accepting
+            # it reaches the model with missing recurrent state and either
+            # crashes or silently corrupts a cached continuation.
+            try:
+                expected_cache = make_prompt_cache(self.model)
+            except Exception:
+                expected_cache = None
+            if isinstance(expected_cache, (list, tuple)) and len(
+                expected_cache
+            ) == len(cache):
+                arrays_names = {"ArraysCache", "SizedArraysCache"}
+                for layer_cache, expected_layer in zip(cache, expected_cache):
+                    if (
+                        type(expected_layer).__name__ == "ArraysCache"
+                        and type(layer_cache).__name__ in arrays_names
+                        and len(getattr(layer_cache, "state", ()))
+                        != len(getattr(expected_layer, "state", ()))
+                    ):
+                        return False
+
             # Check each layer
             for layer_cache in cache:
                 if layer_cache is None:
@@ -7303,25 +7682,35 @@ class Scheduler:
         if drafter is None:
             return None
 
-        # Per-request logits processors (grammar constraints, thinking
-        # budget, repetition/presence/frequency penalties) have no
-        # application point on this path: run_vlm_mtp_decode threads only a
-        # sampler into mlx-vlm's _mtp_rounds, and a sampler sees logits
-        # without the token history processors need. Model-level suppress
-        # tokens are the one exception, reproduced below via
-        # _make_suppressing_sampler. Same convention as Lightning MTP,
-        # which declines activation when grammar processors are present:
-        # fall back to BatchGenerator so every processor is enforced
-        # (#2399).
-        if logits_processors and any(
-            not getattr(proc, "_omlx_suppress_processor", False)
-            for proc in logits_processors
-        ):
+        # Per-request logits processors that implement the snapshot/restore
+        # protocol (today: ThinkingBudgetProcessor) ARE applied on this
+        # path: MTPProcessingSampler threads them into mlx-vlm's verify
+        # walk through the positioned ``sample_target`` hook, with
+        # position-keyed state checkpoints so draft rejections rewind them
+        # correctly (see omlx/speculative/processing_sampler.py). Model
+        # level suppress tokens are reproduced via _make_suppressing_sampler.
+        # Everything else (grammar constraints, repetition/presence/
+        # frequency penalties) still has no application point here — same
+        # convention as Lightning MTP: fall back to BatchGenerator so every
+        # processor stays enforced (#2399).
+        mtp_processors: list[Any] = []
+        unsupported_processors: list[Any] = []
+        for proc in logits_processors or []:
+            if getattr(proc, "_omlx_suppress_processor", False):
+                continue
+            if supports_vlm_mtp_processing(proc):
+                mtp_processors.append(proc)
+            else:
+                unsupported_processors.append(proc)
+        if unsupported_processors:
             logger.info(
                 "vlm_mtp routing skipped for %s: request carries per-request "
-                "logits processors (grammar / thinking budget / penalties); "
-                "falling back to BatchGenerator",
+                "logits processors without vlm_mtp support (%s); falling "
+                "back to BatchGenerator",
                 request.request_id,
+                ", ".join(
+                    type(proc).__name__ for proc in unsupported_processors
+                ),
             )
             return None
 
@@ -7359,6 +7748,28 @@ class Scheduler:
                 request.request_id,
             )
             return None
+
+        if mtp_processors and not vlm_mtp_positioned_sampling_available(self.model):
+            # Without speculative_logits_from_hidden visible to the round
+            # loop, mlx-vlm's verify step samples target tokens from raw
+            # logits in one vectorized call and never consults the
+            # positioned ``sample_target`` hook — processors would be
+            # silently dropped again (#2399). The check must look at what
+            # the round loop will actually see: for mRoPE adapters (Qwen
+            # VLMs) _VLMAdapterMTPProxy hides the inner model's
+            # speculative_* fast paths, so probing the inner model
+            # directly would pass the gate and then silently skip the
+            # budget. Decline instead.
+            logger.info(
+                "vlm_mtp routing skipped for %s: request carries logits "
+                "processors but positioned verify sampling is unavailable "
+                "on %s (speculative_logits_from_hidden hidden or missing "
+                "on the round-loop view, e.g. mRoPE adapters); falling "
+                "back to BatchGenerator",
+                request.request_id,
+                type(self.model).__name__,
+            )
+            return None
         target_model = self.model
 
         if not last_tokens:
@@ -7369,6 +7780,14 @@ class Scheduler:
             return None
 
         mtp_sampler = _make_suppressing_sampler(sampler, self._model_suppress_tokens)
+        proc_sampler: MTPProcessingSampler | None = None
+        if mtp_processors:
+            proc_sampler = MTPProcessingSampler(
+                mtp_sampler,
+                mtp_processors,
+                request.prompt_token_ids or [],
+            )
+            mtp_sampler = proc_sampler
         last_arr = mx.array(last_tokens)[None]  # (1, len_last)
         try:
             with mx.stream(self._stream):
@@ -7400,8 +7819,15 @@ class Scheduler:
             logits = out.logits[:, -1, :]
             hidden_raw = out.hidden_states
 
+        if proc_sampler is not None:
+            # Apply processors to the post-prefill logits (history=prompt)
+            # so the first bonus honours them too, then checkpoint the
+            # round loop's starting position (mlx-vlm bakes in emitted=1).
+            logits = proc_sampler.process_first_logits(logits)
         first_bonus_arr = mtp_sampler(logits)  # mx.array shape [1]
         mx.eval(first_bonus_arr)
+        if proc_sampler is not None:
+            proc_sampler.note_first_bonus(int(first_bonus_arr.item()))
 
         if isinstance(hidden_raw, list):
             hidden = hidden_raw[-1]
@@ -7442,6 +7868,10 @@ class Scheduler:
                 e,
                 request.request_id,
             )
+            if proc_sampler is not None:
+                # The BatchGenerator fallback reuses these processors —
+                # rewind the state mutated by process_first_logits above.
+                proc_sampler.reset_processors()
             return None
 
         uid = self._vlm_mtp_next_uid
@@ -7967,6 +8397,25 @@ class Scheduler:
         if request is None:
             return False
 
+        # A finished request remains in self.requests while its async
+        # store_cache worker owns boundary snapshots and cache buffers. Do not
+        # run abort cleanup concurrently with that worker: the normal deferred
+        # drain will release the batch row, snapshots, and Request once the
+        # future completes. If it completed between steps, drain it now before
+        # deciding whether there is anything left to abort.
+        store_future = self._inflight_store_futures.get(request_id)
+        if store_future is not None:
+            if not store_future.done():
+                logger.debug(
+                    "Deferring abort cleanup for %s until async store_cache completes",
+                    request_id,
+                )
+                return False
+            self._drain_pending_async_removes()
+            request = self.requests.get(request_id)
+            if request is None:
+                return False
+
         self._clear_request_admission_bookkeeping(request_id)
 
         # Remove from waiting queue
@@ -8096,6 +8545,27 @@ class Scheduler:
             or self._pending_reclaim_request
             or self._pending_pressure_clear
         )
+
+    def has_pending_route_preflight_cleanup(self) -> bool:
+        """Return whether finished-request memory is still being reclaimed.
+
+        Route-level preflight uses this read-only signal to avoid turning a
+        temporary footprint into a final HTTP 400. The engine loop remains the
+        sole owner of async-remove draining and deferred Metal cache clearing.
+        Active requests are intentionally not included: their memory is live
+        and must remain charged to a concurrent admission.
+        """
+        return bool(
+            self._pending_async_removes or self._deferred_clear_at is not None
+        )
+
+    def refresh_route_preflight_usage(self) -> int:
+        """Publish a fresh MLX memory sample for route-level retry.
+
+        The engine wrapper dispatches this method to the owning MLX executor;
+        it must not be called directly from the asyncio event-loop thread.
+        """
+        return self._current_usage_bytes()
 
     def _refresh_generation_overflow_recovery_ids(self) -> None:
         """Drop serial-retry markers once the affected requests leave the scheduler."""
@@ -8364,8 +8834,16 @@ class Scheduler:
             charge_tokens = max(1, int(self.config.prefill_step_size))
         else:
             charge_tokens = max(1, self._prefill_min_chunk_tokens)
-        floor_chunk = min(charge_tokens, new_tokens)
-        kv_len = max(int(num_prompt_tokens) - 1, 1)
+        # External prefill evaluates prompt[0:N-1]; the final token is left
+        # for BatchGenerator.insert(). Price the final real prefill chunk and
+        # pass its *pre-chunk* context to _predicted_chunk_transient, which
+        # adds the query width exactly once. Passing N-1 here used to add the
+        # floor chunk twice (issue #2521).
+        prefill_tokens = max(new_tokens - 1, 0)
+        if prefill_tokens == 0:
+            return None
+        floor_chunk = min(charge_tokens, prefill_tokens)
+        kv_len = max(int(num_prompt_tokens) - 1 - floor_chunk, 0)
         kv_exact = int(
             monitor.estimate_resident_kv_bytes(new_tokens, chunk_tokens=floor_chunk)
         )
@@ -10730,6 +11208,10 @@ class Scheduler:
             should_clear = True
         if should_clear:
             _sync_and_clear_cache(self._stream)
+            # Route preflight cannot call mx.get_active_memory() from the
+            # event-loop thread, so publish a fresh executor-owned sample once
+            # the deferred pool reclaim has completed.
+            self._current_usage_bytes()
         if (
             self.config.gc_cleanup_interval > 0
             and self._step_counter % self.config.gc_cleanup_interval == 0
@@ -10794,6 +11276,29 @@ class Scheduler:
 
     def reset(self) -> None:
         """Reset the scheduler state."""
+        # A store_cache worker may still be loading request-local boundary
+        # snapshots or publishing blocks. reset() clears both namespaces, so
+        # use the same bounded teardown barrier as shutdown() before aborting
+        # requests or clearing caches. The drain performs the request-local
+        # cleanup only after every future has completed.
+        inflight = list(self._inflight_store_futures.values())
+        if inflight:
+            logger.info(
+                "Waiting for %d inflight async store_cache future(s) before reset...",
+                len(inflight),
+            )
+            _done, not_done = concurrent.futures.wait(
+                inflight, timeout=FATAL_TEARDOWN_TIMEOUT_S
+            )
+            if not_done:
+                fatal_exit(
+                    "Scheduler reset timed out after "
+                    f"{FATAL_TEARDOWN_TIMEOUT_S:.0f}s waiting for "
+                    f"{len(not_done)} async store_cache future(s)"
+                )
+                return
+            self._drain_pending_async_removes()
+
         # Drain any pending deferred aborts
         self._pending_abort_ids.clear()
 
@@ -11132,6 +11637,14 @@ class Scheduler:
                 if estimate_mla_kv_bytes_per_token is not None
                 else None
             )
+            prefill_memory_profile = (
+                make_prefill_memory_profile(
+                    config,
+                    compute_dtype_size=base_dtype_size,
+                )
+                if make_prefill_memory_profile is not None
+                else None
+            )
 
             # Truthiness alone isn't enough — MagicMock proxies leaking
             # through the descent (test scaffolds that don't fully spec
@@ -11154,6 +11667,7 @@ class Scheduler:
                     compute_dtype_size=base_dtype_size,
                     kv_bytes_per_token=kv_bytes_per_token,
                     rotating_layer_specs=rotating_layer_specs,
+                    prefill_memory_profile=prefill_memory_profile,
                 )
                 # Fixed recurrent state (GDN/Mamba) can only be measured from
                 # a live cache after the first forward; arm a one-shot probe.
@@ -11389,6 +11903,7 @@ class Scheduler:
                 hot_cache_max_bytes=self.config.hot_cache_max_size,
                 hot_cache_only=self.config.hot_cache_only,
                 hot_cache_budget=self.config.hot_cache_budget,
+                gdn_ssd_split_enabled=self.config.gdn_ssd_split_enabled,
                 expected_model_name=self.config.model_name or "",
                 expected_num_layers=expected_num_layers,
                 expected_block_size=self.config.paged_cache_block_size,
@@ -11414,8 +11929,13 @@ class Scheduler:
             if BoundarySnapshotSSDStore is not None and not self.config.hot_cache_only:
                 try:
                     self._boundary_snapshot_store = BoundarySnapshotSSDStore(
-                        base_dir=Path(self.config.paged_ssd_cache_dir)
+                        base_dir=Path(self.config.paged_ssd_cache_dir),
+                        pending_max_bytes=self.config.gdn_ssd_pending_max_bytes,
                     )
+                    if self.block_aware_cache is not None:
+                        self.block_aware_cache.set_gdn_checkpoint_loader(
+                            self._boundary_snapshot_store.load_file
+                        )
                 except Exception as e:
                     logger.debug(
                         "Failed to initialize boundary snapshot SSD store: %s", e

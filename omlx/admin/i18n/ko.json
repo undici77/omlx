@@ -909,6 +909,8 @@
   "chat.behavior": "동작",
   "chat.show_jump_button": "\"최신으로 이동\" 버튼 표시",
   "chat.scroll_behavior_hint": "맨 아래에 있는 동안 자동 스크롤이 새 토큰을 따라갑니다. 위로 스크롤하면 일시 중지되고, 맨 아래로 돌아오면 다시 시작됩니다.",
+  "chat.max_tool_rounds": "Max Tool Rounds",
+  "chat.max_tool_rounds_hint": "Maximum consecutive tool-call rounds per response (1-100).",
   "chat.shortcuts": "단축키",
   "chat.view_shortcuts": "키보드 단축키 보기",
   "chat.keyboard_shortcuts": "키보드 단축키",
@@ -1028,6 +1030,7 @@
   "chat.status.prefilling_percent": "Prefilling {percent}%{speed}",
   "chat.status.calling_tools": "Calling {tools}",
   "chat.status.calling_tools_more": "Calling {tools} +{count} more",
+  "chat.error.max_tool_rounds": "Error: Maximum tool call rounds ({max}) reached. Increase the limit in Chat settings for longer tool workflows.",
   "chat.status.searching_web": "Searching the web",
   "chat.status.fetching_page": "Fetching page",
   "chat.web_card.searched": "Searched the web",
@@ -1069,5 +1072,7 @@
   "js.error.delete_model_failed": "모델 삭제에 실패했습니다",
   "js.error.delete_model_connection": "모델 삭제에 실패했습니다. 서버 연결을 확인하세요.",
   "js.success.download_started": "다운로드 시작: {repo_id}",
-  "js.success.settings_saved": "설정이 저장되었습니다"
+  "js.success.settings_saved": "설정이 저장되었습니다",
+  "settings.mcp.expose_tools": "백엔드 MCP 도구를 클라이언트에 노출",
+  "settings.mcp.expose_tools_hint": "백엔드 MCP 도구를 채팅 응답에 병합합니다. 클라이언트에 자체 MCP 서버가 있는 경우 비활성화하세요."
 }

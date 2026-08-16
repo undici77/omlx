@@ -909,6 +909,8 @@
   "chat.behavior": "Comportement",
   "chat.show_jump_button": "Afficher le bouton « Aller au dernier »",
   "chat.scroll_behavior_hint": "Le défilement automatique suit les nouveaux jetons lorsque vous êtes en bas. Faites défiler vers le haut pour le suspendre ; revenez en bas pour le reprendre.",
+  "chat.max_tool_rounds": "Max Tool Rounds",
+  "chat.max_tool_rounds_hint": "Maximum consecutive tool-call rounds per response (1-100).",
   "chat.shortcuts": "Raccourcis",
   "chat.view_shortcuts": "Voir les raccourcis clavier",
   "chat.keyboard_shortcuts": "Raccourcis clavier",
@@ -1028,6 +1030,7 @@
   "chat.status.prefilling_percent": "Prefilling {percent}%{speed}",
   "chat.status.calling_tools": "Calling {tools}",
   "chat.status.calling_tools_more": "Calling {tools} +{count} more",
+  "chat.error.max_tool_rounds": "Error: Maximum tool call rounds ({max}) reached. Increase the limit in Chat settings for longer tool workflows.",
   "chat.status.searching_web": "Searching the web",
   "chat.status.fetching_page": "Fetching page",
   "chat.web_card.searched": "Searched the web",
@@ -1069,5 +1072,7 @@
   "js.error.delete_model_failed": "Impossible de supprimer le modèle",
   "js.error.delete_model_connection": "Impossible de supprimer le modèle. Vérifiez la connexion au serveur.",
   "js.success.download_started": "Téléchargement démarré : {repo_id}",
-  "js.success.settings_saved": "Paramètres enregistrés avec succès"
+  "js.success.settings_saved": "Paramètres enregistrés avec succès",
+  "settings.mcp.expose_tools": "Exposer les outils MCP du backend aux clients",
+  "settings.mcp.expose_tools_hint": "Fusionne les outils MCP du backend dans les réponses. Désactivez si votre client possède ses propres serveurs MCP."
 }

@@ -909,6 +909,8 @@
   "chat.behavior": "行為",
   "chat.show_jump_button": "顯示「跳到最新」按鈕",
   "chat.scroll_behavior_hint": "當你在底部時，自動捲動會跟隨新的 token。向上捲動可暫停；回到底部即可恢復。",
+  "chat.max_tool_rounds": "Max Tool Rounds",
+  "chat.max_tool_rounds_hint": "Maximum consecutive tool-call rounds per response (1-100).",
   "chat.shortcuts": "快速鍵",
   "chat.view_shortcuts": "檢視鍵盤快速鍵",
   "chat.keyboard_shortcuts": "鍵盤快速鍵",
@@ -1028,6 +1030,7 @@
   "chat.status.prefilling_percent": "預填充 {percent}%{speed}",
   "chat.status.calling_tools": "呼叫 {tools}",
   "chat.status.calling_tools_more": "呼叫 {tools} +{count} 個更多",
+  "chat.error.max_tool_rounds": "Error: Maximum tool call rounds ({max}) reached. Increase the limit in Chat settings for longer tool workflows.",
   "chat.status.searching_web": "Searching the web",
   "chat.status.fetching_page": "Fetching page",
   "chat.web_card.searched": "Searched the web",
@@ -1069,5 +1072,7 @@
   "js.error.delete_model_failed": "刪除模型失敗",
   "js.error.delete_model_connection": "刪除模型失敗，請檢查伺服器連線。",
   "js.success.download_started": "已開始下載：{repo_id}",
-  "js.success.settings_saved": "設定儲存成功"
+  "js.success.settings_saved": "設定儲存成功",
+  "settings.mcp.expose_tools": "向客戶端公開後端 MCP 工具",
+  "settings.mcp.expose_tools_hint": "將後端 MCP 工具合併到聊天回應中。如果您的用戶端有自己的 MCP 伺服器，請停用此選項。"
 }

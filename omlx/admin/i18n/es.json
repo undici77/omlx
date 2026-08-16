@@ -909,6 +909,8 @@
   "chat.behavior": "Comportamiento",
   "chat.show_jump_button": "Mostrar el botón «Ir al último»",
   "chat.scroll_behavior_hint": "El desplazamiento automático sigue los nuevos tokens mientras estás abajo. Desplázate hacia arriba para pausarlo; vuelve abajo para reanudarlo.",
+  "chat.max_tool_rounds": "Max Tool Rounds",
+  "chat.max_tool_rounds_hint": "Maximum consecutive tool-call rounds per response (1-100).",
   "chat.shortcuts": "Atajos",
   "chat.view_shortcuts": "Ver atajos de teclado",
   "chat.keyboard_shortcuts": "Atajos de teclado",
@@ -1028,6 +1030,7 @@
   "chat.status.prefilling_percent": "Prefilling {percent}%{speed}",
   "chat.status.calling_tools": "Calling {tools}",
   "chat.status.calling_tools_more": "Calling {tools} +{count} more",
+  "chat.error.max_tool_rounds": "Error: Maximum tool call rounds ({max}) reached. Increase the limit in Chat settings for longer tool workflows.",
   "chat.status.searching_web": "Searching the web",
   "chat.status.fetching_page": "Fetching page",
   "chat.web_card.searched": "Searched the web",
@@ -1069,5 +1072,7 @@
   "js.error.delete_model_failed": "Error al eliminar el modelo",
   "js.error.delete_model_connection": "Error al eliminar el modelo. Verifica la conexión con el servidor.",
   "js.success.download_started": "Descarga iniciada: {repo_id}",
-  "js.success.settings_saved": "Configuración guardada correctamente"
+  "js.success.settings_saved": "Configuración guardada correctamente",
+  "settings.mcp.expose_tools": "Exponer herramientas MCP del backend a los clientes",
+  "settings.mcp.expose_tools_hint": "Combina las herramientas MCP del backend en las respuestas. Desactívalo si tu cliente tiene sus propios servidores MCP."
 }

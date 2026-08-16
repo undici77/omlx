@@ -109,7 +109,7 @@
                 scheduler: { max_concurrent_requests: 8, embedding_batch_size: 32, chunked_prefill: false, prefill_priority: 'context', decode_fairness: true },
                 cache: { enabled: true, ssd_cache_dir: '', ssd_cache_max_size: 'auto', hot_cache_max_size: '0', initial_cache_blocks: 256, hot_cache_only: false, gdn_snapshot_storage: 'auto', gdn_ssd_split_enabled: true, gdn_ssd_pending_max_size: '512MB', gdn_sidecar_state_dtype: 'rht_int16' },
                 sampling: { max_context_window: 32768, max_context_window_policy: null, max_tokens: 32768, temperature: 1.0, top_p: 0.95, top_k: 0, repetition_penalty: 1.0 },
-                mcp: { config_path: '' },
+                mcp: { config_path: '', expose_tools: true },
                 huggingface: { endpoint: '', hf_cache_enabled: true, hf_cache_path: '' },
                 network: { http_proxy: '', https_proxy: '', no_proxy: '', ca_bundle: '' },
                 auth: { api_key_set: false, api_key: '', skip_api_key_verification: false, sub_keys: [] },
@@ -1603,9 +1603,16 @@
                     const status = result.status || {};
                     const node = status.node || {};
                     if (result.bootstrap_required) {
+                        // Repeat what the probe measured. This used to assert
+                        // "not installed" for every bootstrap_required result,
+                        // including peers whose runtime it merely could not
+                        // check — which is what surfaced the wrong guidance in
+                        // #2680.
+                        const measured = (result.runtime_mismatches || [])
+                            .find((entry) => Boolean(entry));
                         this.clusterConnectionError =
-                            `${node.hostname || ssh} is online, but its oMLX `
-                            + 'worker runtime is not installed yet.';
+                            `${node.hostname || ssh} is online, but `
+                            + (measured || 'its oMLX worker runtime is not installed yet.');
                         this.explainClusterError(this.clusterConnectionError);
                     }
                     if (this.clusterPlanNodes[1]) {
@@ -3397,13 +3404,26 @@
                 if (this.clusterPeerProbeLoading
                     || this.clusterFabricLoading
                     || this.clusterLinkStatusLoading
-                    || !this.clusterPeerProbe?.runtime_compatible) {
+                    || !this.clusterPeerProbe) {
                     return {
                         key: 'checking',
                         label: 'Checking the connection…',
                         detail: 'oMLX is confirming every worker and the fastest shared links.',
                         tone: 'blue',
                         busy: true,
+                    };
+                }
+                if (this.clusterPeerProbe.runtime_compatible !== true) {
+                    const mismatches = Array.isArray(
+                        this.clusterPeerProbe.runtime_mismatches
+                    ) ? this.clusterPeerProbe.runtime_mismatches.filter(Boolean) : [];
+                    return {
+                        key: 'runtime-mismatch',
+                        label: 'Worker runtime mismatch',
+                        detail: mismatches.join(' · ')
+                            || 'The worker runtime differs from this Mac.',
+                        tone: 'red',
+                        busy: false,
                     };
                 }
                 if (this.clusterCatalogueLoading && !selected) {
@@ -6379,6 +6399,7 @@
                             sampling_top_k: this.globalSettings.sampling.top_k,
                             sampling_repetition_penalty: this.globalSettings.sampling.repetition_penalty,
                             mcp_config: this.globalSettings.mcp.config_path,
+                            mcp_expose_tools: this.globalSettings.mcp.expose_tools,
                             hf_cache_enabled: this.globalSettings.huggingface.hf_cache_enabled,
                             network_http_proxy: this.globalSettings.network.http_proxy,
                             network_https_proxy: this.globalSettings.network.https_proxy,
@@ -6578,8 +6599,9 @@
                         method: 'POST',
                     });
                     if (response.ok) {
+                        const data = await response.json();
                         const model = this.models.find(m => m.id === modelId);
-                        if (model) model.loaded = false;
+                        if (model && data.status === 'ok') model.loaded = false;
                     } else if (response.status === 401) {
                         window.location.href = '/admin';
                     } else {
@@ -8089,6 +8111,7 @@
                             brave_api_key: this.globalSettings.integrations.web_search_brave_api_key || '',
                             searxng_url: this.globalSettings.integrations.web_search_searxng_url || '',
                             ddgs_backends: this.globalSettings.integrations.web_search_ddgs_backends || '',
+                            max_results: this.globalSettings.integrations.web_search_max_results,
                         }),
                     });
                     const payload = await response.json();

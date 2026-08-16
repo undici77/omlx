@@ -29,6 +29,7 @@ class IntegrationContext:
     reasoning: bool | None = None
     tools_profile: str = "coding"
     extra_args: tuple[str, ...] = ()
+    cross_session: bool = False
 
     @property
     def base_url(self) -> str:

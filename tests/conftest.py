@@ -171,6 +171,35 @@ def pytest_collection_modifyitems(config, items):
         ("test_specprefill", "MLX mock active — specprefill array ops need real MLX"),
         ("test_engine_keepalive", "MLX mock active — MLXEmbeddingModel compile needs real MLX"),
         ("test_utils_tokenizer", "MLX mock active — tokenizer decode needs real MLX"),
+        # New MLX-dependent test files from merge (Bailing / hybrid attention)
+        ("test_bailing_hybrid_patch", "MLX mock active — BatchGenerator.insert / logaddexp / recurrent_kda / to_fp8 unavailable"),
+        ("test_bailing_swiglu_clamp", "MLX mock active — mlx.nn / tree_flatten unavailable in mock"),
+        # Cluster tests (need real MLX for pipeline smoke and model loading)
+        ("test_cluster_autoconfigure", "MLX mock active — cluster autoconfigure needs real MLX"),
+        ("test_cluster_cli", "MLX mock active — cluster CLI pipeline smoke needs real MLX"),
+        ("test_cluster_inference_worker", "MLX mock active — cluster inference worker needs real MLX"),
+        ("test_cluster_memory_guard", "MLX mock active — cluster memory guard needs real MLX"),
+        ("test_cluster_performance", "MLX mock active — cluster performance tests need real MLX"),
+        ("test_cluster_pipeline_compat", "MLX mock active — cluster pipeline compat needs real MLX"),
+        ("test_cluster_progressive_loading", "MLX mock active — cluster progressive loading needs real MLX"),
+        ("test_cluster_prompt_snapshot_cache", "MLX mock active — cluster prompt snapshot cache needs real MLX"),
+        ("test_cluster_prompt_snapshot_integration", "MLX mock active — cluster prompt snapshot integration needs real MLX"),
+        ("test_cluster_remote_planning", "MLX mock active — cluster remote planning needs real MLX"),
+        ("test_cluster_telemetry", "MLX mock active — cluster telemetry needs real MLX"),
+        # Hardware-dependent / probe tests (require real MLX or real hardware)
+        ("test_cluster_probe", "MLX mock active — cluster RDMA probe requires real hardware on non-macOS"),
+        ("test_custom_kernel_abi_probe", "MLX mock active — custom kernel ABI probe needs real MLX arrays"),
+        # VLM / DFlash / quantisation tests
+        ("test_dflash_muse_glimmer", "MLX mock active — DFlash/MuseGlimmer needs real MLX"),
+        ("test_gdn_sidecar_quantization", "MLX mock active — hadamard_transform / isfinite unavailable in mock"),
+        ("test_mlx_vlm_muse_glimmer_compat", "MLX mock active — MuseGlimmer loader/architecture unavailable in mock"),
+        ("test_pooling_cache_append_inplace", "MLX mock active — PoolingCache append ops need real MLX arrays"),
+        # MiniMax M3 pipeline (needs real MLX Model with .model attribute)
+        ("test_minimax_m3_pipeline", "MLX mock active — MiniMax M3 pipeline needs real MLX model graph"),
+        # Qwen3 sliding window (needs real ModelArgs with full constructor)
+        ("test_qwen3_sliding_window_patch", "MLX mock active — Qwen3 ModelArgs constructor needs real MLX"),
+        # MiniMax M3 mlx-lm patch (needs real MLX Model with .layers / nested config)
+        ("test_minimax_m3_mlx_lm_patch", "MLX mock active — MiniMax M3 mlx-lm patch needs real MLX model graph"),
     ]
 
     _mock_skip = pytest.mark.skip(
@@ -287,3 +316,52 @@ def mock_request():
         prompt="Hello world",
         sampling_params=SamplingParams(temperature=0.7, max_tokens=20),
     )
+
+
+@pytest.fixture
+def sample_request_factory():
+    """Factory fixture for creating multiple Request objects."""
+
+    def _create_request(
+        request_id: str = "test-request-001",
+        prompt: str = "Hello, world!",
+        max_tokens: int = 100,
+        temperature: float = 0.7,
+        top_p: float = 0.9,
+    ) -> Request:
+        return Request(
+            request_id=request_id,
+            prompt=prompt,
+            sampling_params=SamplingParams(
+                max_tokens=max_tokens,
+                temperature=temperature,
+                top_p=top_p,
+            ),
+        )
+
+    return _create_request
+
+
+@pytest.fixture
+def real_model_dir() -> Path:
+    """Return the path to real models directory.
+
+    Note: Tests using this fixture may require actual model files
+    and should be marked with @pytest.mark.slow.
+    """
+    return Path.home() / "Workspace" / "models"
+
+
+@pytest.fixture(autouse=True)
+def _reset_decode_activity_registry():
+    """Keep the process-global decode-activity registry hermetic per test.
+
+    Schedulers publish to it from step(); entries live for a short TTL, so
+    without this a scheduler stepped in one test reads as cross-engine
+    decode contention in the next.
+    """
+    from omlx.decode_activity import get_decode_activity
+
+    get_decode_activity().clear()
+    yield
+    get_decode_activity().clear()

@@ -101,6 +101,8 @@ Requires macOS 15.0+ (Sequoia), Python 3.11+ (recommended), and Apple Silicon (M
 ### CLI / Homebrew
 
 ```bash
+brew tap jundot/omlx https://github.com/jundot/omlx
+brew install omlx
 # Upgrade to the latest version
 brew update && brew upgrade omlx
 
@@ -114,7 +116,7 @@ omlx start
 Optional GLM-5.2 / MiniMax M3 native custom kernels currently require a HEAD build:
 
 ```bash
-brew install omlx --HEAD --with-custom-kernel
+brew install jundot/omlx/omlx --HEAD --with-custom-kernel
 ```
 
 ### From Source
@@ -139,7 +141,7 @@ Requires macOS 15.0+ (Sequoia), Python 3.11–3.13, and Apple Silicon (M1/M2/M3/
 > uses more memory (#2137). Building them requires the Metal toolchain, which
 > Command Line Tools alone do not provide (`xcrun: error: unable to find utility
 > "metal"`): install full Xcode, or use the official DMG which ships the kernels
-> precompiled. Homebrew can build them with `brew install omlx --HEAD
+> precompiled. Homebrew can build them with `brew install jundot/omlx/omlx --HEAD
 > --with-custom-kernel`, but that build also needs full Xcode. To verify your
 > install:
 >
@@ -175,6 +177,20 @@ Web UI at `/admin` for real-time monitoring, model management, chat, benchmark, 
 <p align="center">
   <img src="docs/images/Screenshot 2026-02-10 at 00.45.34.png" alt="oMLX Admin Dashboard" width="720">
 </p>
+
+### Experimental Multi-Mac Inference
+
+Source builds can split one downloaded language model across unequal-memory Macs
+using MLX pipeline ranks over Ring or Thunderbolt RDMA/JACCL. The Cluster
+dashboard handles read-only peer discovery, strict SSH/runtime verification,
+byte-aware unequal shard planning, measured compute/link rebalancing,
+headroom-aware execution tuning, activation, and a live shard/performance map
+on both Macs. Interactive, balanced, and throughput profiles expose coalesced
+batching, prompt-cache affinity, rotating-KV limits, Ring connection tuning,
+and a capability-gated experimental token-only output path. See
+[Distributed inference across Macs](docs/distributed-cluster.md) for setup,
+security boundaries, current limitations, and the physical-hardware validation
+checklist.
 
 ### Vision-Language Models
 

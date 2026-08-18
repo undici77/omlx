@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Regression tests for Qwen3.5 MLX-format vision patch embeddings."""
 
 import json

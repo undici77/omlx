@@ -200,6 +200,8 @@ def pytest_collection_modifyitems(config, items):
         ("test_qwen3_sliding_window_patch", "MLX mock active — Qwen3 ModelArgs constructor needs real MLX"),
         # MiniMax M3 mlx-lm patch (needs real MLX Model with .layers / nested config)
         ("test_minimax_m3_mlx_lm_patch", "MLX mock active — MiniMax M3 mlx-lm patch needs real MLX model graph"),
+        # Qwen3.5 ANE prefill (needs QuantizedLinear.scales / nn.Module.modules)
+        ("test_qwen35_ane_prefill", "MLX mock active — QuantizedLinear.scales and nn.Module.modules unavailable"),
     ]
 
     _mock_skip = pytest.mark.skip(

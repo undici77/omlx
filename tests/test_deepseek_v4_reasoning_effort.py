@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: Apache-2.0
 """Client reasoning_effort values must not crash the chat template.
 
 Since #2675 the server passes the client's free-form ``reasoning_effort``

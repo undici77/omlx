@@ -215,14 +215,17 @@ def get_mlx_version() -> str:
     """Get MLX version string."""
     if HAS_MLX:
         core_version = getattr(mx, "__version__", None)
-        if core_version:
-            return str(core_version)
+        if isinstance(core_version, str) and core_version:
+            return core_version
     try:
         import mlx
 
-        return getattr(mlx, "__version__", "Unknown")
+        v = getattr(mlx, "__version__", "Unknown")
+        if isinstance(v, str):
+            return v
     except Exception:
-        return "Unknown"
+        pass
+    return "Unknown"
 
 
 def get_mlx_lm_version() -> str:
@@ -230,9 +233,12 @@ def get_mlx_lm_version() -> str:
     try:
         import mlx_lm
 
-        return getattr(mlx_lm, "__version__", "Unknown")
+        v = getattr(mlx_lm, "__version__", "Unknown")
+        if isinstance(v, str):
+            return v
     except Exception:
-        return "Unknown"
+        pass
+    return "Unknown"
 
 
 def get_mlx_vlm_version() -> str:

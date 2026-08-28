@@ -202,6 +202,11 @@ def pytest_collection_modifyitems(config, items):
         ("test_minimax_m3_mlx_lm_patch", "MLX mock active — MiniMax M3 mlx-lm patch needs real MLX model graph"),
         # Qwen3.5 ANE prefill (needs QuantizedLinear.scales / nn.Module.modules)
         ("test_qwen35_ane_prefill", "MLX mock active — QuantizedLinear.scales and nn.Module.modules unavailable"),
+        # New MLX-dependent test files from merge (GLM-5 Next / Qwen4 Exp compat)
+        ("test_clone_mlx_model_fp16", "MLX mock active — mlx.isfinite() unavailable in mock"),
+        ("test_mlx_vlm_glm5_next_compat", "MLX mock active — GLM-5 Next VLM vendor classes / PoolingCache / native indexer unavailable"),
+        ("test_mlx_vlm_qwen4_exp_compat", "MLX mock active — Qwen4 Exp configure_ple_runtime/configure_mtp_runtime/to_fp8 unavailable"),
+        ("test_vlm_qwen4_exp_loader", "MLX mock active — RotatingKVCache.is_trimmable / configure_ple_runtime unavailable"),
     ]
 
     _mock_skip = pytest.mark.skip(

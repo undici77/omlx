@@ -7,18 +7,21 @@ import sys
 import mlx.core as mx
 import pytest
 from mlx_lm.generate import PromptProcessingBatch, SequenceStateMachine
-from mlx_lm.models.cache import ArraysCache, BatchKVCache, KVCache
+from mlx_lm.models.cache import ArraysCache, BatchKVCache, CacheList, KVCache
 from mlx_vlm.turboquant import TurboQuantKVCache
 
 import omlx.scheduler  # noqa: F401  (applies BatchGenerator cache patches)
 from omlx.turboquant_kv import BatchTurboQuantKVCache
 
 # Lazy check: mock is installed by conftest.py's `import omlx` which runs
-# after this module loads, so we check at test runtime.
+# after this module loads, so we check at test runtime. Name comparison
+# (not isinstance) because pytest's assertion-rewriting import hook can
+# load omlx.utils.mlx_mock as a distinct module object from the one
+# conftest.py installed, giving a MockMLXFinder class that fails isinstance
+# against the meta_path instance despite being the same class by name.
 def _has_mock():
     try:
-        from omlx.utils.mlx_mock import MockMLXFinder
-        return any(isinstance(f, MockMLXFinder) for f in sys.meta_path)
+        return any(type(f).__name__ == "MockMLXFinder" for f in sys.meta_path)
     except Exception:
         return False
 
@@ -109,6 +112,26 @@ def test_extend_keeps_arrays_cache_in_place():
 
     assert extended[0] is arrays_a
     assert arrays_a[0].shape[0] == 2
+
+
+@pytest.mark.skipif(_has_mock, reason="Mock MLX does not support real cache semantics")
+def test_make_cache_finds_nested_model_owned_batch_conversion():
+    gen = importlib.import_module("mlx_lm.generate")
+
+    class CustomCache:
+        def to_batch(self, left_padding):
+            return ("custom-batch", tuple(left_padding))
+
+    class Model:
+        layers = (object(),)
+
+        def make_cache(self):
+            return [CacheList(CacheList(CustomCache()))]
+
+    caches = gen._make_cache(Model(), [2, 0], None)
+
+    nested = caches[0].caches[0].caches[0]
+    assert nested == ("custom-batch", (2, 0))
 
 
 @pytest.mark.skipif(_has_mock, reason="Mock MLX does not support real cache semantics")

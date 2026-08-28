@@ -228,6 +228,9 @@ class TestServeCommandOptions:
         result = run_cli(["serve", "--help"])
         assert "--max-concurrent-requests" in result.stdout
         assert "--embedding-batch-size" in result.stdout
+        assert "--max-audio-upload-size" in result.stdout
+        assert "settings.json" in result.stdout
+        assert "Default: 100MB" not in result.stdout
 
     def test_serve_has_cache_options(self):
         """Test that serve command has cache options."""
@@ -802,6 +805,45 @@ class TestLaunchCommandFunction:
 class TestLaunchArgvParsing:
     """Tests for top-level argv parsing of `omlx launch ...`."""
 
+    def test_launch_removes_forwarding_separator_after_known_option(self, monkeypatch):
+        """The oMLX separator must not reach the launched tool."""
+        from omlx import cli
+
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "omlx",
+                "launch",
+                "claude",
+                "--cross-session",
+                "--",
+                "--allow-dangerously-skip-permissions",
+            ],
+        )
+        with patch.object(cli, "launch_command") as launch:
+            cli.main()
+
+        args = launch.call_args.args[0]
+        assert args.cross_session is True
+        assert launch.call_args.kwargs["extra_args"] == [
+            "--allow-dangerously-skip-permissions"
+        ]
+
+    def test_launch_preserves_separator_intended_for_tool(self, monkeypatch):
+        """A second separator belongs to the launched tool's argv."""
+        from omlx import cli
+
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            ["omlx", "launch", "claude", "--", "--", "--literal-prompt"],
+        )
+        with patch.object(cli, "launch_command") as launch:
+            cli.main()
+
+        assert launch.call_args.kwargs["extra_args"] == ["--", "--literal-prompt"]
+
     def test_serve_still_rejects_unknown_args(self):
         """Non-launch commands must keep strict argparse rejection."""
         result = run_cli(["serve", "--bogus-flag"])
@@ -822,6 +864,7 @@ class TestServeCommandFunctions:
             "port": port,
             "log_level": None,
             "sse_keepalive_mode": None,
+            "max_audio_upload_size": None,
             "max_concurrent_requests": None,
             "embedding_batch_size": None,
             "memory_guard": None,
@@ -875,6 +918,7 @@ class TestServeCommandFunctions:
         settings.mcp = SimpleNamespace(config_path=None)
         settings.cache = SimpleNamespace(
             enabled=False,
+            ane_compile_cache=False,
             get_ssd_cache_dir=lambda base_path: tmp_path / "cache",
             get_ssd_cache_max_size_bytes=lambda base_path: 0,
             get_hot_cache_max_size_bytes=lambda: 0,
@@ -1098,6 +1142,7 @@ class TestHasCliOverrides:
             "host": None,
             "log_level": None,
             "sse_keepalive_mode": None,
+            "max_audio_upload_size": None,
             "max_concurrent_requests": None,
             "embedding_batch_size": None,
             "memory_guard": None,
@@ -1174,6 +1219,7 @@ class TestHasCliOverrides:
         ("field", "value"),
         [
             ("sse_keepalive_mode", "off"),
+            ("max_audio_upload_size", "250MB"),
             ("max_concurrent_requests", 2),
             ("paged_ssd_cache_dir", "/tmp/cache"),
             ("paged_ssd_cache_max_size", "2GB"),

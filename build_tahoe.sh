@@ -51,6 +51,15 @@ echo -e "${GREEN}[3/8] Installing build dependencies (venvstacks + audit)...${NC
 pip install --quiet --upgrade pip
 pip install --quiet venvstacks setuptools pip-audit
 
+# Custom kernel build_ext runs without pip build isolation, so the
+# pyproject.toml [build-system] nanobind pin isn't enforced automatically —
+# install it explicitly so it matches the ABI the bundled mlx wheel expects
+# (a mismatch makes the kernels reject every mlx array at runtime, #2139).
+NANOBIND_PIN="$(sed -n 's/^[[:space:]]*"nanobind==\([0-9][0-9.]*\)".*/\1/p' \
+    "$REPO_ROOT/pyproject.toml" | head -1)"
+[[ -n "$NANOBIND_PIN" ]] || { echo "Error: could not read the nanobind pin from pyproject.toml [build-system]."; exit 1; }
+pip install --quiet "nanobind==$NANOBIND_PIN"
+
 # 4. Security Audit
 echo -e "${GREEN}[4/8] Auditing packages for known vulnerabilities...${NC}"
 # Scan the root project dependencies for security flaws
@@ -70,6 +79,10 @@ python build.py --venvstacks-only
 # 6. Build the Swift app bundle (embeds venvstacks layers)
 echo -e "${GREEN}[6/8] Building Swift app bundle…${NC}"
 cd "$REPO_ROOT"
+# Compile the native custom kernels (Qwen ANE prefill, FA-256, MLP qmm, MoE
+# weighted-sum, ...) into the bundle. Without this, build.sh silently skips
+# them and every one of those optimizations falls back to the slow path.
+export OMLX_WITH_CUSTOM_KERNEL=1
 "$REPO_ROOT/apps/omlx-mac/Scripts/build.sh" swift 2>&1 || {
     echo -e "${YELLOW}Warning: Swift build failed; venvstacks export is still at packaging/_export/${NC}"
     exit 1

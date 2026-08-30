@@ -207,6 +207,18 @@ def pytest_collection_modifyitems(config, items):
         ("test_mlx_vlm_glm5_next_compat", "MLX mock active — GLM-5 Next VLM vendor classes / PoolingCache / native indexer unavailable"),
         ("test_mlx_vlm_qwen4_exp_compat", "MLX mock active — Qwen4 Exp configure_ple_runtime/configure_mtp_runtime/to_fp8 unavailable"),
         ("test_vlm_qwen4_exp_loader", "MLX mock active — RotatingKVCache.is_trimmable / configure_ple_runtime unavailable"),
+        # Qwen4 QSA decode/gather/native-indexer (native MLX decode kernels)
+        ("test_qwen4_qsa_decode_gather", "MLX mock active — _decode_qsa_sdpa / contiguous_causal_gathered_qsa unavailable in mock"),
+        ("test_qwen4_qsa_incremental_cache", "MLX mock active — contiguous_causal_gathered_qsa / array.swapaxes unavailable in mock"),
+        ("test_qwen4_qsa_native_indexer", "MLX mock active — _native_indexer_scores native kernel unavailable in mock"),
+        ("test_qwen4_qsa_sparse_gqa", "MLX mock active — _native_sparse_gqa_attention native kernel unavailable in mock"),
+        ("test_qwen4_hc_projection", "MLX mock active — fuse_hyper_connection_projections native kernel unavailable in mock"),
+        # Qwen4 QSA prefill memory routing (real MLX array precision + cache internals)
+        ("test_qwen4_qsa_prefill_memory", "MLX mock active — tiled-SDPA precision & TurboQuant cache internals unavailable in mock"),
+        # Qwen3.5 GDN fused prework parity (real mlx.nn / model-graph internals)
+        ("test_qwen35_gdn_prework", "MLX mock active — fused GDN prework needs real mlx.nn / model-graph internals"),
+        # Qwen4 vision grid compat (mlx.repeat unpacking + vision-grid MLX internals)
+        ("test_qwen4_vision_grid_compat", "MLX mock active — vision grid MLX array internals unavailable in mock"),
     ]
 
     _mock_skip = pytest.mark.skip(

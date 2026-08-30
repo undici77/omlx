@@ -812,6 +812,10 @@
             accBatchSize: 1,
             accEnableThinking: false,
             accSamplingProfile: 'deterministic',
+            // Opt-in community upload. Defaults to false so accuracy runs never
+            // send hardware fingerprint or model outputs unless the user checks
+            // "Share results to omlx.ai" — mirrors benchAllowUpload.
+            accAllowUpload: false,
             accAdvancedOptionsOpen: false,
             accExternalEnabled: false,
             // Provider-specific JSON is intentionally session-only.
@@ -10128,6 +10132,7 @@
                             batch_size: this.accBatchSize,
                             enable_thinking: this.accExternalEnabled ? false : this.accEnableThinking,
                             sampling_profile: this.accSamplingProfile,
+                            allow_upload: this.accAllowUpload,
                             external: externalRequest,
                         }),
                     });

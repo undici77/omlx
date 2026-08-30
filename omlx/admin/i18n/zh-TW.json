@@ -899,6 +899,8 @@
   "acc_bench.config.sampling_model": "模型設定",
   "acc_bench.config.sampling_hint": "確定性（貪婪）可確保多次執行間的分數可重現。啟用以使用模型已設定的取樣（溫度、top-p）獲得真實世界分數。",
   "acc_bench.config.advanced_options": "進階選項",
+  "acc_bench.config.share_results": "與社群分享結果（omlx.ai）",
+  "acc_bench.config.share_hint": "匿名分享分數和硬體型號，協助他人比較準確度。預設為關閉——除非勾選，否則資料不會離開你的裝置。",
   "acc_bench.config.external_hint": "對遠端 OpenAI 相容端點進行評估，而非本機模型。思考模式會被停用；請求不會傳送 enable_thinking。",
   "acc_bench.config.external_extra_body_hint": "選填的供應商特定請求參數。例如，DeepSeek V4 接受 {\"thinking\":{\"type\":\"disabled\"}}。留空則不傳送。",
   "acc_bench.config.external_max_tokens": "Max Tokens 覆蓋（最低值）",

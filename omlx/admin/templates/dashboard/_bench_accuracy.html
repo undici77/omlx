@@ -158,6 +158,22 @@
                                 </div>
                             </div>
 
+                            <!-- Upload Consent -->
+                            <div class="pt-2 border-t border-neutral-100">
+                                <label class="flex items-start gap-3 cursor-pointer group">
+                                    <div class="flex items-center h-5">
+                                        <input type="checkbox"
+                                               x-model="accAllowUpload"
+                                               :disabled="accRunning"
+                                               class="w-4 h-4 rounded border-neutral-300 text-neutral-900 focus:ring-neutral-900 transition-colors">
+                                    </div>
+                                    <div class="flex flex-col">
+                                        <span class="text-sm font-medium text-neutral-700 group-hover:text-neutral-900 transition-colors">{{ t('acc_bench.config.share_results') }}</span>
+                                        <span class="text-xs text-neutral-400 mt-0.5">{{ t('acc_bench.config.share_hint') }}</span>
+                                    </div>
+                                </label>
+                            </div>
+
                             <!-- Benchmark Selection — Card Grid -->
                             <div>
                                 <label class="block text-sm font-medium text-neutral-700 mb-3">{{ t('acc_bench.config.benchmarks') }}</label>

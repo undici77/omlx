@@ -272,6 +272,89 @@ class TestRunAccuracyBenchmark:
         # Should have stopped early
         assert len(run.results) == 0
 
+    @pytest.mark.asyncio
+    async def test_upload_skipped_by_default(self):
+        """Opt-out is the contract: allow_upload defaults to False, so no
+        hardware context is captured and nothing is uploaded — no egress."""
+        req = AccuracyBenchmarkRequest(
+            model_id="test-model",
+            benchmarks={"mmlu": 100},
+        )
+        run = create_run(req)
+        assert req.allow_upload is False
+
+        mock_engine = AsyncMock()
+        mock_engine.chat = AsyncMock(return_value=MagicMock(text="A"))
+
+        mock_pool = MagicMock()
+        mock_pool.get_loaded_model_ids = MagicMock(return_value=[])
+        mock_pool.get_engine = AsyncMock(return_value=mock_engine)
+        mock_pool._unload_engine = AsyncMock()
+
+        mock_evaluator = MagicMock()
+        mock_evaluator.load_dataset = AsyncMock(return_value=[{"id": "1"}])
+        mock_evaluator.run = AsyncMock(return_value=MagicMock(
+            benchmark_name="mmlu",
+            accuracy=0.75,
+            total_questions=4,
+            correct_count=3,
+            time_seconds=1.0,
+            category_scores=None,
+            thinking_used=False,
+        ))
+        mock_bench_cls = MagicMock(return_value=mock_evaluator)
+
+        with patch("omlx.admin.accuracy_benchmark.upload_intelligence_result", AsyncMock()) as mock_upload, \
+             patch("omlx.admin.accuracy_benchmark.build_upload_context", MagicMock()) as mock_ctx, \
+             patch.dict("omlx.eval.BENCHMARKS", {"mmlu": mock_bench_cls}, clear=True):
+            await run_accuracy_benchmark(run, mock_pool)
+
+        mock_upload.assert_not_called()
+        mock_ctx.assert_not_called()
+        assert run.upload_ctx is None
+
+    @pytest.mark.asyncio
+    async def test_upload_when_opted_in(self):
+        """allow_upload=True captures context and uploads per suite."""
+        req = AccuracyBenchmarkRequest(
+            model_id="test-model",
+            benchmarks={"mmlu": 100},
+            allow_upload=True,
+        )
+        run = create_run(req)
+
+        mock_engine = AsyncMock()
+        mock_engine.chat = AsyncMock(return_value=MagicMock(text="A"))
+
+        mock_pool = MagicMock()
+        mock_pool.get_loaded_model_ids = MagicMock(return_value=[])
+        mock_pool.get_engine = AsyncMock(return_value=mock_engine)
+        mock_pool._unload_engine = AsyncMock()
+
+        mock_evaluator = MagicMock()
+        mock_evaluator.load_dataset = AsyncMock(return_value=[{"id": "1"}])
+        mock_evaluator.run = AsyncMock(return_value=MagicMock(
+            benchmark_name="mmlu",
+            accuracy=0.75,
+            total_questions=4,
+            correct_count=3,
+            time_seconds=1.0,
+            category_scores=None,
+            thinking_used=False,
+        ))
+        mock_bench_cls = MagicMock(return_value=mock_evaluator)
+
+        with patch(
+            "omlx.admin.accuracy_benchmark.upload_intelligence_result",
+            AsyncMock(return_value={"id": "acc123", "url": "https://omlx.ai/x"}),
+        ) as mock_upload, \
+             patch("omlx.admin.accuracy_benchmark.build_upload_context", MagicMock(return_value={"owner_hash": "x"})) as mock_ctx, \
+             patch.dict("omlx.eval.BENCHMARKS", {"mmlu": mock_bench_cls}, clear=True):
+            await run_accuracy_benchmark(run, mock_pool)
+
+        mock_ctx.assert_called_once()
+        mock_upload.assert_called_once()
+
 
 class TestSamplingProfile:
     """sampling_profile gates whether per-model sampling reaches the evaluator.
@@ -853,6 +936,7 @@ class TestCommunityUpload:
         req = AccuracyBenchmarkRequest(
             model_id="test-model",
             benchmarks={"mmlu": 4, "gsm8k": 4},
+            allow_upload=True,
         )
         run = create_run(req)
 
@@ -951,7 +1035,9 @@ class TestCommunityUpload:
     @pytest.mark.asyncio
     async def test_upload_context_failure_only_disables_upload(self):
         run = create_run(
-            AccuracyBenchmarkRequest(model_id="test-model", benchmarks={"mmlu": 4})
+            AccuracyBenchmarkRequest(
+                model_id="test-model", benchmarks={"mmlu": 4}, allow_upload=True
+            )
         )
         mock_upload = AsyncMock()
 
@@ -979,7 +1065,9 @@ class TestCommunityUpload:
     @pytest.mark.asyncio
     async def test_upload_error_outcome_does_not_fail_bench(self):
         run = create_run(
-            AccuracyBenchmarkRequest(model_id="test-model", benchmarks={"mmlu": 4})
+            AccuracyBenchmarkRequest(
+                model_id="test-model", benchmarks={"mmlu": 4}, allow_upload=True
+            )
         )
         error_outcome = {"error": "HTTP 500"}
 

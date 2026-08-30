@@ -899,6 +899,8 @@
   "acc_bench.config.sampling_model": "模型设置",
   "acc_bench.config.sampling_hint": "确定性（贪心）保持分数在多次运行间可复现。启用以使用模型配置的采样参数（温度、top-p）获得真实世界分数。",
   "acc_bench.config.advanced_options": "高级选项",
+  "acc_bench.config.share_results": "与社区共享结果（omlx.ai）",
+  "acc_bench.config.share_hint": "匿名共享分数和硬件型号，帮助他人对比准确性。默认关闭——除非勾选，否则数据不会离开你的设备。",
   "acc_bench.config.external_hint": "评估远程 OpenAI 兼容端点而非本地模型。思考模式被禁用；请求不会发送 enable_thinking。",
   "acc_bench.config.external_extra_body_hint": "可填写服务商支持的额外请求参数。例如，DeepSeek V4 可使用 {\"thinking\":{\"type\":\"disabled\"}} 关闭思考模式。留空则不发送。",
   "acc_bench.config.external_max_tokens": "Max Tokens 覆盖（最低值）",

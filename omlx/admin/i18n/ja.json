@@ -899,6 +899,8 @@
   "acc_bench.config.sampling_model": "Model settings",
   "acc_bench.config.sampling_hint": "Deterministic (greedy) keeps scores reproducible across runs. Enable to use the model's configured sampling (temperature, top-p) for a real-world score.",
   "acc_bench.config.advanced_options": "Advanced options",
+  "acc_bench.config.share_results": "結果をコミュニティと共有する（omlx.ai）",
+  "acc_bench.config.share_hint": "スコアとハードウェアモデルを匿名で共有し、他の人の精度比較を助けます。デフォルトはオフ — チェックされない限り、お使いのマシンから何も出力されません。",
   "acc_bench.config.external_hint": "Evaluate a remote OpenAI-compatible endpoint instead of a local model. Thinking mode is disabled; requests never send enable_thinking.",
   "acc_bench.config.external_extra_body_hint": "Optional provider-specific request parameters. For example, DeepSeek V4 accepts {\"thinking\":{\"type\":\"disabled\"}}. Leave empty to send none.",
   "acc_bench.config.external_max_tokens": "Max Tokens オーバーライド",

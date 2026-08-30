@@ -70,6 +70,12 @@ class AccuracyBenchmarkRequest(BaseModel):
     batch_size: int = 1
     enable_thinking: bool = False
     sampling_profile: SamplingProfile = "deterministic"
+    # Opt-in community upload. Mirrors the throughput BenchmarkRequest:
+    # defaults to False so no hardware fingerprint or model output leaves the
+    # machine unless the user explicitly checks "Share results". Unlike the
+    # throughput path this field previously did not exist, so accuracy runs
+    # uploaded unconditionally — a privacy regression.
+    allow_upload: bool = False
     # When set, the benchmark runs against a remote OpenAI-compatible
     # endpoint instead of a local engine and model_id is the remote
     # model name (not validated against the local catalog).
@@ -465,12 +471,13 @@ async def run_accuracy_benchmark(
                         sampling_kwargs["presence_penalty"] = ms.presence_penalty
 
             # Snapshot the upload context (hardware, quantization, feature
-            # flags, submission group). A failure here only disables the
-            # community upload, never the benchmark itself.
-            try:
-                run.upload_ctx = build_upload_context(request, engine_pool)
-            except Exception as e:
-                logger.warning(f"Accuracy upload context unavailable: {e}")
+            # flags, submission group) only when the user opted in. A failure
+            # here only disables the community upload, never the benchmark.
+            if request.allow_upload:
+                try:
+                    run.upload_ctx = build_upload_context(request, engine_pool)
+                except Exception as e:
+                    logger.warning(f"Accuracy upload context unavailable: {e}")
 
         # Phase 3: Run each benchmark
         run.phase = "evaluating"
@@ -659,8 +666,9 @@ async def run_accuracy_benchmark(
             # done event so the SSE terminal contract stays unchanged.
             # result_data is the same object stored in _accumulated_results,
             # so the outcome is visible to polling clients and SSE replay
-            # without any extra state. Never fails the benchmark.
-            if run.upload_ctx is not None and run.status != "cancelled":
+            # without any extra state. Never fails the benchmark. Gated behind
+            # the user's opt-in so no output egresses by default.
+            if request.allow_upload and run.upload_ctx is not None and run.status != "cancelled":
                 outcome = await upload_intelligence_result(
                     run, run.upload_ctx, result_data
                 )

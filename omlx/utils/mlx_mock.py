@@ -539,6 +539,8 @@ class MockMLXLoader(importlib.abc.Loader):
                             return lambda d: type("Stream", (), {})()
                         if name == "clear_cache":
                             return lambda: None
+                        if name == "clear_streams":
+                            return lambda: None
                         if name == "get_message_json":
                             return lambda *a, **k: ""
                         if name == "take_along_axis":

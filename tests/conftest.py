@@ -219,6 +219,10 @@ def pytest_collection_modifyitems(config, items):
         ("test_qwen35_gdn_prework", "MLX mock active — fused GDN prework needs real mlx.nn / model-graph internals"),
         # Qwen4 vision grid compat (mlx.repeat unpacking + vision-grid MLX internals)
         ("test_qwen4_vision_grid_compat", "MLX mock active — vision grid MLX array internals unavailable in mock"),
+        # MLX 0.32.2 mlx-vlm compat patch (needs real mlx-vlm source + mx.grid_sample/_restore_rng_state)
+        ("test_mlx0322_compat", "MLX mock active — source-patch loader needs real mlx-vlm modules and MLX internals"),
+        # Qwen4 QSA batch join/merge (real QSAKVCache.to_batch/merge/index_keys)
+        ("test_qsa_batch_join_ranks", "MLX mock active — QSAKVCache.to_batch/merge/index_keys unavailable in mock"),
     ]
 
     _mock_skip = pytest.mark.skip(

@@ -223,6 +223,9 @@ def pytest_collection_modifyitems(config, items):
         ("test_mlx0322_compat", "MLX mock active — source-patch loader needs real mlx-vlm modules and MLX internals"),
         # Qwen4 QSA batch join/merge (real QSAKVCache.to_batch/merge/index_keys)
         ("test_qsa_batch_join_ranks", "MLX mock active — QSAKVCache.to_batch/merge/index_keys unavailable in mock"),
+        # Qwen4 QSA reservation (real QSAKVCache.reserve_index_capacity/update_indexer)
+        ("test_qwen4_qsa_reservation_integration", "MLX mock active — QSAKVCache.reserve_index_capacity / update_indexer unavailable in mock"),
+        ("test_qwen4_qsa_reserved_capacity", "MLX mock active — QSAKVCache.reserve_index_capacity / update_indexer unavailable in mock"),
     ]
 
     _mock_skip = pytest.mark.skip(
@@ -309,6 +312,18 @@ class MockModel:
     def parameters(self) -> Dict[str, Any]:
         """Return model parameters."""
         return self._parameters
+
+    def make_cache(self) -> list:
+        """Build the per-layer prompt cache, like a real mlx-lm model.
+
+        The scheduler probes this to decide whether a stored prefix can be
+        rebuilt faithfully, so the double has to answer it. A plain llama-style
+        model builds ``KVCache`` layers; tests that need another cache class
+        override this attribute.
+        """
+        from mlx_lm.models.cache import KVCache
+
+        return [KVCache() for _ in range(self.config.num_hidden_layers)]
 
 
 @pytest.fixture

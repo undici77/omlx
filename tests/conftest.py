@@ -232,6 +232,10 @@ def pytest_collection_modifyitems(config, items):
         # Qwen4 QSA reservation (real QSAKVCache.reserve_index_capacity/update_indexer)
         ("test_qwen4_qsa_reservation_integration", "MLX mock active — QSAKVCache.reserve_index_capacity / update_indexer unavailable in mock"),
         ("test_qwen4_qsa_reserved_capacity", "MLX mock active — QSAKVCache.reserve_index_capacity / update_indexer unavailable in mock"),
+        # Qwen4 eager dispatch, fused hyper-connections, and fast RMS norm (Metal kernels / real MLX)
+        ("test_qwen4_eager_dispatch", "MLX mock active — Qwen4 eager GPU dispatch unavailable in mock"),
+        ("test_qwen4_hc_fused", "MLX mock active — Qwen4 fused hyper-connection Metal kernels unavailable in mock"),
+        ("test_qwen4_rms_norm", "MLX mock active — mx.fast.rms_norm ULP precision tests require Apple Silicon"),
     ]
 
     _mock_skip = pytest.mark.skip(

@@ -471,6 +471,10 @@ class MockMLXLoader(importlib.abc.Loader):
                                 y_arr = loader.array(y)._data if hasattr(y, "_data") or isinstance(y, (list, tuple, np.ndarray)) else y
                                 return loader.array(np.where(cond_arr, x_arr, y_arr))
                             return _where
+                        if name == "rsqrt":
+                            return lambda a, *args, **kwargs: loader.array(
+                                1.0 / np.sqrt(loader.array(a)._data)
+                            )
                         if name in ("exp", "log", "abs", "sqrt", "pad"):
                             return lambda a, *args, **kwargs: loader.array(
                                 getattr(np, name)(loader.array(a)._data, *args, **kwargs)
@@ -559,6 +563,20 @@ class MockMLXLoader(importlib.abc.Loader):
                             return lambda *a, **k: _make_tool_module()
 
                     if self.__name__ in ("mlx_lm.models", "mlx_vlm.models") and name and name[0].islower():
+                        mod = loader.create_module(
+                            importlib.machinery.ModuleSpec(f"{self.__name__}.{name}", loader)
+                        )
+                        self.__mock_items[name] = mod
+                        return mod
+
+                    if self.__name__ in ("mlx_lm", "mlx_vlm") and name == "tool_parsers":
+                        mod = loader.create_module(
+                            importlib.machinery.ModuleSpec(f"{self.__name__}.{name}", loader)
+                        )
+                        self.__mock_items[name] = mod
+                        return mod
+
+                    if self.__name__ in ("mlx_lm.tool_parsers", "mlx_vlm.tool_parsers") and name and name[0].islower():
                         mod = loader.create_module(
                             importlib.machinery.ModuleSpec(f"{self.__name__}.{name}", loader)
                         )
@@ -684,6 +702,9 @@ class MockMLXLoader(importlib.abc.Loader):
                             if _n == "sqrt":
                                 arr = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
                                 return loader.array(np.sqrt(arr))
+                            if _n == "rsqrt":
+                                arr = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                return loader.array(1.0 / np.sqrt(arr))
                             if _n == "square":
                                 arr = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
                                 return loader.array(arr ** 2)
@@ -1762,12 +1783,22 @@ class MockMLXLoader(importlib.abc.Loader):
             sys.modules[spec.name] = m
             return m
 
-        if spec.name == "mlx_vlm.tool_parsers":
+        if spec.name in ("mlx_lm.tool_parsers", "mlx_vlm.tool_parsers"):
             m = MockModule(spec.name)
             m._infer_tool_parser = _infer_tool_parser
             m.load_tool_module = lambda *a, **k: _make_tool_module()
             sys.modules[spec.name] = m
             return m
+
+        if spec.name.startswith("mlx_lm.tool_parsers."):
+            subname = spec.name.split(".")[-1]
+            for p in sys.path:
+                candidate = Path(p) / "mlx_lm" / "tool_parsers" / f"{subname}.py"
+                if candidate.is_file():
+                    src_loader = importlib.machinery.SourceFileLoader(spec.name, str(candidate))
+                    mod = src_loader.load_module()
+                    sys.modules[spec.name] = mod
+                    return mod
 
         if spec.name == "mlx_lm.generate":
             m = MockModule(spec.name)

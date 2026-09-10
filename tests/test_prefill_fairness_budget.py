@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Regressions for sharing decode time between consecutive prefill forwards."""
 
 from itertools import count

@@ -13,6 +13,8 @@ import socket
 import struct
 import time
 
+import pytest
+
 from omlx.cluster.discovery import (
     _TX_FAIL_RESET_ROUNDS,
     MULTICAST_GROUP,
@@ -33,6 +35,28 @@ from omlx.cluster.discovery import (
 )
 from omlx.cluster.identity import NodeIdentity
 from omlx.cluster.registry import DeviceRegistry
+
+
+@pytest.fixture(autouse=True)
+def _mock_socket_if_indices(monkeypatch):
+    """Provide fallback name<->index mapping for macOS interface names on non-macOS."""
+    _real_nametoindex = socket.if_nametoindex
+    _real_indextoname = socket.if_indextoname
+    _fake_map = {"en0": 1001, "gif0": 1002, "en1": 1003, "en5": 1004}
+    _fake_rev = {v: k for k, v in _fake_map.items()}
+
+    def _fake_nametoindex(name):
+        if name in _fake_map:
+            return _fake_map[name]
+        return _real_nametoindex(name)
+
+    def _fake_indextoname(idx):
+        if idx in _fake_rev:
+            return _fake_rev[idx]
+        return _real_indextoname(idx)
+
+    monkeypatch.setattr(socket, "if_nametoindex", _fake_nametoindex)
+    monkeypatch.setattr(socket, "if_indextoname", _fake_indextoname)
 
 
 class FakeHTTPStream:

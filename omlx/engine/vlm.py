@@ -47,6 +47,7 @@ from ..cache.vision_feature_cache import VisionFeatureSSDCache
 from ..exceptions import InvalidRequestError
 from ..models.vlm import VLMModelAdapter
 from ..patches.mlx_vlm_pixtral_torch_free import apply_pixtral_torch_free_patch
+from ..model_settings import ane_prefill_backend, ane_prefill_fraction
 from ..reasoning_effort import apply_chat_template_with_reasoning_effort_fallback
 from ..utils.image import (
     compute_image_hash,
@@ -763,6 +764,112 @@ def _is_mlx_format_safetensors_dir(model_dir: Path) -> bool:
     except Exception:
         return False
     return isinstance(metadata, dict) and metadata.get("format") == "mlx"
+
+
+def _gemma4_global_kv_from_per_layer_config(config: dict) -> dict[str, int]:
+    """Derive Gemma4's legacy full-attention head fields from ``per_layer_config``.
+
+    Newer Gemma4 checkpoints (Transformers >= 5.15) record the ``head_dim`` /
+    ``num_key_value_heads`` overrides of the full-attention layers under
+    ``text_config.per_layer_config`` instead of the legacy global
+    ``global_head_dim`` / ``num_global_key_value_heads`` fields. The pinned
+    mlx-vlm Gemma4 loader reads only the legacy fields, so it sizes the
+    full-attention K/V projections with the sliding-window head count and
+    ``load_weights`` fails with a shape mismatch (#3537).
+
+    Returns the legacy fields that are absent from ``text_config`` and can be
+    derived unambiguously (every overridden full-attention layer agrees), or
+    an empty dict.
+    """
+    text_config = config.get("text_config")
+    if not isinstance(text_config, dict):
+        return {}
+    model_type = str(text_config.get("model_type") or config.get("model_type") or "")
+    if not model_type.startswith("gemma4"):
+        return {}
+    per_layer = text_config.get("per_layer_config")
+    if not isinstance(per_layer, dict) or not per_layer:
+        return {}
+    layer_types = text_config.get("layer_types")
+    if not isinstance(layer_types, list):
+        layer_types = None
+
+    derived: dict[str, int] = {}
+    for legacy_key, layer_key in (
+        ("global_head_dim", "head_dim"),
+        ("num_global_key_value_heads", "num_key_value_heads"),
+    ):
+        if text_config.get(legacy_key) is not None:
+            continue
+        values: set[int] = set()
+        for layer_id, overrides in per_layer.items():
+            if not isinstance(overrides, dict) or overrides.get(layer_key) is None:
+                continue
+            if layer_types is not None:
+                try:
+                    layer_idx = int(layer_id)
+                except (TypeError, ValueError):
+                    continue
+                if not 0 <= layer_idx < len(layer_types):
+                    continue
+                if layer_types[layer_idx] != "full_attention":
+                    continue
+            try:
+                values.add(int(overrides[layer_key]))
+            except (TypeError, ValueError):
+                continue
+        if len(values) == 1:
+            derived[legacy_key] = values.pop()
+    return derived
+
+
+@contextlib.contextmanager
+def _derive_gemma4_global_kv_on_load(model_dir: Path):
+    """Feed ``per_layer_config``-only Gemma4 head overrides to the mlx-vlm loader.
+
+    Wraps ``mlx_vlm.utils.load_config`` for one ``vlm_load(...)`` so the
+    config handed to the Gemma4 ``TextConfig`` carries ``global_head_dim`` /
+    ``num_global_key_value_heads`` derived from ``per_layer_config`` when the
+    checkpoint does not spell them out (#3537). Checkpoints that already
+    carry the legacy fields, and non-Gemma4 models, are untouched.
+    """
+    config_path = model_dir / "config.json"
+    try:
+        config = json.loads(config_path.read_text())
+    except Exception:
+        yield
+        return
+    derived = (
+        _gemma4_global_kv_from_per_layer_config(config)
+        if isinstance(config, dict)
+        else {}
+    )
+    if not derived:
+        yield
+        return
+
+    import mlx_vlm.utils as _vu
+
+    original_load_config = _vu.load_config
+
+    def _patched_load_config(model_path, **kwargs):
+        loaded = original_load_config(model_path, **kwargs)
+        text_config = loaded.get("text_config") if isinstance(loaded, dict) else None
+        if isinstance(text_config, dict):
+            for key, value in derived.items():
+                if text_config.get(key) is None:
+                    text_config[key] = value
+        return loaded
+
+    logger.info(
+        "derive_gemma4_global_kv_on_load: per_layer_config -> %s",
+        ", ".join(f"{k}={v}" for k, v in derived.items()),
+    )
+    _vu.load_config = _patched_load_config
+    try:
+        yield
+    finally:
+        _vu.load_config = original_load_config
 
 
 @contextlib.contextmanager
@@ -1695,6 +1802,7 @@ class VLMBatchedEngine(BaseEngine):
             with (
                 _strip_audio_config_if_orphaned(Path(self._model_name)),
                 _drop_gemma4_mlx_shared_kv_extras_on_load(Path(self._model_name)),
+                _derive_gemma4_global_kv_on_load(Path(self._model_name)),
                 _force_minimax_m3_moe_sanitize_on_load(Path(self._model_name)),
                 _force_qwen4_exp_sanitize_on_load(Path(self._model_name)),
                 _remap_nested_visual_on_load(Path(self._model_name)),
@@ -2013,7 +2121,13 @@ class VLMBatchedEngine(BaseEngine):
         except Exception:
             logger.debug("Qwen MoE router patch not applied", exc_info=True)
 
-        if getattr(self._model_settings, "qwen35_ane_prefill_enabled", False):
+        if (
+            getattr(self._model_settings, "qwen35_ane_prefill_enabled", False)
+            and ane_prefill_backend(self.model_type) == "qwen"
+        ):
+            ane_fraction = ane_prefill_fraction(
+                self._model_settings.qwen35_ane_prefill_fraction, self.model_type
+            )
             try:
                 from ..patches.qwen35_ane_prefill import (
                     configure_qwen35_ane_prefill_scheduler,
@@ -2040,11 +2154,7 @@ class VLMBatchedEngine(BaseEngine):
                             )
                             or 0
                         ),
-                        fraction=getattr(
-                            self._model_settings,
-                            "qwen35_ane_prefill_fraction",
-                            0.53,
-                        ),
+                        fraction=ane_fraction,
                         max_layers=getattr(
                             self._model_settings,
                             "qwen35_ane_prefill_max_layers",
@@ -2071,11 +2181,7 @@ class VLMBatchedEngine(BaseEngine):
                             True,
                         ),
                         ane_down_fraction=(
-                            getattr(
-                                self._model_settings,
-                                "qwen35_ane_prefill_fraction",
-                                0.53,
-                            )
+                            ane_fraction
                             if getattr(
                                 self._model_settings,
                                 "qwen35_ane_prefill_fused_down",
@@ -3580,6 +3686,7 @@ class VLMBatchedEngine(BaseEngine):
             vlm_cache_key_start=vlm_cache_key_start,
             vlm_cache_key_ranges=vlm_cache_key_ranges,
             tools=tools,
+            preserve_reasoning=bool(kwargs.get("preserve_reasoning", False)),
             **specprefill_kwargs,
         )
 
@@ -3693,6 +3800,7 @@ class VLMBatchedEngine(BaseEngine):
             vlm_cache_key_start=vlm_cache_key_start,
             vlm_cache_key_ranges=vlm_cache_key_ranges,
             skip_cache_store=bool(kwargs.get("skip_cache_store", False)),
+            preserve_reasoning=bool(kwargs.get("preserve_reasoning", False)),
             benchmark_trace=bool(kwargs.get("benchmark_trace", False)),
             benchmark_ane_sequence_length=int(
                 kwargs.get("benchmark_ane_sequence_length", 0) or 0

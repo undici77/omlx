@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Check percentage presets preserve saved allocation values."""
 
 import json

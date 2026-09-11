@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Exercise Chat request settings for K2 and other model families."""
 
 import json

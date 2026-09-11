@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Gemma4 checkpoints that keep the full-attention head overrides in
 ``text_config.per_layer_config`` instead of the legacy global fields (#3537)."""
 

@@ -42,7 +42,14 @@ def test_clone_converts_valid_bfloat16_and_preserves_packed_weights(tmp_path):
 @pytest.mark.parametrize(
     ("value", "message"),
     [
-        (70000.0, "exceeds the FP16 limit"),
+        pytest.param(
+            70000.0,
+            "exceeds the FP16 limit",
+            marks=pytest.mark.slow,
+            id="70000.0-exceeds_fp16_limit",
+        ),  # The MLX mock maps bfloat16 -> float16, so 70000.0 already
+        # overflows to inf when the source array is built, unlike real
+        # bfloat16 (float32 exponent range). Real hardware only.
         (float("nan"), "NaN or infinite"),
         (float("inf"), "NaN or infinite"),
     ],

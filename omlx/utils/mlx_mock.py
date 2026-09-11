@@ -215,6 +215,9 @@ class MockMLXLoader(importlib.abc.Loader):
         def __ror__(self, other):
             return self.__class__(self._unwrap(other) | self._data, dtype="bool_")
 
+        def __invert__(self):
+            return self.__class__(np.invert(self._data))
+
         def __neg__(self):
             return self.__class__(-self._data)
 
@@ -347,7 +350,12 @@ class MockMLXLoader(importlib.abc.Loader):
                         if name == "moveaxis":
                             return lambda a, src, dst: loader.array(np.moveaxis(loader.array(a)._data, src, dst))
                         if name == "unflatten":
-                            return lambda a, axis, shape: loader.array(np.reshape(loader.array(a)._data, loader.array(a)._data.shape[:axis] + tuple(shape) + loader.array(a)._data.shape[axis+1:]))
+                            def _unflatten(a, axis, shape):
+                                data = loader.array(a)._data
+                                ax = axis if axis >= 0 else data.ndim + axis
+                                new_shape = data.shape[:ax] + tuple(shape) + data.shape[ax + 1:]
+                                return loader.array(np.reshape(data, new_shape))
+                            return _unflatten
                         if name == "put_along_axis":
                             return lambda a, indices, values, axis=-1: loader.array((lambda arr: (np.put_along_axis(arr, loader.array(indices)._data.astype(int), loader.array(values)._data if hasattr(values, "_data") or isinstance(values, (list, tuple, np.ndarray)) else values, axis=axis), arr)[1])(loader.array(a)._data.copy()))
                         if name == "issubdtype":
@@ -427,18 +435,33 @@ class MockMLXLoader(importlib.abc.Loader):
                             "cumsum",
                             "cos",
                             "sin",
+                            "sort",
                         ):
                             np_name = {
                                 "expand_dims": "expand_dims",
                                 "cumsum": "cumsum",
                                 "cos": "cos",
                                 "sin": "sin",
+                                "sort": "sort",
                             }.get(name, name)
                             return lambda a, *args, **kwargs: loader.array(
                                 getattr(np, np_name)(
                                     loader.array(a)._data, *args, **kwargs
                                 )
                             )
+                        if name == "flatten":
+                            def _flatten(a, start_axis=0, end_axis=-1, **k):
+                                arr = loader.array(a)._data
+                                ndim = arr.ndim
+                                start = start_axis if start_axis >= 0 else ndim + start_axis
+                                end = end_axis if end_axis >= 0 else ndim + end_axis
+                                new_shape = (
+                                    arr.shape[:start]
+                                    + (int(np.prod(arr.shape[start : end + 1])),)
+                                    + arr.shape[end + 1 :]
+                                )
+                                return loader.array(arr.reshape(new_shape), dtype=loader.array(a).dtype)
+                            return _flatten
                         if name in ("equal", "array_equal", "allclose"):
                             return lambda a, b, **k: loader.array(
                                 np.array_equal(
@@ -563,6 +586,17 @@ class MockMLXLoader(importlib.abc.Loader):
                             return lambda *a, **k: _make_tool_module()
 
                     if self.__name__ in ("mlx_lm.models", "mlx_vlm.models") and name and name[0].islower():
+                        mod = loader.create_module(
+                            importlib.machinery.ModuleSpec(f"{self.__name__}.{name}", loader)
+                        )
+                        self.__mock_items[name] = mod
+                        return mod
+
+                    if self.__name__ in ("mlx_lm", "mlx_vlm") and name in ("utils", "prompt_utils"):
+                        # `from mlx_lm import utils` resolves via getattr() on the
+                        # already-imported package; without this branch it would
+                        # match the generic _default_func catch-all below instead
+                        # of the properly configured "mlx_lm.utils" mock module.
                         mod = loader.create_module(
                             importlib.machinery.ModuleSpec(f"{self.__name__}.{name}", loader)
                         )
@@ -750,6 +784,9 @@ class MockMLXLoader(importlib.abc.Loader):
                             if _n == "isnan":
                                 arr = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
                                 return loader.array(np.isnan(arr))
+                            if _n == "isfinite":
+                                arr = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                return loader.array(np.isfinite(arr))
                             if _n == "greater":
                                 a = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
                                 b = args[1]._data if hasattr(args[1], "_data") else np.asarray(args[1])
@@ -1247,6 +1284,8 @@ class MockMLXLoader(importlib.abc.Loader):
                                 return _make_tool_module()
                             if _n == "tree_flatten":
                                 return list(args[0].items()) if args and hasattr(args[0], "items") else list(args[0])
+                            if _n == "tree_unflatten":
+                                return _tree_unflatten(args[0] if args else [])
                             if _n == "load_config":
                                 return {"model_type": "test"}
                             if _n == "load_chat_template":
@@ -1266,6 +1305,23 @@ class MockMLXLoader(importlib.abc.Loader):
                     else:
                         self.__mock_items[name] = MockModule(f"{self.__name__}.{name}")
                 return self.__mock_items[name]
+
+        def _tree_unflatten(tree):
+            if not tree:
+                return {}
+            children = {}
+            for key, value in tree:
+                parts = key.split(".", 1)
+                if len(parts) == 1:
+                    children[parts[0]] = value
+                else:
+                    children.setdefault(parts[0], []).append((parts[1], value))
+            result = {}
+            for k, v in children.items():
+                result[k] = _tree_unflatten(v) if isinstance(v, list) else v
+            if result and all(k.isdigit() for k in result):
+                return [result[str(i)] for i in range(len(result))]
+            return result
 
         def _extract_text_from_content(content):
             if isinstance(content, list):
@@ -1340,6 +1396,12 @@ class MockMLXLoader(importlib.abc.Loader):
                     elif isinstance(value, (list, tuple)) and any(hasattr(v, "parameters") for v in value):
                         self._module_lists[name] = list(value)
 
+                def __delattr__(self, name):
+                    super().__delattr__(name)
+                    self._parameters.pop(name, None)
+                    self._modules.pop(name, None)
+                    self._module_lists.pop(name, None)
+
                 def __call__(self, *args, **kwargs):
                     return args[0] if args else loader.array(np.zeros((1, 1)))
 
@@ -1351,6 +1413,57 @@ class MockMLXLoader(importlib.abc.Loader):
                         for idx, module in enumerate(modules):
                             params.update(module.parameters(prefix=f"{prefix}{name}.{idx}."))
                     return params
+
+                def named_modules(self, prefix=""):
+                    result = [(prefix, self)]
+                    for name, module in self._modules.items():
+                        result.extend(module.named_modules(prefix=f"{prefix}.{name}" if prefix else name))
+                    for name, modules in self._module_lists.items():
+                        for idx, module in enumerate(modules):
+                            child_prefix = f"{prefix}.{name}.{idx}" if prefix else f"{name}.{idx}"
+                            result.extend(module.named_modules(prefix=child_prefix))
+                    return result
+
+                def children(self):
+                    result = dict(self._modules)
+                    for name, modules in self._module_lists.items():
+                        result[name] = list(modules)
+                    return result
+
+                def update_modules(self, modules, strict=True):
+                    if not isinstance(modules, dict):
+                        return self
+                    for name, value in modules.items():
+                        current = getattr(self, name, None)
+                        if isinstance(value, dict) and isinstance(current, Module):
+                            current.update_modules(value, strict=strict)
+                        elif isinstance(value, list) and isinstance(current, list):
+                            new_list = list(current)
+                            for idx, item in enumerate(value):
+                                if idx >= len(new_list):
+                                    new_list.append(item)
+                                elif isinstance(item, dict) and isinstance(new_list[idx], Module):
+                                    new_list[idx].update_modules(item, strict=strict)
+                                else:
+                                    new_list[idx] = item
+                            setattr(self, name, new_list)
+                        else:
+                            setattr(self, name, value)
+                    return self
+
+                def set_dtype(self, dtype, predicate=None):
+                    dtype_name = getattr(dtype, "__name__", dtype)
+                    if predicate is None:
+                        predicate = lambda d: d in ("float16", "bfloat16", "float32", "float64")
+                    for name, value in self._parameters.items():
+                        if predicate(value.dtype):
+                            super(Module, self).__setattr__(name, value.astype(dtype))
+                            self._parameters[name] = self.__dict__[name]
+                    for module in self._modules.values():
+                        module.set_dtype(dtype, predicate)
+                    for modules in self._module_lists.values():
+                        for module in modules:
+                            module.set_dtype(dtype, predicate)
 
                 def load_weights(self, weights, strict=True):
                     for name, value in weights:
@@ -1396,6 +1509,72 @@ class MockMLXLoader(importlib.abc.Loader):
             class Tanh(Module):
                 pass
 
+            class QuantizedLinear(Module):
+                def __init__(self, in_features, out_features, bias=True, group_size=64, bits=4, mode="affine", *args, **kwargs):
+                    super().__init__()
+                    self.group_size = group_size
+                    self.bits = bits
+                    self.mode = mode
+                    per_int32 = max(1, 32 // bits)
+                    packed_cols = max(1, -(-in_features // per_int32))
+                    n_groups = max(1, -(-in_features // group_size))
+                    self.weight = loader.array(np.zeros((out_features, packed_cols), dtype=np.uint32))
+                    self.scales = loader.array(np.ones((out_features, n_groups), dtype=np.float32))
+                    self.biases = loader.array(np.zeros((out_features, n_groups), dtype=np.float32))
+                    if bias:
+                        self.bias = loader.array(np.zeros((out_features,), dtype=np.float32))
+                    self._out_features = out_features
+
+                def __call__(self, x):
+                    arr = loader.array(x)._data
+                    return loader.array(np.zeros(arr.shape[:-1] + (self._out_features,), dtype=np.float32))
+
+            def _linear_to_quantized(self, group_size=64, bits=4, mode="affine"):
+                out_features, in_features = self.weight.shape
+                q = QuantizedLinear(
+                    in_features, out_features,
+                    bias=hasattr(self, "bias"),
+                    group_size=group_size, bits=bits, mode=mode,
+                )
+                return q
+
+            Linear.to_quantized = _linear_to_quantized
+
+            def _quantize(model, group_size=64, bits=4, mode="affine", class_predicate=None):
+                def default_predicate(path, module):
+                    return hasattr(module, "to_quantized")
+                predicate = class_predicate or default_predicate
+
+                def join(prefix, name):
+                    return f"{prefix}.{name}" if prefix else name
+
+                def convert(value, path):
+                    if hasattr(value, "to_quantized"):
+                        result = predicate(path, value)
+                        if result:
+                            params = result if isinstance(result, dict) else {
+                                "group_size": group_size, "bits": bits, "mode": mode,
+                            }
+                            return value.to_quantized(**params)
+                        return value
+                    walk(value, path)
+                    return value
+
+                def walk(module, prefix):
+                    for name, value in list(getattr(module, "_modules", {}).items()):
+                        new_value = convert(value, join(prefix, name))
+                        if new_value is not value:
+                            setattr(module, name, new_value)
+                    for name, modules in list(getattr(module, "_module_lists", {}).items()):
+                        new_list = [
+                            convert(value, join(prefix, f"{name}.{idx}"))
+                            for idx, value in enumerate(modules)
+                        ]
+                        setattr(module, name, new_list)
+
+                walk(model, "")
+                return model
+
             m.Module = Module
             m.Linear = Linear
             m.Embedding = Embedding
@@ -1403,6 +1582,8 @@ class MockMLXLoader(importlib.abc.Loader):
             m.RMSNorm = RMSNorm
             m.Dropout = Dropout
             m.Tanh = Tanh
+            m.QuantizedLinear = QuantizedLinear
+            m.quantize = _quantize
             sys.modules[spec.name] = m
             return m
 
@@ -1431,10 +1612,20 @@ class MockMLXLoader(importlib.abc.Loader):
                     self._idx = kwargs.get("idx", 0)
 
                 def update_and_fetch(self, k, v):
-                    self.keys, self.values = k, v
-                    self.offset = k.shape[2] if hasattr(k, "shape") and len(k.shape) > 2 else self.offset
+                    if self.offset == 0 or self.keys is None:
+                        self.keys, self.values = k, v
+                    else:
+                        self.keys = loader.array(
+                            np.concatenate([loader.array(self.keys)._data, loader.array(k)._data], axis=2),
+                            dtype=loader.array(self.keys).dtype,
+                        )
+                        self.values = loader.array(
+                            np.concatenate([loader.array(self.values)._data, loader.array(v)._data], axis=2),
+                            dtype=loader.array(self.values).dtype,
+                        )
+                    self.offset = self.keys.shape[2] if hasattr(self.keys, "shape") and len(self.keys.shape) > 2 else self.offset
                     self._idx = self.keys.shape[2] if self.keys is not None else 0
-                    return k, v
+                    return self.keys, self.values
 
                 @property
                 def state(self):
@@ -1681,6 +1872,17 @@ class MockMLXLoader(importlib.abc.Loader):
             m.scaled_dot_product_attention = lambda queries, *a, **k: loader.array(
                 np.zeros(loader.array(queries).shape, dtype=loader.array(queries)._data.dtype)
             )
+
+            def _create_attention_mask(h, cache=None, window_size=None, return_array=False):
+                n = loader.array(h).shape[1]
+                if cache is not None and hasattr(cache, "make_mask"):
+                    return cache.make_mask(n, return_array=return_array, window_size=window_size)
+                if n == 1:
+                    return None
+                return "causal"
+
+            m.create_attention_mask = _create_attention_mask
+            m.create_ssm_mask = lambda h, cache=None: None
             sys.modules[spec.name] = m
             return m
 
@@ -1727,7 +1929,91 @@ class MockMLXLoader(importlib.abc.Loader):
                 args_cls = getattr(mod, "ModelArgs", None) or getattr(mod, "TextModelArgs", None) or type("Args", (), {})
                 return model_cls, args_cls
             m._get_classes = _get_classes
-            m.load_config = lambda *a, **k: {"model_type": "test"}
+
+            def _load_config(model_path, **k):
+                cfg_path = Path(model_path) / "config.json"
+                if cfg_path.is_file():
+                    return json.loads(cfg_path.read_text())
+                return {"model_type": "test"}
+
+            m.load_config = _load_config
+
+            def _quantize_model(model, config, group_size, bits, mode="affine", quant_predicate=None):
+                import mlx.nn as nn
+
+                quantized_config = dict(config)
+                quant_predicate = quant_predicate or getattr(model, "quant_predicate", None)
+                group_size = group_size or 64
+                bits = bits or 4
+                quant_params = {"group_size": group_size, "bits": bits, "mode": mode}
+                fine_grained_config = "quantization" in quantized_config
+                if not fine_grained_config:
+                    quantized_config["quantization"] = dict(quant_params)
+
+                def wrapped_predicate(path, module):
+                    if not hasattr(module, "to_quantized"):
+                        return False
+                    if module.weight.shape[-1] % group_size != 0:
+                        return False
+                    bool_or_params = True
+                    if quant_predicate is not None:
+                        bool_or_params = quant_predicate(path, module)
+                    if isinstance(bool_or_params, dict):
+                        quantized_config["quantization"][path] = bool_or_params
+                    elif fine_grained_config and bool_or_params:
+                        quantized_config["quantization"][path] = quant_params
+                    return bool_or_params
+
+                nn.quantize(model, group_size, bits, mode=mode, class_predicate=wrapped_predicate)
+                quantized_config["quantization_config"] = quantized_config["quantization"]
+                return model, quantized_config
+
+            m.quantize_model = _quantize_model
+
+            def _load_model(
+                model_path, lazy=False, strict=True, model_config=None,
+                get_model_classes=None, trust_remote_code=False,
+            ):
+                import mlx.core as mx
+
+                path = Path(model_path)
+                config = _load_config(path)
+                if model_config:
+                    config.update(model_config)
+                weight_files = sorted(path.glob("model*.safetensors"))
+                if not weight_files and strict:
+                    raise FileNotFoundError(f"No safetensors found in {path}")
+                weights = {}
+                for wf in weight_files:
+                    weights.update(mx.load(str(wf)))
+                model_cls, args_cls = (get_model_classes or _get_classes)(config)
+                model_args = (
+                    args_cls.from_dict(config) if hasattr(args_cls, "from_dict") else args_cls(**config)
+                )
+                model = model_cls(model_args)
+                quantization = config.get("quantization")
+                if quantization:
+                    import mlx.nn as nn
+
+                    def class_predicate(path, module):
+                        if not hasattr(module, "to_quantized"):
+                            return False
+                        per_layer = quantization.get(path) if isinstance(quantization, dict) else None
+                        if isinstance(per_layer, dict):
+                            return per_layer
+                        return per_layer if per_layer is not None else True
+
+                    nn.quantize(
+                        model,
+                        quantization.get("group_size", 64) if isinstance(quantization, dict) else 64,
+                        quantization.get("bits", 4) if isinstance(quantization, dict) else 4,
+                        mode=quantization.get("mode", "affine") if isinstance(quantization, dict) else "affine",
+                        class_predicate=class_predicate,
+                    )
+                model.load_weights(list(weights.items()), strict=strict)
+                return model, config
+
+            m.load_model = _load_model
             sys.modules[spec.name] = m
             return m
 
@@ -1794,6 +2080,28 @@ class MockMLXLoader(importlib.abc.Loader):
             subname = spec.name.split(".")[-1]
             for p in sys.path:
                 candidate = Path(p) / "mlx_lm" / "tool_parsers" / f"{subname}.py"
+                if candidate.is_file():
+                    src_loader = importlib.machinery.SourceFileLoader(spec.name, str(candidate))
+                    mod = src_loader.load_module()
+                    sys.modules[spec.name] = mod
+                    return mod
+
+        if spec.name == "mlx_lm.tokenizer_utils":
+            # Pure-Python (no mlx.core dependency) — load the real source so
+            # TokenizerWrapper/detokenizers behave exactly like production.
+            for p in sys.path:
+                candidate = Path(p) / "mlx_lm" / "tokenizer_utils.py"
+                if candidate.is_file():
+                    src_loader = importlib.machinery.SourceFileLoader(spec.name, str(candidate))
+                    mod = src_loader.load_module()
+                    sys.modules[spec.name] = mod
+                    return mod
+
+        if spec.name == "mlx_embeddings.models.modernbert":
+            # Real class needed so patches can monkeypatch its methods (e.g.
+            # ModernBertModel._update_attention_mask) like production does.
+            for p in sys.path:
+                candidate = Path(p) / "mlx_embeddings" / "models" / "modernbert.py"
                 if candidate.is_file():
                     src_loader = importlib.machinery.SourceFileLoader(spec.name, str(candidate))
                     mod = src_loader.load_module()
@@ -1876,69 +2184,6 @@ class MockMLXLoader(importlib.abc.Loader):
             if not hasattr(loader, "_generation_stream"):
                 loader._generation_stream = type("Stream", (), {})()
             m.generation_stream = loader._generation_stream
-            sys.modules[spec.name] = m
-            return m
-
-        if spec.name == "mlx_lm.tokenizer_utils":
-            m = MockModule(spec.name)
-
-            class NaiveStreamingDetokenizer:
-                def __init__(self, tokenizer):
-                    self.tokenizer = tokenizer
-                    self._tokens = []
-                    self.last_subword_token = None
-                    self.last_segment = ""
-                    self.text = ""
-
-                def add_token(self, token):
-                    self._tokens.append(token)
-                    self.last_subword_token = token
-
-                def reset(self):
-                    self._tokens = []
-                    self.last_subword_token = None
-                    self.last_segment = ""
-                    self.text = ""
-
-                def finalize(self):
-                    result = "".join(chr(t) if t < 128 else "?" for t in self._tokens)
-                    self.text = result
-                    self.last_segment = result
-                    return result
-
-                def result(self):
-                    return ""
-
-                def decode(self, tokens):
-                    return "mocked"
-
-            class SPMStreamingDetokenizer(NaiveStreamingDetokenizer):
-                pass
-
-            class BPEStreamingDetokenizer(NaiveStreamingDetokenizer):
-                pass
-
-            def _is_spm_decoder(decoder):
-                if isinstance(decoder, dict):
-                    return decoder.get("type", "") == "Sentencepiece"
-                decoder_type = getattr(decoder, "type", "")
-                return decoder_type == "Sentencepiece"
-
-            def _is_spm_decoder_no_space(decoder):
-                return _is_spm_decoder(decoder)
-
-            def _is_bpe_decoder(decoder):
-                if isinstance(decoder, dict):
-                    return decoder.get("type", "") in ("BPE", "ByteLevel")
-                decoder_type = getattr(decoder, "type", "")
-                return decoder_type in ("BPE", "ByteLevel")
-
-            m.NaiveStreamingDetokenizer = NaiveStreamingDetokenizer
-            m.SPMStreamingDetokenizer = SPMStreamingDetokenizer
-            m.BPEStreamingDetokenizer = BPEStreamingDetokenizer
-            m._is_spm_decoder = _is_spm_decoder
-            m._is_spm_decoder_no_space = _is_spm_decoder_no_space
-            m._is_bpe_decoder = _is_bpe_decoder
             sys.modules[spec.name] = m
             return m
 
@@ -2279,10 +2524,18 @@ class MockMLXLoader(importlib.abc.Loader):
                     m._rng = np.random.default_rng(seed)
                     m.state = loader.array([seed & 0xFFFFFFFF], dtype="uint32")
 
+                def _randint(low, high=None, shape=(), dtype=None, **k):
+                    if high is None:
+                        low, high = 0, low
+                    out = loader.array(m._rng.integers(low, high, size=shape))
+                    _advance_state()
+                    return out
+
                 m.uniform = _uniform
                 m.normal = _normal
                 m.categorical = _categorical
                 m.seed = _seed
+                m.randint = _randint
             if spec.name == "mlx.core.linalg":
                 m.norm = lambda a, **k: loader.array(
                     np.linalg.norm(loader.array(a)._data, **k)
@@ -2291,6 +2544,14 @@ class MockMLXLoader(importlib.abc.Loader):
                 m.scaled_dot_product_attention = lambda queries, *a, **k: loader.array(
                     np.zeros(loader.array(queries).shape, dtype=loader.array(queries)._data.dtype)
                 )
+                def _rms_norm(x, weight, eps, **k):
+                    arr = loader.array(x)._data
+                    variance = np.mean(np.square(arr), axis=-1, keepdims=True)
+                    normed = arr / np.sqrt(variance + eps)
+                    if weight is not None:
+                        normed = normed * loader.array(weight)._data
+                    return loader.array(normed)
+                m.rms_norm = _rms_norm
             sys.modules[spec.name] = m
             return m
 

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """/v1/embeddings must not answer 200 with null-filled vectors (#3507)."""
 
 from __future__ import annotations

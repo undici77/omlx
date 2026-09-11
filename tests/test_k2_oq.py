@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """K2 uses standard oQ levels and preserves output-head calibration."""
 
 import json
@@ -17,6 +18,18 @@ from omlx.oq import (
 )
 from omlx.patches.k2_horizon import apply_k2_horizon_patch
 from omlx.patches.k2_horizon.k2_horizon_model import Model, ModelArgs
+
+
+def _has_mock() -> bool:
+    # Name comparison (not isinstance): pytest's assertion-rewriting import
+    # hook can load omlx.utils.mlx_mock as a distinct module object from the
+    # one conftest.py installed into sys.meta_path.
+    try:
+        import sys
+
+        return any(type(f).__name__ == "MockMLXFinder" for f in sys.meta_path)
+    except Exception:
+        return False
 
 
 @pytest.mark.parametrize("level", sorted(OQ_LEVELS))
@@ -89,6 +102,11 @@ def k2_checkpoint(tmp_path, request):
     return source
 
 
+@pytest.mark.skipif(
+    _has_mock(),
+    reason="Mock MLX active — real oQ streaming quantization + forward-pass "
+           "numerics (nn.Linear/nn.Embedding matmul) are unavailable in the mock",
+)
 @pytest.mark.parametrize("level", sorted(OQ_LEVELS))
 def test_every_oq_level_converts_and_reloads_k2(k2_checkpoint, tmp_path, level):
     from mlx_lm.models.cache import make_prompt_cache

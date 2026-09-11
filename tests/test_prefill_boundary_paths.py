@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Characterize existing prefill boundaries without changing execution policy."""
 
 from contextlib import ExitStack

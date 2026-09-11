@@ -12,6 +12,18 @@ from omlx.patches.k2_horizon import apply_k2_horizon_patch
 from omlx.patches.k2_horizon.k2_horizon_model import GroupedRMSNorm, Model, ModelArgs
 
 
+def _has_mock() -> bool:
+    # Name comparison (not isinstance): pytest's assertion-rewriting import
+    # hook can load omlx.utils.mlx_mock as a distinct module object from the
+    # one conftest.py installed into sys.meta_path.
+    try:
+        import sys
+
+        return any(type(f).__name__ == "MockMLXFinder" for f in sys.meta_path)
+    except Exception:
+        return False
+
+
 def small_config(**overrides):
     return dict(
         dict(
@@ -41,6 +53,11 @@ def small_config(**overrides):
     )
 
 
+@pytest.mark.skipif(
+    _has_mock(),
+    reason="Mock MLX active — nn.Linear/nn.Embedding are identity passthroughs, "
+           "not real matmul/gather, so real forward-pass numerics are unavailable",
+)
 @pytest.mark.parametrize("kind", ["dense", "moe", "mova", "yarn", "partial"])
 def test_model_cache_and_quantization(kind):
     apply_k2_horizon_patch()
@@ -97,6 +114,11 @@ def test_grouped_norm(groups, length):
     assert mx.allclose(actual.astype(mx.float32), expected, atol=0.01).item()
 
 
+@pytest.mark.skipif(
+    _has_mock(),
+    reason="Mock MLX active — nn.Linear/nn.Embedding are identity passthroughs, "
+           "not real matmul/gather, so real forward-pass numerics are unavailable",
+)
 @pytest.mark.parametrize("quantized", [False, True])
 def test_indexed_checkpoint_roundtrip(tmp_path, quantized):
     import json
@@ -124,7 +146,12 @@ def test_indexed_checkpoint_roundtrip(tmp_path, quantized):
         utils.load_model(tmp_path)
 
 
+@pytest.mark.slow
 def test_mova_router_preserves_source_partition_rounding():
+    # Depends on true bf16 round-half-to-even during the partitioned matmul
+    # (1 + 1/256 rounds down to 1.0 in real bf16's 7-bit mantissa). The MLX
+    # mock backs bfloat16 with float16 (10-bit mantissa), which doesn't
+    # reproduce that rounding. Real hardware only.
     from omlx.patches.k2_horizon.k2_horizon_model import router_logits
 
     x = mx.ones((1, 4), mx.bfloat16)

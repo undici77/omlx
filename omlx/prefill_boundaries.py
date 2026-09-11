@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Shared block-boundary rules for external and resumable prefill."""
 
 

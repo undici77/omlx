@@ -12,6 +12,18 @@ from omlx.admin import ane_tuning
 from omlx.model_settings import ModelSettings
 
 
+def _has_mock() -> bool:
+    # Name comparison (not isinstance): pytest's assertion-rewriting import
+    # hook can load omlx.utils.mlx_mock as a distinct module object from the
+    # one conftest.py installed into sys.meta_path.
+    try:
+        import sys
+
+        return any(type(f).__name__ == "MockMLXFinder" for f in sys.meta_path)
+    except Exception:
+        return False
+
+
 @pytest.fixture
 def tuner_pool(monkeypatch, tmp_path):
     from omlx.custom_kernels.qwen35_prefill import fast
@@ -144,6 +156,7 @@ async def test_k2_cleanup_keeps_run_active(
     engine.stream_generate.assert_not_called()
 
 
+@pytest.mark.skipif(_has_mock(), reason="Mock MLX active — nn.Linear.to_quantized() unavailable")
 @pytest.mark.parametrize("dtype", ["float16", "bfloat16"])
 @pytest.mark.parametrize("bits", [None, 4, 8])
 @pytest.mark.parametrize("shared", [False, True])

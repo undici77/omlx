@@ -209,7 +209,6 @@ def pytest_collection_modifyitems(config, items):
         # Qwen3.5 ANE prefill (needs QuantizedLinear.scales / nn.Module.modules)
         ("test_qwen35_ane_prefill", "MLX mock active — QuantizedLinear.scales and nn.Module.modules unavailable"),
         # New MLX-dependent test files from merge (GLM-5 Next / Qwen4 Exp compat)
-        ("test_clone_mlx_model_fp16", "MLX mock active — mlx.isfinite() unavailable in mock"),
         ("test_mlx_vlm_glm5_next_compat", "MLX mock active — GLM-5 Next VLM vendor classes / PoolingCache / native indexer unavailable"),
         ("test_mlx_vlm_qwen4_exp_compat", "MLX mock active — Qwen4 Exp configure_ple_runtime/configure_mtp_runtime/to_fp8 unavailable"),
         ("test_vlm_qwen4_exp_loader", "MLX mock active — RotatingKVCache.is_trimmable / configure_ple_runtime unavailable"),
@@ -218,6 +217,8 @@ def pytest_collection_modifyitems(config, items):
         ("test_qwen4_qsa_incremental_cache", "MLX mock active — contiguous_causal_gathered_qsa / array.swapaxes unavailable in mock"),
         ("test_qwen4_qsa_native_indexer", "MLX mock active — _native_indexer_scores native kernel unavailable in mock"),
         ("test_qwen4_qsa_sparse_gqa", "MLX mock active — _native_sparse_gqa_attention native kernel unavailable in mock"),
+        ("test_qwen4_qsa_gather_rows", "MLX mock active — mlx_vlm.models.qwen4_exp.qsa_fast vendor module unavailable in mock"),
+        ("test_qwen4_qsa_verify_gather", "MLX mock active — mlx_vlm.models.qwen4_exp vendor Qwen4ExpAttention/nn.Module unavailable in mock"),
         ("test_qwen4_hc_projection", "MLX mock active — fuse_hyper_connection_projections native kernel unavailable in mock"),
         # Qwen4 QSA prefill memory routing (real MLX array precision + cache internals)
         ("test_qwen4_qsa_prefill_memory", "MLX mock active — tiled-SDPA precision & TurboQuant cache internals unavailable in mock"),

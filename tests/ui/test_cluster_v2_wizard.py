@@ -18,6 +18,7 @@ import json
 import re
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -1343,9 +1344,19 @@ def _run_wizard(body: str) -> dict:
 const component = clusterV2Wizard();
 {body}
 """
-    result = subprocess.run(
-        [node, "-e", script], capture_output=True, text=True, timeout=60
-    )
+    # Written to a file rather than passed via `-e`: the combined script can
+    # exceed the OS argument-list limit (E2BIG) once the fixture JS is inlined.
+    with tempfile.NamedTemporaryFile(
+        "w", suffix=".js", delete=False
+    ) as script_file:
+        script_file.write(script)
+        script_path = script_file.name
+    try:
+        result = subprocess.run(
+            [node, script_path], capture_output=True, text=True, timeout=60
+        )
+    finally:
+        Path(script_path).unlink(missing_ok=True)
     assert result.returncode == 0, result.stderr
     return json.loads(result.stdout)
 

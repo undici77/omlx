@@ -32,6 +32,68 @@ def _map_dtype(dtype):
     return dtype
 
 
+def _e4m3_encode(x):
+    """Encode float32 values as E4M3FN byte codes (sign.4exp.3mant, bias 7)."""
+    x = np.asarray(x, dtype=np.float32)
+    sign = x < 0
+    a = np.minimum(np.abs(x), np.float32(448.0))
+    tiny = np.float32(2.0**-9)
+    a_c = np.maximum(a, tiny)
+    exponent = np.floor(np.log2(a_c))
+    e_norm = np.clip(exponent, -6, 8)
+    step_norm = np.exp2(e_norm - 3).astype(np.float32)
+    m_norm = np.round(a / step_norm) - 8
+    overflow = m_norm >= 8
+    e_norm = np.where(overflow, np.minimum(e_norm + 1, 8), e_norm)
+    m_norm = np.where(overflow, 0, m_norm)
+    m_norm = np.clip(m_norm, 0, 7)
+    m_den = np.clip(np.round(a / tiny), 0, 7)
+    is_normal = exponent >= -6
+    e_field = np.where(is_normal, e_norm + 7, 0).astype(np.uint8)
+    m_field = np.where(is_normal, m_norm, m_den).astype(np.uint8)
+    code = (e_field << 3) | m_field
+    code = np.where(sign, code | np.uint8(0x80), code)
+    return code.astype(np.uint8)
+
+
+class _MockDevice:
+    """Stable, comparable device sentinel (real MLX devices compare by type)."""
+
+    def __init__(self, kind):
+        self.kind = kind
+
+    def __eq__(self, other):
+        return isinstance(other, _MockDevice) and self.kind == other.kind
+
+    def __ne__(self, other):
+        return not self.__eq__(other)
+
+    def __hash__(self):
+        return hash(self.kind)
+
+    def __repr__(self):
+        return f"Device(type=DeviceType.{self.kind}, index=0)"
+
+
+_MOCK_DEVICE_CPU = _MockDevice("cpu")
+_MOCK_DEVICE_GPU = _MockDevice("gpu")
+
+
+def _e4m3_decode(codes):
+    """Decode E4M3FN byte codes back to float32 values."""
+    codes = np.asarray(codes, dtype=np.uint8)
+    sign = (codes & 0x80) != 0
+    e_field = ((codes >> 3) & 0xF).astype(np.int32)
+    m_field = (codes & 0x7).astype(np.float32)
+    is_nan = (e_field == 15) & (m_field == 7)
+    normal_val = (1.0 + m_field / 8.0) * np.exp2((e_field - 7).astype(np.float32))
+    denorm_val = (m_field / 8.0) * np.float32(2.0**-6)
+    val = np.where(e_field == 0, denorm_val, normal_val).astype(np.float32)
+    val = np.where(is_nan, np.float32(np.nan), val)
+    val = np.where(sign, -val, val)
+    return val.astype(np.float32)
+
+
 class MockMLXLoader(importlib.abc.Loader):
     class array:
         def __init__(self, data=None, dtype=None):
@@ -78,6 +140,9 @@ class MockMLXLoader(importlib.abc.Loader):
         def moveaxis(self, src, dst):
             return self.__class__(np.moveaxis(self._data, src, dst), dtype=self.dtype)
 
+        def swapaxes(self, axis1, axis2):
+            return self.__class__(self._data.swapaxes(axis1, axis2), dtype=self.dtype)
+
         def __float__(self):
             return float(self.item())
 
@@ -90,6 +155,8 @@ class MockMLXLoader(importlib.abc.Loader):
         def reshape(self, *shape):
             if len(shape) == 1 and isinstance(shape[0], (list, tuple)):
                 shape = shape[0]
+            if self._data.size == 0 and -1 in shape:
+                shape = tuple(0 if d == -1 else d for d in shape)
             return self.__class__(self._data.reshape(shape), dtype=self.dtype)
 
         def squeeze(self, axis=None):
@@ -191,6 +258,9 @@ class MockMLXLoader(importlib.abc.Loader):
         def __eq__(self, other):
             return self.__class__(self._data == self._unwrap(other), dtype="bool_")
 
+        def __ne__(self, other):
+            return self.__class__(self._data != self._unwrap(other), dtype="bool_")
+
         def __lt__(self, other):
             return self.__class__(self._data < self._unwrap(other), dtype="bool_")
 
@@ -204,16 +274,16 @@ class MockMLXLoader(importlib.abc.Loader):
             return self.__class__(self._data >= self._unwrap(other), dtype="bool_")
 
         def __and__(self, other):
-            return self.__class__(self._data & self._unwrap(other), dtype="bool_")
+            return self.__class__(self._data & self._unwrap(other))
 
         def __rand__(self, other):
-            return self.__class__(self._unwrap(other) & self._data, dtype="bool_")
+            return self.__class__(self._unwrap(other) & self._data)
 
         def __or__(self, other):
-            return self.__class__(self._data | self._unwrap(other), dtype="bool_")
+            return self.__class__(self._data | self._unwrap(other))
 
         def __ror__(self, other):
-            return self.__class__(self._unwrap(other) | self._data, dtype="bool_")
+            return self.__class__(self._unwrap(other) | self._data)
 
         def __invert__(self):
             return self.__class__(np.invert(self._data))
@@ -226,6 +296,36 @@ class MockMLXLoader(importlib.abc.Loader):
 
         def __rpow__(self, other):
             return self.__class__(self._unwrap(other) ** self._data)
+
+        def __mod__(self, other):
+            return self.__class__(self._data % self._unwrap(other))
+
+        def __rmod__(self, other):
+            return self.__class__(self._unwrap(other) % self._data)
+
+        def __floordiv__(self, other):
+            return self.__class__(self._data // self._unwrap(other))
+
+        def __rfloordiv__(self, other):
+            return self.__class__(self._unwrap(other) // self._data)
+
+        def __lshift__(self, other):
+            return self.__class__(self._data << self._unwrap(other))
+
+        def __rlshift__(self, other):
+            return self.__class__(self._unwrap(other) << self._data)
+
+        def __rshift__(self, other):
+            return self.__class__(self._data >> self._unwrap(other))
+
+        def __rrshift__(self, other):
+            return self.__class__(self._unwrap(other) >> self._data)
+
+        def __xor__(self, other):
+            return self.__class__(self._data ^ self._unwrap(other))
+
+        def __rxor__(self, other):
+            return self.__class__(self._unwrap(other) ^ self._data)
 
         def __array__(self, dtype=None):
             return self._data.astype(dtype) if dtype else self._data
@@ -286,9 +386,9 @@ class MockMLXLoader(importlib.abc.Loader):
                 if name not in self.__mock_items:
                     if self.__name__ == "mlx.core":
                         if name == "gpu":
-                            return type("Device", (), {})()
+                            return _MOCK_DEVICE_GPU
                         if name == "cpu":
-                            return type("Device", (), {})()
+                            return _MOCK_DEVICE_CPU
                         if name == "metal":
                             m = MockModule("mlx.core.metal")
                             m.is_available = lambda: False
@@ -361,7 +461,13 @@ class MockMLXLoader(importlib.abc.Loader):
                         if name == "issubdtype":
                             return lambda dt, kind: bool(np.issubdtype(np.dtype(_map_dtype(dt) or "float32"), np.floating if kind in ("floating", getattr(np, "floating", object())) else np.dtype(_map_dtype(kind) or "float32")))
                         if name == "from_fp8":
-                            return lambda x, dtype=None, **k: loader.array(loader.array(x)._data, dtype=dtype)
+                            return lambda x, dtype=None, **k: loader.array(
+                                _e4m3_decode(loader.array(x)._data), dtype=dtype
+                            )
+                        if name == "to_fp8":
+                            return lambda x, **k: loader.array(
+                                _e4m3_encode(loader.array(x)._data), dtype="uint8"
+                            )
                         if name == "dequantize":
                             return lambda qw, scales=None, biases=None, **k: loader.array(loader.array(qw)._data.astype(np.float32))
                         if name == "quantize":
@@ -506,7 +612,7 @@ class MockMLXLoader(importlib.abc.Loader):
                             def _load(path, return_metadata=False, rm=False):
                                 import struct
 
-                                with open(path, "rb") as f:
+                                def _read(f):
                                     header_len = struct.unpack("<Q", f.read(8))[0]
                                     header = json.loads(f.read(header_len).decode("utf-8"))
                                     base = 8 + header_len
@@ -533,7 +639,14 @@ class MockMLXLoader(importlib.abc.Loader):
                                         f.seek(base + start)
                                         buf = f.read(end - start)
                                         arr = np.frombuffer(buf, dtype=dtype_map[info["dtype"]]).reshape(info["shape"])
-                                        tensors[key] = loader.array(arr).view("bfloat16") if info["dtype"] in ("BF16", "U16") else loader.array(arr)
+                                        tensors[key] = loader.array(arr).view("bfloat16") if info["dtype"] == "BF16" else loader.array(arr)
+                                    return tensors, metadata
+
+                                if hasattr(path, "read"):
+                                    tensors, metadata = _read(path)
+                                else:
+                                    with open(path, "rb") as f:
+                                        tensors, metadata = _read(f)
                                 if rm or return_metadata:
                                     return tensors, metadata
                                 return tensors
@@ -541,27 +654,59 @@ class MockMLXLoader(importlib.abc.Loader):
                             return _load
                         if name == "save_safetensors":
                             def _save_safetensors(path, tensors, metadata=None):
-                                from safetensors.numpy import save_file
+                                # Written by hand (not via safetensors.numpy.save_file)
+                                # so a bfloat16 tensor keeps its real "BF16" dtype tag —
+                                # NumPy has no native bfloat16 dtype, so the real
+                                # save_file() would infer "U16" instead, which mx.load's
+                                # mock loader (correctly) does NOT reinterpret as bfloat16.
+                                import struct
 
-                                save_file(
-                                    {
-                                        k: (
-                                            np.array(v.view("uint16")._data)
-                                            if hasattr(v, "dtype") and getattr(v, "dtype", None) == "bfloat16"
-                                            else np.array(v._data if hasattr(v, "_data") else v)
-                                        )
-                                        for k, v in tensors.items()
-                                    },
-                                    str(path),
-                                    metadata=metadata,
-                                )
+                                dtype_tag = {
+                                    np.dtype(np.float16): "F16",
+                                    np.dtype(np.float32): "F32",
+                                    np.dtype(np.int8): "I8",
+                                    np.dtype(np.int16): "I16",
+                                    np.dtype(np.int32): "I32",
+                                    np.dtype(np.int64): "I64",
+                                    np.dtype(np.uint8): "U8",
+                                    np.dtype(np.uint16): "U16",
+                                    np.dtype(np.uint32): "U32",
+                                    np.dtype(np.uint64): "U64",
+                                    np.dtype(np.bool_): "BOOL",
+                                }
+                                header = {}
+                                if metadata:
+                                    header["__metadata__"] = {str(k): str(v) for k, v in metadata.items()}
+                                buffers = []
+                                offset = 0
+                                for k, v in tensors.items():
+                                    arr = v if hasattr(v, "_data") else loader.array(v)
+                                    is_bf16 = getattr(arr, "dtype", None) == "bfloat16"
+                                    raw = np.ascontiguousarray(
+                                        arr.view("uint16")._data if is_bf16 else arr._data
+                                    )
+                                    tag = "BF16" if is_bf16 else dtype_tag.get(raw.dtype, "F32")
+                                    nbytes = raw.nbytes
+                                    header[k] = {
+                                        "dtype": tag,
+                                        "shape": list(arr.shape),
+                                        "data_offsets": [offset, offset + nbytes],
+                                    }
+                                    buffers.append(raw.tobytes())
+                                    offset += nbytes
+                                header_bytes = json.dumps(header).encode("utf-8")
+                                with open(path, "wb") as f:
+                                    f.write(struct.pack("<Q", len(header_bytes)))
+                                    f.write(header_bytes)
+                                    for buf in buffers:
+                                        f.write(buf)
                                 return None
 
                             return _save_safetensors
                         if name in ("eval", "async_eval", "synchronize"):
                             return lambda *a, **k: None
                         if name == "default_device":
-                            return lambda: type("Device", (), {})()
+                            return lambda: _MOCK_DEVICE_CPU
                         if name == "new_thread_local_stream":
                             return lambda d: type("Stream", (), {})()
                         if name == "clear_cache":
@@ -854,6 +999,26 @@ class MockMLXLoader(importlib.abc.Loader):
                                 a = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
                                 b = args[1]._data if hasattr(args[1], "_data") else np.asarray(args[1])
                                 return loader.array(a % b)
+                            if _n == "right_shift":
+                                a = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                b = args[1]._data if hasattr(args[1], "_data") else np.asarray(args[1])
+                                return loader.array(a >> b)
+                            if _n == "left_shift":
+                                a = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                b = args[1]._data if hasattr(args[1], "_data") else np.asarray(args[1])
+                                return loader.array(a << b)
+                            if _n == "bitwise_and":
+                                a = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                b = args[1]._data if hasattr(args[1], "_data") else np.asarray(args[1])
+                                return loader.array(a & b)
+                            if _n == "bitwise_or":
+                                a = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                b = args[1]._data if hasattr(args[1], "_data") else np.asarray(args[1])
+                                return loader.array(a | b)
+                            if _n == "bitwise_xor":
+                                a = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                b = args[1]._data if hasattr(args[1], "_data") else np.asarray(args[1])
+                                return loader.array(a ^ b)
                             if _n == "matmul":
                                 a = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
                                 b = args[1]._data if hasattr(args[1], "_data") else np.asarray(args[1])
@@ -1243,7 +1408,7 @@ class MockMLXLoader(importlib.abc.Loader):
                             if _n == "deserialize":
                                 return loader.array(np.array([1.0, 2.0, 3.0]))
                             if _n == "default_device":
-                                return MockModule("mlx.core.device")
+                                return _MOCK_DEVICE_CPU
                             if _n == "default_stream":
                                 return None
                             if _n == "device":
@@ -1251,9 +1416,9 @@ class MockMLXLoader(importlib.abc.Loader):
                             if _n == "stream":
                                 return MockModule("mlx.core.stream")
                             if _n == "gpu":
-                                return MockModule("mlx.core.gpu")
+                                return _MOCK_DEVICE_GPU
                             if _n == "cpu":
-                                return MockModule("mlx.core.cpu")
+                                return _MOCK_DEVICE_CPU
                             if _n == "metal":
                                 return MockModule("mlx.core.metal")
 
@@ -1297,6 +1462,23 @@ class MockMLXLoader(importlib.abc.Loader):
                                 defaults = {"draft_window_size": 1024, "draft_sink_size": 64, "verify_mode": "adaptive"}
                                 defaults.update({k: v for k, v in kwargs.items() if v is not None})
                                 return SimpleNamespace(**defaults)
+                            if _n == "silu":
+                                arr = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                return loader.array(arr / (1.0 + np.exp(-arr)))
+                            if _n == "logaddexp":
+                                a = args[0]._data if hasattr(args[0], "_data") else np.asarray(args[0])
+                                b = args[1]._data if hasattr(args[1], "_data") else np.asarray(args[1])
+                                return loader.array(np.logaddexp(a, b))
+                            if _n == "einsum":
+                                subscripts = args[0]
+                                operands = [a._data if hasattr(a, "_data") else np.asarray(a) for a in args[1:]]
+                                return loader.array(np.einsum(subscripts, *operands))
+                            if _n == "set_wired_limit":
+                                return 0
+                            if _n == "wired_limit":
+                                return contextlib.nullcontext()
+                            if _n == "new_stream":
+                                return type("Stream", (), {})()
                             raise NotImplementedError(
                                 f"mlx.{_n}() is not implemented in the MLX mock. Add it to omlx/utils/mlx_mock.py."
                             )
@@ -1402,6 +1584,51 @@ class MockMLXLoader(importlib.abc.Loader):
                     self._modules.pop(name, None)
                     self._module_lists.pop(name, None)
 
+                def __setitem__(self, name, value):
+                    setattr(self, name, value)
+
+                def __getitem__(self, name):
+                    return getattr(self, name)
+
+                def __contains__(self, name):
+                    return hasattr(self, name)
+
+                def get(self, name, default=None):
+                    return getattr(self, name, default)
+
+                @staticmethod
+                def is_module(value):
+                    return isinstance(value, Module)
+
+                def leaf_modules(self, prefix=""):
+                    result = {}
+                    for name, module in self._modules.items():
+                        path = f"{prefix}{name}"
+                        if not module._modules and not module._module_lists:
+                            result[path] = module
+                        else:
+                            result.update(module.leaf_modules(prefix=f"{path}."))
+                    for name, modules in self._module_lists.items():
+                        for idx, module in enumerate(modules):
+                            path = f"{prefix}{name}.{idx}"
+                            if not module._modules and not module._module_lists:
+                                result[path] = module
+                            else:
+                                result.update(module.leaf_modules(prefix=f"{path}."))
+                    return result
+
+                def train(self, mode=True):
+                    self._training = mode
+                    for module in self._modules.values():
+                        module.train(mode)
+                    for modules in self._module_lists.values():
+                        for module in modules:
+                            module.train(mode)
+                    return self
+
+                def eval(self):
+                    return self.train(False)
+
                 def __call__(self, *args, **kwargs):
                     return args[0] if args else loader.array(np.zeros((1, 1)))
 
@@ -1474,7 +1701,8 @@ class MockMLXLoader(importlib.abc.Loader):
                                 target = target[int(part)]
                             else:
                                 target = getattr(target, part)
-                        setattr(target, parts[-1], loader.array(value))
+                        arr = value if hasattr(value, "_data") else loader.array(value)
+                        setattr(target, parts[-1], arr)
 
             class Linear(Module):
                 def __init__(self, in_features, out_features, bias=True, *args, **kwargs):
@@ -1483,10 +1711,20 @@ class MockMLXLoader(importlib.abc.Loader):
                     if bias:
                         self.bias = loader.array(np.zeros((out_features,), dtype=np.float32))
 
+                def __call__(self, x):
+                    out = loader.array(x) @ self.weight.T
+                    if hasattr(self, "bias"):
+                        out = out + self.bias
+                    return out
+
             class Embedding(Module):
                 def __init__(self, num_embeddings, embedding_dim, *args, **kwargs):
                     super().__init__()
                     self.weight = loader.array(np.zeros((num_embeddings, embedding_dim), dtype=np.float32))
+
+                def __call__(self, x):
+                    idx = loader.array(x)._data.astype(np.int64)
+                    return loader.array(self.weight._data[idx])
 
             class LayerNorm(Module):
                 def __init__(self, normalized_shape, eps=1e-5, *args, **kwargs):
@@ -1508,6 +1746,11 @@ class MockMLXLoader(importlib.abc.Loader):
 
             class Tanh(Module):
                 pass
+
+            class GELU(Module):
+                def __init__(self, approx="none"):
+                    super().__init__()
+                    self._approx = approx
 
             class QuantizedLinear(Module):
                 def __init__(self, in_features, out_features, bias=True, group_size=64, bits=4, mode="affine", *args, **kwargs):
@@ -1582,6 +1825,7 @@ class MockMLXLoader(importlib.abc.Loader):
             m.RMSNorm = RMSNorm
             m.Dropout = Dropout
             m.Tanh = Tanh
+            m.GELU = GELU
             m.QuantizedLinear = QuantizedLinear
             m.quantize = _quantize
             sys.modules[spec.name] = m
@@ -1601,6 +1845,13 @@ class MockMLXLoader(importlib.abc.Loader):
                 @meta_state.setter
                 def meta_state(self, value):
                     pass
+
+                @classmethod
+                def from_state(cls, state, meta_state):
+                    obj = cls.__new__(cls)
+                    obj.state = state
+                    obj.meta_state = meta_state
+                    return obj
 
             class KVCache(_BaseCache):
                 def __init__(self, *args, **kwargs):
@@ -1748,11 +1999,25 @@ class MockMLXLoader(importlib.abc.Loader):
                             subs.append(c)
                     return cls(*subs)
 
-            class ArraysCache(KVCache):
+            class ArraysCache(_BaseCache):
                 def __init__(self, *a, **k):
-                    size = int(k.pop("size", 0) or 0)
-                    super().__init__(*a, **k)
+                    size = int(a[0]) if a else int(k.pop("size", 0) or 0)
+                    self.left_padding = None
+                    self.lengths = None
                     self.cache = [None] * size
+                    super().__init__(*a[1:], **k)
+
+                @property
+                def batch_size(self):
+                    for c in self.cache:
+                        if c is not None:
+                            return c.shape[0]
+                    if self.left_padding is not None:
+                        return self.left_padding.size
+                    elif self.lengths is not None:
+                        return self.lengths.size
+                    else:
+                        return 1
 
                 @property
                 def state(self):
@@ -1775,6 +2040,19 @@ class MockMLXLoader(importlib.abc.Loader):
                     raise NotImplementedError(
                         f"{type(self).__name__}.extend requires batched conversion first"
                     )
+
+                def make_mask(self, N):
+                    if self.left_padding is not None:
+                        pos = loader.array(np.arange(N))
+                        return pos >= loader.array(self.left_padding)._data[:, None]
+                    elif self.lengths is not None:
+                        pos = loader.array(np.arange(N))
+                        return pos < loader.array(self.lengths)._data[:, None]
+                    else:
+                        return None
+
+                def empty(self):
+                    return self.cache[0] is None
 
             class PoolingCache(_BaseCache):
                 def __init__(self, ratio=1, *a, **k):

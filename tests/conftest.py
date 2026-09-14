@@ -237,6 +237,39 @@ def pytest_collection_modifyitems(config, items):
         ("test_qwen4_eager_dispatch", "MLX mock active — Qwen4 eager GPU dispatch unavailable in mock"),
         ("test_qwen4_hc_fused", "MLX mock active — Qwen4 fused hyper-connection Metal kernels unavailable in mock"),
         ("test_qwen4_rms_norm", "MLX mock active — mx.fast.rms_norm ULP precision tests require Apple Silicon"),
+        # DeepSeek V4.1 native Metal kernels (packed attention, hyper-connection
+        # projections, grouped expert gather_qmm) — entirely gated on real GPU
+        # execution; has_symbol() cannot be faithfully mocked (see mlx_mock.py).
+        ("test_deepseek_v41_kernels.py", "MLX mock active — packed attention/hyper-connection Metal kernels unavailable"),
+        ("test_deepseek_v41_mtp.py", "MLX mock active — DSpark MTP verification needs native Metal kernels"),
+        ("test_deepseek_v41_attention_projection.py", "MLX mock active — attention projection Metal kernels unavailable"),
+        ("test_deepseek_v41_native_attention.py", "MLX mock active — native packed attention Metal kernel unavailable"),
+        ("test_deepseek_v41_affine.py", "MLX mock active — affine quantized Metal kernels unavailable"),
+        ("test_deepseek_v41_moe.py", "MLX mock active — grouped expert gather_qmm Metal kernels unavailable"),
+        ("test_deepseek_v41_activation.py", "MLX mock active — FP8 activation fusion Metal kernel unavailable"),
+        ("test_deepseek_v41_grouped_expert.py", "MLX mock active — has_symbol() cannot detect the missing grouped-expert native extension, so the file's own skipif never fires"),
+        # MoE expert offload: real mlx_lm.models.switch_layers.SwitchGLU/SwitchLinear
+        # are unmocked (fall back to the generic placeholder class) and mx.quantize's
+        # packed-shape semantics differ from real MLX (same documented limitation as
+        # the "test_oq" family above).
+        ("test_moe_expert_offload.py", "MLX mock active — real SwitchGLU/SwitchLinear unavailable and mx.quantize packed shapes differ from real MLX"),
+        ("test_moe_offload_compat.py", "MLX mock active — mx.quantize packed shapes differ from real MLX"),
+        ("test_deepseek_v41_attention_rounding.py", "MLX mock active — packed attention MMA Metal kernel unavailable"),
+        ("test_deepseek_v41_ssd.py", "MLX mock active — real SSD reopen path needs the packed attention Metal kernel"),
+        ("test_deepseek_v41_moe_offload.py", "MLX mock active — real SwitchLinear.weight and mx.quantize packed shapes unavailable"),
+        # DeepSeek V4.1 base engine: real forward graph takes mx.array as model
+        # input and relies on packed-cache shapes the NumPy mock cannot reproduce.
+        ("test_deepseek_v41.py", "MLX mock active — real forward graph + mx.array input / packed cache shapes differ from MLX"),
+        ("test_deepseek_v41_calibration.py", "MLX mock active — calibration quantized-projection inputs need real MLX"),
+        ("test_deepseek_v41_hyper_connection.py", "MLX mock active — hyper-connection projection uses native Metal kernel"),
+        ("test_deepseek_v41_offload.py", "MLX mock active — real mx.load checkpoint parse and SwitchLinear unavailable"),
+        ("test_deepseek_v41_oq.py", "MLX mock active — quantized_matmul/gather_qmm and mx.quantize packed shapes differ from MLX"),
+        ("test_deepseek_v41_routing.py", "MLX mock active — MoE routing sort/gather needs real MLX"),
+        ("test_deepseek_v41_sensitivity.py", "MLX mock active — quantized_matmul unavailable in mock"),
+        ("test_qwen35_oq_a8.py", "MLX mock active — Qwen3.5 a8 affine quantized packing differs from real MLX"),
+        # Cluster planner applies the mlx.core.ArraysCache.extract patch, which the
+        # mock does not define (ArraysCache is a placeholder without .extract).
+        ("test_cluster_planner.py", "MLX mock active — ArraysCache.extract guard needs real MLX"),
     ]
 
     _mock_skip = pytest.mark.skip(

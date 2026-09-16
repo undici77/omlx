@@ -384,6 +384,12 @@ class MockMLXLoader(importlib.abc.Loader):
                 if name in ("__path__", "__all__"):
                     return None
                 if name not in self.__mock_items:
+                    if self.__name__ == "mlx" and name in ("core", "nn", "optimizers", "data"):
+                        mod = loader.create_module(
+                            importlib.machinery.ModuleSpec(f"mlx.{name}", loader)
+                        )
+                        self.__mock_items[name] = mod
+                        return mod
                     if self.__name__ == "mlx.core":
                         if name == "gpu":
                             return _MOCK_DEVICE_GPU
@@ -2035,6 +2041,11 @@ class MockMLXLoader(importlib.abc.Loader):
 
                 def __getitem__(self, idx):
                     return self.cache[int(idx)]
+
+                def extract(self, idx):
+                    c = ArraysCache(len(self.cache))
+                    c.cache = [x[idx : idx + 1] for x in self.cache]
+                    return c
 
                 def extend(self, *a, **k):
                     raise NotImplementedError(

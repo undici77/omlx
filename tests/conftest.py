@@ -212,6 +212,7 @@ def pytest_collection_modifyitems(config, items):
         ("test_mlx_vlm_glm5_next_compat", "MLX mock active — GLM-5 Next VLM vendor classes / PoolingCache / native indexer unavailable"),
         ("test_mlx_vlm_qwen4_exp_compat", "MLX mock active — Qwen4 Exp configure_ple_runtime/configure_mtp_runtime/to_fp8 unavailable"),
         ("test_vlm_qwen4_exp_loader", "MLX mock active — RotatingKVCache.is_trimmable / configure_ple_runtime unavailable"),
+        ("test_qwen4_exp_mtp_expert_count", "MLX mock active — mlx_vlm.models.qwen4_exp vendor module unavailable in mock"),
         # Qwen4 QSA decode/gather/native-indexer (native MLX decode kernels)
         ("test_qwen4_qsa_decode_gather", "MLX mock active — _decode_qsa_sdpa / contiguous_causal_gathered_qsa unavailable in mock"),
         ("test_qwen4_qsa_incremental_cache", "MLX mock active — contiguous_causal_gathered_qsa / array.swapaxes unavailable in mock"),
@@ -255,6 +256,7 @@ def pytest_collection_modifyitems(config, items):
         ("test_moe_expert_offload.py", "MLX mock active — real SwitchGLU/SwitchLinear unavailable and mx.quantize packed shapes differ from real MLX"),
         ("test_moe_offload_compat.py", "MLX mock active — mx.quantize packed shapes differ from real MLX"),
         ("test_deepseek_v41_attention_rounding.py", "MLX mock active — packed attention MMA Metal kernel unavailable"),
+        ("test_deepseek_v41_ced", "MLX mock active — CED packed attention Metal kernel unavailable"),
         ("test_deepseek_v41_ssd.py", "MLX mock active — real SSD reopen path needs the packed attention Metal kernel"),
         ("test_deepseek_v41_moe_offload.py", "MLX mock active — real SwitchLinear.weight and mx.quantize packed shapes unavailable"),
         # DeepSeek V4.1 base engine: real forward graph takes mx.array as model

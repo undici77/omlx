@@ -39,7 +39,11 @@ def apply_arrays_cache_extract_guard() -> bool:
     except ImportError:
         return False
 
-    if getattr(ArraysCache.extract, "_omlx_none_guard", False):
+    extract_fn = getattr(ArraysCache, "extract", None)
+    if extract_fn is None:
+        return False
+
+    if getattr(extract_fn, "_omlx_none_guard", False):
         _APPLIED = True
         return True
 

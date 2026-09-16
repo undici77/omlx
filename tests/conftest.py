@@ -152,6 +152,8 @@ def pytest_collection_modifyitems(config, items):
         ("test_mlx_vlm_unlimited_ocr_compat", "MLX mock active — vendored mlx-vlm classes unavailable"),
         # Nemotron-H MTP (needs real NemotronH mixer class)
         ("test_nemotron_mtp_patch", "MLX mock active — NemotronH mixer class unavailable in mock"),
+        # MTP XTC sampling (needs real BatchGenerator.insert/close)
+        ("test_mtp_xtc_sampling", "MLX mock active — BatchGenerator.insert/close unavailable in mock"),
         # Qwen3.5 MoE fused gate_up (needs real SwitchGLU / mlx.randint)
         ("test_qwen35_moe_gate_up", "MLX mock active — SwitchGLU / randint unavailable in mock"),
         # Prefix cache TurboQuant reconstruction (needs real MLX array ops)

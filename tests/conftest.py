@@ -163,6 +163,8 @@ def pytest_collection_modifyitems(config, items):
         ("test_model_loading", "MLX mock active — lazy state materialization needs real MLX"),
         # Server main (integration-style, depends on full server stack)
         ("test_server_main", "MLX mock active — server entry point needs full stack"),
+        # CLI serve (integration-style, hits MLX mock before API key check)
+        ("test_cli", "MLX mock active — CLI serve path hits MLX before API key validation"),
         # New MLX-dependent test files from merge
         ("test_deepseek_v4_dspark", "MLX mock active — dSpark quantized kernel ops unavailable"),
         ("test_gemma4_verify_attention", "MLX mock active — Gemma-4 verify kernel unavailable"),
@@ -227,6 +229,10 @@ def pytest_collection_modifyitems(config, items):
         ("test_qwen4_qsa_prefill_memory", "MLX mock active — tiled-SDPA precision & TurboQuant cache internals unavailable in mock"),
         # Qwen3.5 GDN fused prework parity (real mlx.nn / model-graph internals)
         ("test_qwen35_gdn_prework", "MLX mock active — fused GDN prework needs real mlx.nn / model-graph internals"),
+        # Qwen3.5 verify SDPA split (mlx.metal_kernel unavailable in mock)
+        ("test_qwen35_verify_sdpa_split", "MLX mock active — mlx.metal_kernel unavailable in mock"),
+        # GLM-5 Next MTP (needs real mlx_vlm model classes + TextConfig)
+        ("test_glm5_next_mtp", "MLX mock active — GLM-5 Next VLM vendor classes / PoolingCache / native indexer unavailable"),
         # Qwen4 vision grid compat (mlx.repeat unpacking + vision-grid MLX internals)
         ("test_qwen4_vision_grid_compat", "MLX mock active — vision grid MLX array internals unavailable in mock"),
         # MLX 0.32.2 mlx-vlm compat patch (needs real mlx-vlm source + mx.grid_sample/_restore_rng_state)

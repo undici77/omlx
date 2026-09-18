@@ -1,4 +1,5 @@
 import os
+import subprocess
 
 # MLX 0.32.2 runs fp32 GPU matmuls at TF32 precision on M5-class tensor units;
 # the fp32 parity tests assert 2e-5, which TF32 cannot hold. Test session only.
@@ -280,6 +281,16 @@ def pytest_collection_modifyitems(config, items):
         # Cluster planner applies the mlx.core.ArraysCache.extract patch, which the
         # mock does not define (ArraysCache is a placeholder without .extract).
         ("test_cluster_planner.py", "MLX mock active — ArraysCache.extract guard needs real MLX"),
+        # VLM engine / adapter cache internals (mock lacks ChunkedKVCache, PoolingCache meta_state)
+        ("test_vlm_engine.py", "MLX mock active — VLM engine diffusion/cache internals unavailable"),
+        ("test_vlm_model_adapter.py", "MLX mock active — VLM cache restore internals unavailable"),
+        ("test_vlm_vision_fallback.py", "MLX mock active — ArraysCache.extract / tree_flatten unavailable"),
+        # Singleton cache passthrough (ArraysCache left_padding/item assignment)
+        ("test_singleton_cache_passthrough.py", "MLX mock active — ArraysCache internals unavailable"),
+        # dflash lifecycle (snapshot serialization requires real MLX cache layout)
+        ("test_dflash_lifecycle.py", "MLX mock active — dflash snapshot serialization requires real MLX"),
+        # Memory monitor (hybrid model cache spec requires real MLX)
+        ("test_memory_monitor.py", "MLX mock active — hybrid model cache specs require real MLX"),
     ]
 
     _mock_skip = pytest.mark.skip(
@@ -387,8 +398,21 @@ def mock_tokenizer():
 
 
 @pytest.fixture
-def mock_model():
-    """Fixture for a mock model."""
+def mock_cluster_ssh(monkeypatch):
+    from omlx.cluster import launch
+
+    runner = MagicMock(
+        return_value=subprocess.CompletedProcess(
+            [], 0, stdout='{"action": "no-marker"}', stderr=""
+        )
+    )
+    monkeypatch.setattr(launch, "_run_cluster_ssh", runner)
+    return runner
+
+
+@pytest.fixture
+def mock_model() -> MockModel:
+    """Provide a mock model for tests."""
     return MockModel()
 
 

@@ -52,15 +52,15 @@ from ..patches.mlx_vlm_mlx0322_compat import (
 # at the stream from the pre-reload common module.
 apply_mlx_vlm_mlx0322_compat_patch()
 
-import mlx_vlm.speculative.common as _vlm_common  # noqa: E402, I001
+from mlx_vlm.speculative import common as _vlm_common  # noqa: E402, I001
 from mlx_vlm.speculative import load_drafter as _vlm_load_drafter  # noqa: E402
+from mlx_vlm.speculative.mtp import _buffer_mtp_target_cache
 
 # The round loops dispatch their target-verify and cache-rollback forwards
 # inside ``with mx.stream(generation_stream)``, using mlx-vlm's own
 # thread-local stream — a different object from mlx-lm's generation_stream
 # and from the per-engine stream. Draining the MTP work means draining this
 # one, resolved on the thread that advances the round loop.
-
 # PR #1169 (f96138e) moved the MTP round loop helpers from ``mlx_vlm.generate``
 # into ``mlx_vlm.speculative.utils``. If that module is missing in the current
 # install, we fall back to ``mlx_vlm.generate``.
@@ -71,16 +71,6 @@ try:
     )
 except (ImportError, ModuleNotFoundError):
     from mlx_vlm.generate import _mtp_rounds, _mtp_rounds_batch  # noqa: SLF001
-
-try:
-    from mlx_vlm.speculative.mtp import (  # noqa: E402, SLF001
-        _buffer_mtp_target_cache,
-    )
-except Exception:  # pragma: no cover - compatibility with older mlx-vlm
-
-    def _buffer_mtp_target_cache(*_args: Any, **_kwargs: Any) -> None:
-        return None
-
 
 from ..utils.metal_sync import _sync_and_clear_cache  # noqa: E402
 from ..utils.model_loading import materialize_lazy_state  # noqa: E402
@@ -209,7 +199,6 @@ def _patch_qwen35_mtp_config_for_moe() -> None:
 
 
 _patch_qwen35_mtp_config_for_moe()
-
 
 class VLMMTPDrafter:
     """Holds a loaded drafter together with the metadata omlx needs.

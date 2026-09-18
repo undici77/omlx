@@ -754,6 +754,18 @@ class MockMLXLoader(importlib.abc.Loader):
                         self.__mock_items[name] = mod
                         return mod
 
+                    if self.__name__ == "mlx_vlm.speculative" and name in (
+                        "common",
+                        "load_drafter",
+                        "mtp",
+                        "utils",
+                    ):
+                        mod = loader.create_module(
+                            importlib.machinery.ModuleSpec(f"{self.__name__}.{name}", loader)
+                        )
+                        self.__mock_items[name] = mod
+                        return mod
+
                     if self.__name__ in ("mlx_lm", "mlx_vlm") and name == "tool_parsers":
                         mod = loader.create_module(
                             importlib.machinery.ModuleSpec(f"{self.__name__}.{name}", loader)
@@ -2226,6 +2238,11 @@ class MockMLXLoader(importlib.abc.Loader):
                 return {"model_type": "test"}
 
             m.load_config = _load_config
+            if not hasattr(loader, "_model_arch_remapping"):
+                loader._model_arch_remapping = {
+                    "bailing_hybrid": "BailingMoeV3ForCausalLM",
+                }
+            m.MODEL_ARCHITECTURE_REMAPPING = loader._model_arch_remapping
 
             def _quantize_model(model, config, group_size, bits, mode="affine", quant_predicate=None):
                 import mlx.nn as nn
@@ -2473,6 +2490,14 @@ class MockMLXLoader(importlib.abc.Loader):
             if not hasattr(loader, "_generation_stream"):
                 loader._generation_stream = type("Stream", (), {})()
             m.generation_stream = loader._generation_stream
+            sys.modules[spec.name] = m
+            return m
+
+        if spec.name == "mlx_vlm.speculative.common":
+            m = MockModule(spec.name)
+            if not hasattr(loader, "_vlm_generation_stream"):
+                loader._vlm_generation_stream = type("Stream", (), {})()
+            m.generation_stream = loader._vlm_generation_stream
             sys.modules[spec.name] = m
             return m
 

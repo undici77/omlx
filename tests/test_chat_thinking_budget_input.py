@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Exercise the chat sidebar's thinking-budget input and persistence."""
 
 import json

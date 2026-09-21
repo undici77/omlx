@@ -135,6 +135,10 @@ def pytest_collection_modifyitems(config, items):
         ("test_tool_calling", "MLX mock active — Gemma-4 real parser uses MLX regex"),
         # New MLX-dependent test files failing with mock
         ("test_glm_moe_dsa_patch", "MLX mock active — GLM MoE/DSA patch internals unavailable"),
+        ("test_glm_moe_dsa_offload", "MLX mock active — SwitchGLU.values() unavailable in mock"),
+        ("test_deepseek_v4_offload", "MLX mock active — SwitchGLU.values() unavailable in mock"),
+        ("test_deepseek_v41_affine_source", "MLX mock active — mlx.quantized_matmul unavailable in mock"),
+        ("test_qwen35_moe_router", "MLX mock active — Qwen3_5BatchInvariantForward / mlx.argpartition unavailable in mock"),
         ("test_mlx_vlm_minimax_m3_compat", "MLX mock active — MiniMax M3 loader/architecture fallback unavailable"),
         ("test_qwen35_fa256_attention", "MLX mock active — Qwen 3.5 attention patch internals unavailable"),
         ("test_qwen35_gdn_prefill", "MLX mock active — Qwen 3.5 prefill patch internals unavailable"),

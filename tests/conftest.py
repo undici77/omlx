@@ -115,7 +115,6 @@ def pytest_collection_modifyitems(config, items):
         # MLX cache / MTP internals (RotatingKVCache, PoolingCache, etc.)
         ("test_mlx_lm_mtp_patch", "MLX mock active — RotatingKVCache internals unavailable"),
         ("test_deepseek_v4_patch", "MLX mock active — PoolingCache / cache patch internals unavailable"),
-        ("test_mlx_vlm_diffusion_patch", "MLX mock active — MLX dequantize unavailable"),
         ("test_vlm_mtp", "MLX mock active — VLM MTP / MoE config internals unavailable"),
         # Quantisation & packing (mock returns wrong tuple shapes)
         ("test_oq", "MLX mock active — mx.quantize return shape differs from real MLX"),
@@ -181,6 +180,7 @@ def pytest_collection_modifyitems(config, items):
         ("test_gemma4_text_model", "MLX mock active — Gemma-4 text model needs real MLX"),
         ("test_inkling_vlm_mtp", "MLX mock active — Inkling VLM MTP needs real MLX"),
         ("test_mimo_v2_patch", "MLX mock active — MIMO v2 quantized ops unavailable"),
+        ("test_dflash_mimo_v2", "MLX mock active — MiMo V2 vendor wrapper isinstance check and mlx_lm rope_utils.initialize_rope unavailable"),
         ("test_pooling_cache_delta", "MLX mock active — PoolingCache delta needs real MLX"),
         ("test_cache_ntuple_state", "MLX mock active — PoolingCache state arity differs in mock"),
         ("test_specprefill", "MLX mock active — specprefill array ops need real MLX"),
@@ -227,8 +227,6 @@ def pytest_collection_modifyitems(config, items):
         ("test_qwen4_qsa_incremental_cache", "MLX mock active — contiguous_causal_gathered_qsa / array.swapaxes unavailable in mock"),
         ("test_qwen4_qsa_native_indexer", "MLX mock active — _native_indexer_scores native kernel unavailable in mock"),
         ("test_qwen4_qsa_sparse_gqa", "MLX mock active — _native_sparse_gqa_attention native kernel unavailable in mock"),
-        ("test_qwen4_qsa_gather_rows", "MLX mock active — mlx_vlm.models.qwen4_exp.qsa_fast vendor module unavailable in mock"),
-        ("test_qwen4_qsa_verify_gather", "MLX mock active — mlx_vlm.models.qwen4_exp vendor Qwen4ExpAttention/nn.Module unavailable in mock"),
         ("test_qwen4_hc_projection", "MLX mock active — fuse_hyper_connection_projections native kernel unavailable in mock"),
         # Qwen4 QSA prefill memory routing (real MLX array precision + cache internals)
         ("test_qwen4_qsa_prefill_memory", "MLX mock active — tiled-SDPA precision & TurboQuant cache internals unavailable in mock"),
@@ -245,7 +243,6 @@ def pytest_collection_modifyitems(config, items):
         # Qwen4 QSA batch join/merge (real QSAKVCache.to_batch/merge/index_keys)
         ("test_qsa_batch_join_ranks", "MLX mock active — QSAKVCache.to_batch/merge/index_keys unavailable in mock"),
         # Qwen4 QSA reservation (real QSAKVCache.reserve_index_capacity/update_indexer)
-        ("test_qwen4_qsa_reservation_integration", "MLX mock active — QSAKVCache.reserve_index_capacity / update_indexer unavailable in mock"),
         ("test_qwen4_qsa_reserved_capacity", "MLX mock active — QSAKVCache.reserve_index_capacity / update_indexer unavailable in mock"),
         # Qwen4 eager dispatch, fused hyper-connections, and fast RMS norm (Metal kernels / real MLX)
         ("test_qwen4_eager_dispatch", "MLX mock active — Qwen4 eager GPU dispatch unavailable in mock"),

@@ -292,6 +292,11 @@ def pytest_collection_modifyitems(config, items):
         ("test_dflash_lifecycle.py", "MLX mock active — dflash snapshot serialization requires real MLX"),
         # Memory monitor (hybrid model cache spec requires real MLX)
         ("test_memory_monitor.py", "MLX mock active — hybrid model cache specs require real MLX"),
+        # Batched DFlash drafter asserts bit-exact parity between batched and
+        # solo forwards over mx.random weights — hardware numerics, not logic.
+        ("test_dflash_batched.py", "MLX mock active — batched/solo forward parity needs real MLX numerics and nn.utils.tree_flatten"),
+        # Vendored mlx_vlm gemma4_unified Model.sanitize class is mocked out.
+        ("test_gemma4_text_only_vlm.py", "MLX mock active — vendored mlx_vlm gemma4_unified Model/TextConfig unavailable"),
     ]
 
     _mock_skip = pytest.mark.skip(
@@ -305,6 +310,27 @@ def pytest_collection_modifyitems(config, items):
             if pattern in mod_file:
                 item.add_marker(pytest.mark.skip(reason=reason))
                 break
+
+
+@pytest.fixture(autouse=True)
+def cluster_home(tmp_path, monkeypatch):
+    from omlx.cluster import ssh_keys, worker_shim
+
+    home = tmp_path / "cluster-home"
+    publish = worker_shim.ensure_cluster_python_shim
+
+    def publish_shim(**kwargs):
+        if kwargs.get("home") is None:
+            kwargs["home"] = home
+        return publish(**kwargs)
+
+    monkeypatch.setattr(worker_shim, "ensure_cluster_python_shim", publish_shim)
+    # SSH paths are resolved at import time, before test fixtures run.
+    ssh_dir = home / ".ssh"
+    monkeypatch.setattr(ssh_keys, "_SSH_DIR", ssh_dir)
+    monkeypatch.setattr(ssh_keys, "_SSH_KEY_PATH", ssh_dir / "omlx_cluster")
+    monkeypatch.setattr(ssh_keys, "_SSH_PUBKEY_PATH", ssh_dir / "omlx_cluster.pub")
+    return home
 
 
 class MockTokenizer:

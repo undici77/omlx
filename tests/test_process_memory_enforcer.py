@@ -1088,7 +1088,8 @@ class TestDynamicCeilingReserve:
         ):
             result = enforcer._get_dynamic_ceiling()
 
-        assert result == 58 * 1024**3
+        # balanced reserves 8% of RAM, clamped to [3, 8] GiB (#3933).
+        assert result == 64 * 1024**3 - int(64 * 1024**3 * 0.08)
 
     def test_psutil_failure_falls_back_to_static_ceiling(self, mock_engine_pool):
         enforcer = ProcessMemoryEnforcer(
@@ -1108,7 +1109,8 @@ class TestDynamicCeilingReserve:
         ), patch("omlx.settings.get_system_memory", return_value=64 * 1024**3):
             result = enforcer._get_dynamic_ceiling()
 
-        assert result == 58 * 1024**3
+        # balanced reserves 8% of RAM, clamped to [3, 8] GiB (#3933).
+        assert result == 64 * 1024**3 - int(64 * 1024**3 * 0.08)
 
 
 class TestDynamicCeilingCustom:

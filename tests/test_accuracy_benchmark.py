@@ -292,6 +292,7 @@ class TestRunAccuracyBenchmark:
         mock_pool.get_loaded_model_ids = MagicMock(return_value=[])
         mock_pool.get_engine = AsyncMock(return_value=mock_engine)
         mock_pool._unload_engine = AsyncMock()
+        mock_pool.release_engine = AsyncMock()
 
         mock_evaluator = MagicMock()
         mock_evaluator.load_dataset = AsyncMock(return_value=[{"id": "1"}])
@@ -332,6 +333,7 @@ class TestRunAccuracyBenchmark:
         mock_pool.get_loaded_model_ids = MagicMock(return_value=[])
         mock_pool.get_engine = AsyncMock(return_value=mock_engine)
         mock_pool._unload_engine = AsyncMock()
+        mock_pool.release_engine = AsyncMock()
 
         mock_evaluator = MagicMock()
         mock_evaluator.load_dataset = AsyncMock(return_value=[{"id": "1"}])

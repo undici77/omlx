@@ -55,6 +55,21 @@ _MOCKS_HARMONY = any(
     "MockMLXFinder" in str(f) for f in sys.meta_path
 )
 
+# ── Pre-import skip for files that touch real MLX at module scope ────────────
+# _MLX_SKIP_REASONS below marks skips in pytest_collection_modifyitems, which
+# runs *after* the module is imported — useless for files whose import itself
+# executes MLX/vendor code (module-level patch calls, skipif expressions).
+# Skipping these at collection keeps the mock minimal instead of growing it.
+_MLX_IMPORT_SKIP = [
+    # mlx._gpu_class() in a module-level skipif; GPU class is hardware state.
+    "test_qwen4_qsa_decode_gather.py",
+    # apply_verify_qmm_patch() reads Qwen3_5BatchInvariantForward._feed_forward,
+    # which only the vendored macOS mlx_vlm defines.
+    "test_qwen4_verify_attention_rows.py",
+]
+
+collect_ignore = list(_MLX_IMPORT_SKIP) if _MOCKS_HARMONY else []
+
 
 def _real_openai_harmony_available() -> bool:
     """Check if the real openai_harmony library is importable (not mocked)."""
@@ -298,6 +313,15 @@ def pytest_collection_modifyitems(config, items):
         ("test_dflash_batched.py", "MLX mock active — batched/solo forward parity needs real MLX numerics and nn.utils.tree_flatten"),
         # Vendored mlx_vlm gemma4_unified Model.sanitize class is mocked out.
         ("test_gemma4_text_only_vlm.py", "MLX mock active — vendored mlx_vlm gemma4_unified Model/TextConfig unavailable"),
+        # mlx_lm KVCache.step drives prefill capacity planning; absent in the mock.
+        ("test_prefill_boundary_paths.py", "MLX mock active — KVCache.step unavailable in mock"),
+        ("test_prefill_oom_graceful.py", "MLX mock active — KVCache.step unavailable in mock"),
+        # mlx.nn.QuantizedLinear.freeze() on QuantizedSwitchLinear is a real
+        # mlx.nn.Module method; the mock's placeholder class omits it.
+        ("test_moe_gate_up_fusion.py", "MLX mock active — QuantizedSwitchLinear.freeze unavailable in mock"),
+        # M5 NAX tensor-unit gather: mlx.key(), flatten(start, end) arity and
+        # vendor _swiglu_limit all need real MLX.
+        ("test_m5_gather_qmm_nax.py", "MLX mock active — M5 NAX gather needs real MLX key/flatten semantics"),
     ]
 
     _mock_skip = pytest.mark.skip(

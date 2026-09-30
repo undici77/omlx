@@ -190,6 +190,12 @@ class MockMLXLoader(importlib.abc.Loader):
         def mean(self, axis=None, keepdims=False):
             return self.__class__(np.mean(self._data, axis=axis, keepdims=keepdims))
 
+        def any(self, axis=None, keepdims=False):
+            return self.__class__(np.any(self._data, axis=axis, keepdims=keepdims))
+
+        def all(self, axis=None, keepdims=False):
+            return self.__class__(np.all(self._data, axis=axis, keepdims=keepdims))
+
         def flatten(self, order="C"):
             if isinstance(order, int):
                 axis = order if order >= 0 else self._data.ndim + order
@@ -405,6 +411,9 @@ class MockMLXLoader(importlib.abc.Loader):
                                 "max_buffer_length": 1 << 30,
                             }
                             m.clear_cache = lambda: None
+                            # Cache it: tests monkeypatch mx.metal.is_available,
+                            # and a fresh module per lookup makes that a no-op.
+                            self.__mock_items[name] = m
                             return m
                         if name == "device_info":
                             return lambda: {
@@ -536,6 +545,20 @@ class MockMLXLoader(importlib.abc.Loader):
                             return lambda *a, dtype=None, **k: loader.array(
                                 np.arange(*a), dtype=dtype
                             )
+                        if name == "cumsum":
+                            # mlx adds reverse/inclusive; numpy has neither.
+                            def _cumsum(a, axis=0, inclusive=True, reverse=False, **k):
+                                d = loader.array(a)._data
+                                if reverse:
+                                    d = np.flip(d, axis=axis)
+                                out = np.cumsum(d, axis=axis)
+                                if not inclusive:
+                                    out = out - d
+                                return loader.array(
+                                    np.flip(out, axis=axis) if reverse else out
+                                )
+
+                            return _cumsum
                         if name in (
                             "reshape",
                             "transpose",
@@ -743,7 +766,11 @@ class MockMLXLoader(importlib.abc.Loader):
                         self.__mock_items[name] = mod
                         return mod
 
-                    if self.__name__ in ("mlx_lm", "mlx_vlm") and name in ("utils", "prompt_utils"):
+                    if self.__name__ in ("mlx_lm", "mlx_vlm") and name in (
+                        "utils",
+                        "prompt_utils",
+                        "tokenizer_utils",
+                    ):
                         # `from mlx_lm import utils` resolves via getattr() on the
                         # already-imported package; without this branch it would
                         # match the generic _default_func catch-all below instead

@@ -1,6 +1,8 @@
+import fnmatch
 import os
 import subprocess
 import sys
+import zlib
 
 # MLX 0.32.2 runs fp32 GPU matmuls at TF32 precision on M5-class tensor units;
 # the fp32 parity tests assert 2e-5, which TF32 cannot hold. Test session only.
@@ -46,6 +48,36 @@ apply_m5_gather_qmm_workaround()
 from omlx.custom_kernels.nax import is_nax_available
 from omlx.request import Request, SamplingParams
 
+# Model and kernel numerics tests keep the GPU busy. Under --dist loadgroup
+# they share one worker so concurrent command buffers do not trip the Metal
+# GPU timeout. Every other test file stays on a single worker.
+_GPU_SERIAL_TEST_FILES = (
+    "test_deepseek_v4*",
+    "test_glm5_*",
+    "test_glm_moe_*",
+    "test_mlx_lm_mtp_patch.py",
+    "test_mlx_vlm_*",
+    "test_moe_expert_offload.py",
+    "test_qwen35_*",
+    "test_qwen4_*",
+    "test_row_exact_qmv.py",
+    "test_sdpa*",
+)
+
+
+@pytest.hookimpl(tryfirst=True)  # Before xdist reads the xdist_group markers.
+def pytest_collection_modifyitems(config, items):
+    if config.pluginmanager.hasplugin("xdist"):
+        for item in items:
+            name = item.path.name
+            if any(fnmatch.fnmatch(name, pattern) for pattern in _GPU_SERIAL_TEST_FILES):
+                group = "gpu"
+            else:
+                group = item.nodeid.split("::", 1)[0]
+            item.add_marker(pytest.mark.xdist_group(group))
+
+    _apply_mlx_mock_skips(items)
+
 
 # ── Auto-skip Harmony-dependent tests when MLX mock is active ────────────────
 # When the MLX mock is active (non-macOS/CI), openai_harmony is a NumPy-backed
@@ -67,6 +99,9 @@ _MLX_IMPORT_SKIP = [
     # apply_verify_qmm_patch() reads Qwen3_5BatchInvariantForward._feed_forward,
     # which only the vendored macOS mlx_vlm defines.
     "test_qwen4_verify_attention_rows.py",
+    # Same module-scope patch stack as above, plus attn_fused._gpu_class() and
+    # the qwen4_exp vendor modules — all real-MLX/macOS-only.
+    "test_qwen4_attn_fused.py",
 ]
 
 collect_ignore = list(_MLX_IMPORT_SKIP) if _MOCKS_HARMONY else []
@@ -86,7 +121,7 @@ def _real_openai_harmony_available() -> bool:
     return ".py" in origin and "mlx_mock" not in origin
 
 
-def pytest_collection_modifyitems(config, items):
+def _apply_mlx_mock_skips(items):
     """Skip tests that need real Harmony token IDs when the mock is active."""
     if _real_openai_harmony_available():
         return  # Real library available — run everything
@@ -327,14 +362,39 @@ def pytest_collection_modifyitems(config, items):
         ("test_decode_fast_fallback.py", "MLX mock active — native sdpa_decode fallback needs real MLX kernels"),
         # Calls mlx_vlm glm5_next language.linear_forward, a vendor entry point.
         ("test_dflash_glm5.py", "MLX mock active — mlx_vlm glm5_next language.linear_forward unavailable"),
+        # Real mlx_lm SwitchGLU.set_dtype; the mock's SwitchGLU is a placeholder
+        # (same documented gap as the test_moe_expert_offload family above).
+        ("test_m5_gather_qmm_a8.py", "MLX mock active — real mlx_lm SwitchGLU.set_dtype unavailable in mock"),
+        # Sibling of test_mlx0322_compat: patches real mlx-vlm sources, calls
+        # mlx._cache_state/grid_sample/_restore_rng_state, and asserts the exact
+        # 0.32.3 runtime version (this box has 0.32.0).
+        ("test_mlx0323_compat.py", "MLX mock active — cache_state/grid_sample/_restore_rng_state and the exact MLX 0.32.3 version check need real MLX"),
+        # Spawns tests/qwen35_pipeline_worker.py, which imports real mlx in a
+        # child process; conftest's mock is not inherited across spawn.
+        ("test_qwen35_pipeline_forward.py", "MLX mock active — spawned worker imports real mlx (libmlx.so absent on Linux)"),
+        # RotatingKVCache.is_trimmable, QuantizedLinear.from_linear and
+        # nn.Module.parameters on vendored modules are all real-MLX internals.
+        ("test_systemone.py", "MLX mock active — RotatingKVCache.is_trimmable / QuantizedLinear.from_linear / nn.Module.parameters unavailable in mock"),
+        # mlx_lm/mlx_vlm cache capacity internals plus real model files on disk.
+        ("test_vlm_batch_kv_capacity.py", "MLX mock active — mlx_lm/mlx_vlm cache capacity internals and real model files unavailable"),
     ]
 
-    # Node-level skips: the pinned mlx-lm is newer than the 0.31.3 wheel in
-    # this venv, so these tests call an API shape that is not installed here.
+    # Node-level skips: this venv cannot be re-synced from the pins, so these
+    # tests call an API shape the installed vendor wheel does not expose
+    # (mlx-lm 0.31.3 vs the pinned git main; xgrammar 0.2.3 vs the 0.2.8 pin).
     _MLX_SKIP_TESTS: list[tuple[str, str]] = [
         ("test_json_tools_label_follows_template_grammar", "stale mlx-lm wheel: _infer_tool_parser takes the template string, not the tokenizer"),
         ("test_tool_parser_inference_reads_the_tokenizer_template[<tool_call>f<arg_key>", "stale mlx-lm wheel: glm47 grammar not inferred by the installed _infer_tool_parser"),
         ("test_revision_follows_the_live_model_modules", "stale mlx-lm wheel: qwen3_5.GatedDeltaNet numerics signature unavailable"),
+        # mlx-vlm video sampling: resolve_video_sampling/_smart_resize_video and
+        # Qwen3VLVideoProcessor are vendor internals the NumPy mock cannot mirror.
+        ("test_native_video_token_count_matches_the_processor", "mlx-vlm video processor is a mock placeholder; grid_thw cannot be computed"),
+        ("test_native_video_token_count_rejects_degenerate_frames", "mlx.resolve_video_sampling is not implemented in the mock"),
+        # xgrammar 0.2.3 is installed but pyproject pins 0.2.8; its
+        # structural-tag registry has no minimax_m3 entry (#4316).
+        ("test_minimax_m3_budget_close_starts_output", "stale xgrammar wheel 0.2.3 (pin 0.2.8): no minimax_m3 structural tag"),
+        ("test_minimax_m3_adaptive_budget_waits_for_opener", "stale xgrammar wheel 0.2.3 (pin 0.2.8): no minimax_m3 structural tag"),
+        ("test_minimax_m3_grammar_follows_template_thinking_mode", "stale xgrammar wheel 0.2.3 (pin 0.2.8): no minimax_m3 structural tag"),
     ]
 
     _mock_skip = pytest.mark.skip(
@@ -404,9 +464,18 @@ class MockTokenizer:
         self.pad_token_id = 0
         self.bos_token_id = 1
 
-    def encode(self, text: str, **kwargs: Any) -> List[int]:
-        """Mock encoding: convert length to fake token IDs."""
-        return [1] + [100] * len(text.split()) + [2]
+    def encode(self, text: str, add_special_tokens: bool = True) -> List[int]:
+        """Encode text to token ids (simple simulation)."""
+        # Simple simulation: each word becomes a token
+        tokens = []
+        if add_special_tokens:
+            tokens.append(self.bos_token_id)
+        # Simulate tokenization by splitting on spaces
+        for i, word in enumerate(text.split()):
+            # crc32, unlike hash(), is stable across processes.
+            token_id = (zlib.crc32(word.encode()) % (self.vocab_size - 10)) + 10
+            tokens.append(token_id)
+        return tokens
 
     def decode(self, token_ids: List[int], skip_special_tokens: bool = False, **kwargs: Any) -> str:
         """Mock decoding: return fake text (simple simulation)."""

@@ -182,7 +182,7 @@ checklist.
 
 ### Vision-Language Models
 
-Run VLMs with the same continuous batching and tiered KV cache stack as text LLMs. Supports multi-image chat, base64/URL/file image inputs, and tool calling with vision context. MiMo V2.6 checkpoints with bundled sidecars also accept sampled-frame video and 24 kHz audio. oQ conversion of official MiMo V2.6 checkpoints preserves image and audio support. OCR models (DeepSeek-OCR, DOTS-OCR, GLM-OCR) are auto-detected with optimized prompts.
+Run VLMs with the same continuous batching and tiered KV cache stack as text LLMs. Supports multi-image chat, base64/URL/file image inputs, and tool calling with vision context. MiMo V2.6 checkpoints with bundled sidecars also accept sampled-frame video and 24 kHz audio. Qwen3.5, Qwen3.6 and Qwen3.8 checkpoints (dense and MoE) accept native video input as base64 `video_url` / `input_video` data URIs; video needs OpenCV (`opencv-python-headless`). oQ conversion of official MiMo V2.6 checkpoints preserves image and audio support. OCR models (DeepSeek-OCR, DOTS-OCR, GLM-OCR) are auto-detected with optimized prompts.
 
 ### Tiered KV Cache (Hot + Cold)
 
@@ -268,7 +268,7 @@ Native Swift / SwiftUI menubar app (not Electron). Start, stop, and monitor the 
 
 ### API Compatibility
 
-Drop-in replacement for OpenAI and Anthropic APIs. Supports streaming usage stats (`stream_options.include_usage`), Anthropic adaptive thinking, and vision inputs (base64, URL).
+Drop-in replacement for OpenAI and Anthropic APIs. Supports streaming usage stats (`stream_options.include_usage`), Anthropic adaptive thinking, and vision inputs (images as base64 or URL, video as base64).
 
 | Endpoint | Description |
 |----------|-------------|
@@ -277,7 +277,9 @@ Drop-in replacement for OpenAI and Anthropic APIs. Supports streaming usage stat
 | `POST /v1/messages` | Anthropic Messages API |
 | `POST /v1/embeddings` | Text embeddings |
 | `POST /v1/rerank` | Document reranking |
+| `POST /v1/systemone` | Typed decisions with decision models (TypeSafe System One) |
 | `GET /v1/models` | List available models |
+| `POST /tokenize`, `POST /detokenize` | vLLM-compatible tokenizer API (also under `/v1`) |
 
 ### Tool Calling & Structured Output
 
@@ -296,6 +298,8 @@ Supports all function calling formats available in mlx-lm, JSON schema validatio
 | Longcat | `<longcat_tool_call>` |
 
 Models not listed above may still work if their chat template accepts `tools` and their output uses a recognized `<tool_call>` XML format. For tool-enabled streaming, assistant text is emitted incrementally while known tool-call control markup is suppressed from visible content; structured tool calls are emitted after parsing the completed turn.
+
+A bare JSON, EBNF, or regex grammar constrains the answer from the first generated token, so `thinking_budget` is ignored. Configure a compatible `reasoning_parser` to combine constrained output with a separate, budgeted reasoning phase.
 
 ## Models
 
@@ -317,8 +321,9 @@ Models are auto-detected by type. You can also download models directly from the
 | LLM | Any model supported by [mlx-lm](https://github.com/ml-explore/mlx-lm) |
 | VLM | Qwen3.5 Series, GLM-4V, Pixtral, and other [mlx-vlm](https://github.com/Blaizzy/mlx-vlm) models |
 | OCR | DeepSeek-OCR, DOTS-OCR, GLM-OCR |
-| Embedding | BERT, BGE-M3, ModernBERT |
+| Embedding | BERT, BGE-M3, ModernBERT, EmbeddingGemma 2 |
 | Reranker | ModernBERT, XLM-RoBERTa |
+| Decision | Clef, Clef-Flash, OpenJev |
 
 ## CLI Configuration
 
@@ -378,7 +383,8 @@ FastAPI Server (OpenAI / Anthropic API)
     │   ├── BatchedEngine (LLMs, continuous batching)
     │   ├── VLMEngine (vision-language models)
     │   ├── EmbeddingEngine
-    │   └── RerankerEngine
+    │   ├── RerankerEngine
+    │   └── DecisionEngine
     │
     ├── ProcessMemoryEnforcer (total memory limit, TTL checks)
     │
@@ -401,7 +407,7 @@ FastAPI Server (OpenAI / Anthropic API)
 git clone https://github.com/jundot/omlx.git
 cd omlx
 pip install -e ".[dev]"
-pytest -m "not slow"
+pytest
 ```
 
 ### macOS App

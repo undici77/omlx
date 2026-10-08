@@ -18,6 +18,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).parent
@@ -384,6 +385,86 @@ def _lock_with_sdist_retry(lock_cmd: list, max_retries: int = 10):
     sys.exit(1)
 
 
+# Install failures that are connectivity rather than dependency problems: the
+# lock already pins every version, so a package that resolved seconds ago only
+# fails to install if the index became unreachable mid-download.
+_TRANSIENT_NETWORK_SIGS = (
+    "NewConnectionError",
+    "Max retries exceeded",
+    "NameResolutionError",
+    "Temporary failure in name resolution",
+    "nodename nor servname provided",
+    "Connection reset by peer",
+    "Connection refused",
+    "Bad file descriptor",
+    "ReadTimeoutError",
+    "Read timed out",
+    "502 Bad Gateway",
+    "503 Service Unavailable",
+    "504 Gateway Time-out",
+)
+
+
+def _purge_partial_layer(output: str) -> None:
+    """Delete the layer whose install failed, so a retry starts from scratch."""
+    match = re.search(r"requirements/([A-Za-z0-9._-]+)/requirements-", output)
+    if not match:
+        return
+    env_dir = BUILD_DIR / match.group(1)
+    if env_dir.is_dir():
+        shutil.rmtree(env_dir)
+        print(f"  Removed partial layer {env_dir.name} for clean retry")
+
+
+def _build_with_network_retry(
+    cmd: list, max_retries: int = 4, base_delay: float = 15.0
+):
+    """Run `venvstacks build`, retrying transient PyPI failures.
+
+    The install step pulls ~150 of the 155 locked wheels live from PyPI:
+    `_wheels/` only carries the locally built git-pinned and sdist-only
+    packages, and venvstacks passes `--find-links` without `--no-index`.
+    """
+    for attempt in range(max_retries):
+        if attempt:
+            print(f"  ↻ Retry {attempt}/{max_retries - 1}...")
+        print(f"  → {' '.join(str(c) for c in cmd)}")
+        # stderr merged into one pipe: a second, unread stderr deadlocks once
+        # the buffer fills on a download this verbose.
+        lines: list[str] = []
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            errors="replace",
+        )
+        for line in proc.stdout:
+            lines.append(line)
+            print(line, end="")
+        returncode = proc.wait()
+
+        if returncode == 0:
+            return
+
+        output = "".join(lines)
+        if not any(sig in output for sig in _TRANSIENT_NETWORK_SIGS):
+            # Not connectivity — a real dependency or config problem.
+            print(f"  ✗ Command failed with code {returncode}")
+            sys.exit(1)
+        if attempt == max_retries - 1:
+            print(
+                f"  ✗ Install still failing on network errors "
+                f"after {max_retries} attempts"
+            )
+            sys.exit(1)
+
+        delay = min(base_delay * (2**attempt), 120.0)
+        print(f"  ⚠ Index unreachable during install, waiting {delay:.0f}s...")
+        _purge_partial_layer(output)
+        time.sleep(delay)
+
+
 def _find_wheel_for_package(pkg_name: str) -> Path | None:
     """Find the built wheel file for a package name."""
     normalized = pkg_name.lower().replace("-", "_")
@@ -689,7 +770,7 @@ def build_venvstacks():
 
     # Step 4: Build environments
     print("\n  Building environments (this may take a while)...")
-    run_cmd(venvstacks_cmd + [
+    _build_with_network_retry(venvstacks_cmd + [
         "build",
         str(resolved_toml),
         "--no-lock",

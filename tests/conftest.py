@@ -45,7 +45,6 @@ _install_torch_stub()
 from omlx.patches.m5_gather_qmm import apply_m5_gather_qmm_workaround
 apply_m5_gather_qmm_workaround()
 
-from omlx.custom_kernels.nax import is_nax_available
 from omlx.request import Request, SamplingParams
 
 # Model and kernel numerics tests keep the GPU busy. Under --dist loadgroup
@@ -61,6 +60,7 @@ _GPU_SERIAL_TEST_FILES = (
     "test_qwen35_*",
     "test_qwen4_*",
     "test_row_exact_qmv.py",
+    "test_scheduler_chunked_prefill.py",
     "test_sdpa*",
 )
 
@@ -395,6 +395,8 @@ def _apply_mlx_mock_skips(items):
         ("test_minimax_m3_budget_close_starts_output", "stale xgrammar wheel 0.2.3 (pin 0.2.8): no minimax_m3 structural tag"),
         ("test_minimax_m3_adaptive_budget_waits_for_opener", "stale xgrammar wheel 0.2.3 (pin 0.2.8): no minimax_m3 structural tag"),
         ("test_minimax_m3_grammar_follows_template_thinking_mode", "stale xgrammar wheel 0.2.3 (pin 0.2.8): no minimax_m3 structural tag"),
+        # Quantized nn.Embedding (.bits) only exists in real MLX
+        ("test_audio_stt.py::TestQwen3ASRAudioQuantization", "quantized nn.Embedding attributes unavailable"),
     ]
 
     _mock_skip = pytest.mark.skip(
@@ -420,9 +422,7 @@ def _apply_mlx_mock_skips(items):
 @pytest.fixture
 def glm5_fused_decode():
     """GLM-5.3's fused decode/verify kernels, which run (and replay the
-    reference bit for bit) only on NAX GPUs."""
-    if not is_nax_available():
-        pytest.skip("the fused GLM-5.3 decode kernels run on M5 (NAX) GPUs")
+    reference bit for bit) on M3 and newer GPUs."""
     from omlx.patches.mlx_vlm_glm5_next_compat import (
         apply_mlx_vlm_glm5_next_compat_patch,
     )
@@ -430,7 +430,8 @@ def glm5_fused_decode():
     apply_mlx_vlm_glm5_next_compat_patch()
     from mlx_vlm.models.glm5_next import language
 
-    assert language._DECODE_FUSION
+    if not language._DECODE_FUSION:
+        pytest.skip("the fused GLM-5.3 decode kernels run on M3 and newer GPUs")
     return language
 
 

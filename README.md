@@ -102,7 +102,9 @@ Requires macOS 15.0+ (Sequoia), Python 3.11+ (recommended), and Apple Silicon (M
 
 ```bash
 brew tap jundot/omlx https://github.com/jundot/omlx
-brew install omlx
+brew install omlx --with-custom-kernel   # With native custom kernels (needs full Xcode)
+# No full Xcode? brew install omlx installs without the kernels
+
 # Upgrade to the latest version
 brew update && brew upgrade omlx
 

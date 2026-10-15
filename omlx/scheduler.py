@@ -102,6 +102,7 @@ from .utils.metal_sync import (
     unreleased_graphics_bytes,
 )
 from .utils.proc_memory import get_graphics_footprint, get_phys_footprint
+from .utils.sampling import make_no_repeat_ngram_processor
 from .utils.sampling import make_sampler as omlx_make_sampler
 from .utils.sampling import make_shared_sampler as omlx_make_shared_sampler
 from .utils.tokenizer import create_streaming_detokenizer
@@ -2959,6 +2960,7 @@ class Scheduler:
                 drained = True
         self._pending_async_removes = pending
         if drained:
+            self._note_memory_admission_progress()
             # The completion-time deferred clear may have already fired while
             # the async store worker still owned extracted KV buffers. Anchor
             # another ordinary deferred clear to the point where those final
@@ -5653,6 +5655,13 @@ class Scheduler:
         self._clear_memory_admission_blocker(request_id)
         self._clear_store_cache_admission_blocker(request_id)
 
+    def _note_memory_admission_progress(self, now: float | None = None) -> None:
+        """Restart the memory admission timeout after completed work."""
+        if self._memory_admission_blocked_request_id is not None:
+            self._memory_admission_blocked_since = (
+                time.monotonic() if now is None else now
+            )
+
     def _memory_admission_stall_output(self, reason: str) -> RequestOutput | None:
         """Fail one head-of-line request after persistent memory admission stall."""
         if not self.waiting:
@@ -5694,7 +5703,8 @@ class Scheduler:
             tail=["reduce context length", "lower hot_cache_max_size"],
         )
         message = (
-            "Request could not be admitted because memory pressure persisted "
+            "Request could not be admitted because no request or cache cleanup "
+            "progress was observed "
             f"for {stalled_for:.1f}s ({reason}). {advice}."
         )
         logger.warning("Memory admission stalled for %s: %s", request_id, message)
@@ -6821,6 +6831,7 @@ class Scheduler:
         state = plan.state
         self._maybe_record_fixed_state_bytes(state.cache)
         state.tokens_processed += plan.tokens
+        self._note_memory_admission_progress()
 
         # Boundary snapshot
         if state.boundary_enabled:
@@ -7811,6 +7822,13 @@ class Scheduler:
                 else {}
             ),
         )
+        if sampling_params.no_repeat_ngram_size:
+            logits_processors.append(
+                make_no_repeat_ngram_processor(
+                    sampling_params.no_repeat_ngram_size,
+                    sampling_params.ngram_window,
+                )
+            )
 
         suppress_processor = _make_suppress_logits_processor(
             self._model_suppress_tokens
@@ -8078,12 +8096,13 @@ class Scheduler:
         # Look for the think_end_str surrounded by whitespace/newlines in string literals
         escaped = re.escape(think_end_str)
         # Match patterns like: \n</think>\n\n or </think> in template strings
-        match = re.search(
-            r"(\\n|\\r|[\n\r])*" + escaped + r"((?:\\n|\\r|[\n\r])*)",
-            template_text,
-        )
-        if not match:
+        pattern = re.compile(r"(\\n|\\r|[\n\r])*" + escaped + r"((?:\\n|\\r|[\n\r])*)")
+        # Templates can mention the bare tag first while parsing history.
+        # Prefer the first wrapped occurrence, which is the rendered close.
+        matches = list(pattern.finditer(template_text))
+        if not matches:
             return None, None
+        match = next((m for m in matches if m.group(0) != think_end_str), matches[0])
 
         # Extract raw leading/trailing whitespace, converting \n escapes to actual newlines
         raw_leading = (
@@ -13134,9 +13153,9 @@ class Scheduler:
                     self._cleanup_prefill_abort_request(request, temp_uid=temp_uid)
                     continue
                 except _PrefillEvictionNeeded as e:
+                    # The paused request keeps its prefix blocks (#2180).
                     self.uid_to_request_id.pop(temp_uid, None)
                     self.request_id_to_uid.pop(request.request_id, None)
-                    self._release_paged_cache_for_request(request.request_id)
                     get_prefill_tracker().remove(request.request_id)
                     self._pause_for_prefill_eviction(request, e.request)
                     break
@@ -13361,6 +13380,7 @@ class Scheduler:
                 continue
 
             request.last_activity_at = step_now
+            self._note_memory_admission_progress(step_now)
             completion_tokens_before = request.num_output_tokens
 
             # Release VLM embeddings after first decode token (prefill is done)
@@ -13540,6 +13560,9 @@ class Scheduler:
                 finished_ids.add(request_id)
 
                 if parser_session is not None:
+                    notify = getattr(parser_session, "notify_finish_reason", None)
+                    if callable(notify):
+                        notify(response.finish_reason)
                     final_result = parser_session.finalize()
                     if stop_prefix_chars is not None:
                         final_result.stream_text = ""
@@ -13696,8 +13719,8 @@ class Scheduler:
         """Drop a request's paged-cache footprint on rejection paths.
 
         ``add_request`` routes through ``block_aware_cache.fetch_cache``
-        which records the request in ``_request_tables`` and increments
-        ref counts on every prefix-matched paged-cache block. The normal
+        which records a block table in the paged cache manager and
+        increments ref counts on every prefix-matched block. The normal
         completion path releases that state in ``_cleanup_finished``;
         the prefill-rejection paths in ``_advance_chunked_prefills`` /
         ``_schedule_waiting`` must do the same or rejected requests

@@ -1,0 +1,30 @@
+name: Security & privacy scan
+
+# Runs on every PR and push: fails on anything new vs. the reviewed baseline
+# (new network host, telemetry SDK, dangerous call, exfil pattern, native
+# binary, conflict marker, ...). See SECURITY_AUDIT.md section 5.6.
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Compliance gate
+        run: python scripts/compliance_check.py
+      - name: Source-tree scan
+        run: python scripts/security_scan.py
+      - name: Build wheel and scan the package
+        run: |
+          pip install build
+          python -m build --wheel --outdir /tmp/dist
+          python scripts/security_scan.py --dist /tmp/dist/*.whl

@@ -1,35 +1,33 @@
 # oMLX Security Audit & Compliance Guide
 
-**Version:** 1.2
-**Last Updated:** June 18, 2026
+**Version:** 1.3
+**Last Updated:** October 15, 2026
 **Project:** oMLX (Open MLX Inference Server)
 
 ---
 
-## ⚡ Auditor Quick-Start (Run These First)
+## ⚡ Auditor Quick-Start — what to run on every merge
 
-Before any manual inspection, run the automated compliance gate. It covers settings defaults, README privacy sections, and all license headers in ~1 second:
+Run from the repo root (`source .venv/bin/activate`, `export PYTHONPATH=.`). **Any failure blocks the merge.**
+
+| # | Check | Command | Expected | Covers |
+|---|-------|---------|----------|--------|
+| 1 | No conflict leftovers | `git diff --name-only --diff-filter=U` and `grep -rlE "^(<<<<<<<\|>>>>>>>) " omlx/ tests/ scripts/ apps/ *.md` | both empty | unresolved merges |
+| 2 | Compliance | `python scripts/compliance_check.py` | `ALL CHECKS PASSED` | secure defaults, README privacy, license headers |
+| 3 | **Malware / telemetry / privacy scan** | `python scripts/security_scan.py` | `SECURITY SCAN PASSED` | new hosts, telemetry SDKs, exec/pickle, exfiltration, obfuscation, binaries, git deps |
+| 4 | Same scan on the **built package** | `python scripts/security_scan.py --dist dist/*.whl` (or unpacked `.app`) | `SECURITY SCAN PASSED` | what actually ships (native binaries, bundled telemetry pkgs, `.pth`) |
+| 5 | Known CVEs *(release builds; also in `build_tahoe.sh`)* | `python scripts/security_scan.py --pip-audit` | no vulnerabilities | dependencies |
+| 6 | Fast tests | `pytest -m "not slow" -q` | 0 failed / 0 errors | behaviour (see `QWEN.md` for triage) |
+
+**If check 3 or 4 fails:** do not baseline blindly. Follow the decision table in §5.6.2.
+
+### Runtime spot-checks (macOS host with a real install — the scripts cannot verify these)
 
 ```bash
-source .venv/bin/activate
-PYTHONPATH=. python scripts/compliance_check.py
-```
-Expected: `ALL CHECKS PASSED. Project is compliant with Security Audit v1.0.`
-
-If it fails, **stop and fix the reported items first.** Manual checks below are only needed for items the script cannot verify.
-
-```bash
-# Verify no active server is binding to all interfaces
-lsof -i :8000
-
-# Verify config file permissions
-ls -l ~/.omlx/settings.json          # must be 0600
-
-# Verify authentication bypass is off
-grep "skip_api_key_verification" ~/.omlx/settings.json   # must be false
-
-# Check for prompt leakage in logs (TRACE level exposes full prompt text)
-grep -r "Incoming POST" ~/.omlx/logs  # empty = OK; content = log level too high
+lsof -i :8000                                            # bound to 127.0.0.1 only (unless remote access is intended)
+stat -f "%Lp" ~/.omlx/settings.json                      # must print 600   (Linux: stat -c %a)
+grep skip_api_key_verification ~/.omlx/settings.json     # must be false
+grep -r "Incoming POST" ~/.omlx/logs                     # empty = OK; content = log level too high (TRACE leaks prompts)
 ```
 
 ---
@@ -76,7 +74,8 @@ oMLX's security model assumes it runs on a **trusted host (macOS)** accessed loc
 
 ### 3.1 Privacy & Outbound Traffic (Audit First)
 
-- [ ] **Telemetry disabled:** Verify no analytics calls exist outside the benchmark opt-in path (`omlx/admin/benchmark.py`).
+- [ ] **Telemetry disabled:** `security_scan.py` reports no new `telemetry:*` hit and no new host. Only the opt-in benchmark upload (`omlx/admin/benchmark.py`, `accuracy_upload.py`) may contact omlx.ai.
+- [ ] **Accepted outbound features** (user-initiated, reviewed; their hosts live in the baseline): model download (huggingface.co / hf-mirror / modelscope), web search (DuckDuckGo default, Brave, SearXNG), GitHub release check (off by default), cluster peers.
 - [ ] **Benchmark upload gated:** Verify `BenchmarkRequest.allow_upload` defaults to `False` and the upload is only called when `run.request.allow_upload is True`.
 - [ ] **Update check off:** Verify `server.check_updates` is `false` in `settings.json` (default).
 - [ ] **StatusKit check off:** Verify `server.check_statuskit` is `false` (default; probes a system setting on macOS Tahoe).
@@ -85,7 +84,8 @@ oMLX's security model assumes it runs on a **trusted host (macOS)** accessed loc
 ### 3.2 Network & Connectivity
 
 - [ ] **Binding:** Server binds to `127.0.0.1` unless remote access is explicitly required.
-- [ ] **CORS:** `cors_origins` in `settings.json` is not `["*"]` if the server is internet-exposed.
+- [ ] **CORS:** default is `["http://localhost", "http://127.0.0.1"]`; `cors_origins` must not be `["*"]` if the server is internet-exposed.
+- [ ] **Cluster** (`omlx/cluster/`): pairing token kept secret (it authenticates the pickle control channel, OMLX-06); SSH key files `0600`/`0700`; peers on trusted network only.
 - [ ] **TLS:** A reverse proxy (Nginx/Caddy) provides HTTPS if accessed over a network.
 - [ ] **MCP:** `mcp.example.json` contains no hardcoded secrets and no overly permissive tool access.
 
@@ -104,13 +104,13 @@ oMLX's security model assumes it runs on a **trusted host (macOS)** accessed loc
 
 ### 3.5 Dependency & Supply Chain Security (Vulnerabilities & Malware Auditing)
 
-- [ ] **Vulnerability Auditing:** Ensure `pip-audit` runs automatically during macOS builds to block compilation if insecure library versions are detected.
-- [ ] **Malicious Payload & Stealer Scanning:** Scan codebases and incoming dependencies for indicators of stealers, trojans, or malware:
+- [ ] **Vulnerability Auditing:** `pip-audit` blocks macOS builds (`build_tahoe.sh`); run `security_scan.py --pip-audit` on demand.
+- [ ] **Malicious Payload & Stealer Scanning:** **Automated by `scripts/security_scan.py` (§5.6)** — it covers the indicators below on every merge and on built packages:
   - Check for dynamic/obfuscated code execution (e.g. `eval()`, `exec()`, or base64 decoding to execute payloads).
   - Verify that no raw outbound calls exist outside of official API routes (e.g., raw TCP/UDP sockets, unsanctioned `urllib` or `requests` calls).
   - Inspect files for exfiltration behavior (such as scraping SSH keys, browser cookies, `.env` files, or routing data to unverified webhooks/IPs).
 - [ ] **Reproducible Builds & Lockfiles:** Ensure `venvstacks` enforces deterministic dependency resolutions with frozen versions and date-locking (`exclude-newer`) to shield against compromised upstream updates.
-- [ ] **Static Security Testing (SAST):** Run SAST tools (like `bandit` for Python) to verify codebase security hygiene and identify vulnerable API usage.
+- [ ] **Static Security Testing (SAST):** Optionally run `bandit -r omlx -ll` for extra coverage (not installed by default; `security_scan.py` is the mandatory gate).
 
 ---
 
@@ -121,7 +121,9 @@ oMLX's security model assumes it runs on a **trusted host (macOS)** accessed loc
 | **OMLX-01** | **Auth Bypass:** `skip_api_key_verification = true` grants full unauthenticated admin access. | Default `false`; documented warning. |
 | **OMLX-02** | **Plaintext Config:** Secrets in `settings.json` without encryption. | OS-level `0600` permissions; no fix planned (local-only threat model). |
 | **OMLX-03** | **CSRF:** Admin panel POST actions lack explicit CSRF tokens. | Partially mitigated by `SameSite=Lax` cookies. |
-| **OMLX-04** | **CORS Wildcard:** Default `["*"]` allows any origin to attempt API requests. | User-configurable; documented. |
+| **OMLX-04** | **CORS:** default is now `["http://localhost", "http://127.0.0.1"]`; a user may still set `["*"]`. | Default restrictive; documented. |
+| **OMLX-06** | **Pickle over cluster socket** (`omlx/cluster/control_plane.py`): `pickle.loads` after HMAC-SHA256 check. | Safe only while the shared token stays secret; token leak = RCE on cluster peers. Baselined. |
+| **OMLX-07** | **Import-time source patching** (`omlx/patches/mlx_vlm_mlx0322_compat.py` uses `exec`). | Local installed package only, no network input. Baselined. |
 | **OMLX-05** | **Benchmark Telemetry:** Benchmark module can upload hardware fingerprint + performance data. | **Mitigated (May 2026):** `allow_upload` defaults to `false`; upload is gated behind user opt-in both in backend (`BenchmarkRequest.allow_upload: bool = False`) and UI checkbox. `compliance_check.py` verifies the default. |
 
 ---
@@ -203,7 +205,7 @@ Verifies:
 2. **`README.md` privacy sections** — required sections exist; prohibited telemetry/tracking sections are absent
 3. **License headers** — every `.py` file begins with `# SPDX-License-Identifier: Apache-2.0`
 
-**Do not commit if this check fails.**
+**Do not commit if this check fails.** (`compliance_check.py` does not detect conflict markers — gate 1 and `security_scan.py` do.)
 
 ### 5.5 Merge Conflict Security Checklist
 
@@ -213,7 +215,56 @@ When resolving merge conflicts, verify these files specifically:
 - [ ] **`omlx/settings.py`** — Security defaults not accidentally changed. Run `compliance_check.py` after resolving.
 - [ ] **`omlx/utils/mlx_mock.py`** — Remains the single canonical mock. Not reverted to an older state.
 - [ ] **`tests/mlx_mock.py`** — Remains the 5-line shim; not replaced with a 400+ line duplicate.
-- [ ] **`tests/conftest.py`** — `import omlx` appears before any `import mlx.*`.
+- [ ] **`tests/conftest.py`** — `import omlx` appears before any `import mlx.*`; `_MLX_IMPORT_SKIP` / `_MLX_SKIP_REASONS` lists not lost.
+- [ ] **`scripts/security_baseline.json`** — not hand-merged; re-run `security_scan.py` and review any additions (§5.6.2).
+- [ ] **No leftover conflict markers** (incl. READMEs): `grep -rlE "^(<<<<<<<|>>>>>>>) " omlx/ tests/ scripts/ apps/ *.md`.
+
+### 5.6 Merge-Time Malware / Telemetry / Privacy Scan (mandatory on every merge)
+
+#### 5.6.1 What it does
+
+`scripts/security_scan.py` compares the source tree (or a built package) with the human-reviewed `scripts/security_baseline.json` and **fails on anything new**:
+
+| Category | Detects |
+|----------|---------|
+| Network | URL hosts not in the baseline; IP-literal URLs; exfil sinks (webhooks, pastebin, ngrok, …) |
+| Telemetry | analytics/crash SDKs (sentry, posthog, mixpanel, firebase, …), analytics URLs, device-ID harvesting, updater frameworks |
+| Dangerous calls | `eval/exec`, `pickle/marshal`, `os.system`, `shell=True`, `curl \| sh`, raw sockets, `ctypes`, dynamic imports, Swift `Process`/`URLSession` |
+| Exfiltration | `~/.ssh`, browser cookie/login stores, keychain reads, cloud credential files, clipboard/screen capture, keyloggers, persistence (LaunchAgents/cron) |
+| Obfuscation | long base64/hex blobs, `chr()` chains, `zlib+b64` payloads |
+| Supply chain | git/URL dependencies, unexpected binaries, `.pth` files, `pull_request_target` on untrusted code, unpinned third-party Actions (warn), conflict markers |
+| Built package (`--dist`) | project files vs. baseline; third-party files for exfil/obfuscation only; bundled telemetry packages; every native binary (`.so/.dylib/.metallib`) must be in `dist_binaries` (SHA-256 printed) |
+
+Pure data (`omlx/eval/data/`, calibration JSON, i18n, `*.min.js`) is excluded from pattern rules to avoid noise, but is still checked for hosts, binaries and obfuscation.
+
+```bash
+python scripts/security_scan.py                   # source tree
+python scripts/security_scan.py --dist dist/*.whl # built wheel / sdist / unpacked .app
+python scripts/security_scan.py --pip-audit       # + known CVEs
+python scripts/security_scan.py --update-baseline # human-reviewed change only (add --dist for native binaries)
+```
+
+CI: `.github/workflows/security-scan.yml` runs compliance + source scan + wheel scan on every PR and push.
+
+#### 5.6.2 A finding appeared — decision procedure
+
+1. **Read the line**: `[category:rule] file: N hit(s), baseline allows M` or `[new-network-host] host`.
+2. **Open the code** (`grep -n` the pattern in that file) and answer: *what does it do, and can untrusted data or the network reach it?*
+3. **Decide**:
+
+| Verdict | Action |
+|---------|--------|
+| Suspicious / unexplained / sends data off-device without opt-in | **Remove it**, do not merge, report to the maintainer. |
+| Real risk but needed (e.g. `pickle`, `exec`) | Harden (HMAC, no untrusted input, arg lists instead of shell), add a row to the Risk Register (§4). |
+| Legitimate feature (HF download, web search, cluster, keychain HF token…) | `--update-baseline`, then explain *each added line* of `git diff scripts/security_baseline.json` in the PR. |
+| False positive (docs, dataset text, test fixture, minified lib) | Prefer tightening the rule / `DATA_GLOBS` in the script; otherwise baseline with a justification. |
+| New native binary | Rebuild from reviewed `csrc/` in CI, then `--update-baseline --dist`; record the SHA-256 in the PR. |
+
+4. **Never** run `--update-baseline` merely to make CI green. Reviewers must reject PRs that change the baseline without justification.
+
+#### 5.6.3 Limits (be honest in reviews)
+
+Static pattern matching cannot prove the absence of malware. Compiled binaries are allowlisted by name only (hash is printed, not enforced). Third-party packages inside a bundled `.app` get only the high-signal checks. Complement with `pip-audit`, pinned/date-locked dependencies (§3.5) and code review of every baseline change.
 
 ---
 

@@ -6,54 +6,66 @@ oMLX is a production-ready LLM inference server optimized for Apple Silicon (M1/
 
 ## ⚡ Canonical Workflow (Start Here — Always)
 
-This is the single authoritative procedure for any task: fixing bugs, auditing, or verifying the repo. **Follow these steps in order every time.**
+The single authoritative procedure for any task (bug fix, merge, audit, verification). **Run the steps in order; stop at the first failing gate and fix it before continuing.**
+
+| # | Gate | Command | Pass criterion | If it fails |
+|---|------|---------|----------------|-------------|
+| 1 | Conflict markers | `git diff --name-only --diff-filter=U; grep -rlE "^(<<<<<<<\|>>>>>>>) " omlx/ tests/ scripts/ apps/ *.md` | both empty | Resolve (see *Merge Conflict Resolution*). Never commit markers. |
+| 2 | Compliance | `PYTHONPATH=. python scripts/compliance_check.py` | `ALL CHECKS PASSED` | Fix the reported default/header/README item. |
+| 3 | **Security & privacy scan** | `python scripts/security_scan.py` | `SECURITY SCAN PASSED` | See *Security scan failed — what to do* below. |
+| 4 | Fast tests | `PYTHONPATH=. pytest -m "not slow" --tb=short -q` | 0 failed, 0 collection errors | Triage table below. |
+| 5 | Built package *(only when you build/release)* | `python scripts/security_scan.py --dist dist/*.whl` (or unpacked `.app`) | `SECURITY SCAN PASSED` | Same as gate 3. |
+| 6 | Re-run gates 2 + 3 | as above | pass | Something you changed in step 4 broke a gate. |
+| 7 | Commit | `git add -A && git restore --staged "oMLX.*.app"` then `git commit` | — | The `.app` bundle is a build artifact: never commit it. |
 
 ```bash
-# ── Step 1: Activate the venv (it is always at .venv/) ──────────────────────
-source .venv/bin/activate
-
-# ── Step 2: Install dependencies — NO audio extra on Linux/CI ───────────────
-# The [audio] extra (mlx-audio) conflicts with mlx-lm > 0.31.2 on non-macOS.
-# NEVER run: pip install -e ".[dev,mcp,audio,grammar]"  ← breaks on Linux
-pip install -e ".[dev,mcp,grammar]"
-
-# ── Step 3: Compliance gate — run FIRST, takes ~1 second ────────────────────
-# Checks: settings.py security defaults, README.md privacy sections,
-# Apache-2.0 license headers on every .py file.
-PYTHONPATH=. python scripts/compliance_check.py
-# Expected: "ALL CHECKS PASSED. Project is compliant with Security Audit v1.0."
-# If it fails: fix reported issues BEFORE doing anything else.
-
-# ── Step 4: Run the fast test suite ─────────────────────────────────────────
-# PYTHONPATH=. is required so that `import omlx` resolves to the local repo,
-# which triggers the MLX mock installation before any mlx.* import runs.
-# pytest.ini already sets: addopts = -m "not slow and not integration"
-# so the -m flag below is redundant but is kept for clarity.
-PYTHONPATH=. pytest -m "not slow" --tb=short -q 2>&1 | tee /tmp/test_output.txt
-
-# ── Step 5: Triage failures (if any) ────────────────────────────────────────
-grep "^FAILED\|^ERROR" /tmp/test_output.txt | sed 's/ - .*//' | sort | uniq -c | sort -rn
-# Root-cause decision table:
-#   "NotImplementedError: mlx.foo()"   → add foo to omlx/utils/mlx_mock.py
-#   "vocab file / HarmonyGptOss"       → add pytest.skip() in test fixture
-#   numerical precision assertion      → mark test @pytest.mark.slow
-#   anything else                      → fix the logic bug
-
-# ── Step 6: Iterate until zero failures ─────────────────────────────────────
-PYTHONPATH=. pytest -m "not slow" --tb=no -q 2>&1 | tail -3
-# Target line: "N passed, M skipped, K deselected"  (zero "failed")
-
-# ── Step 7: Compliance gate again ───────────────────────────────────────────
-PYTHONPATH=. python scripts/compliance_check.py
-
-# ── Step 8: Commit ───────────────────────────────────────────────────────────
-git add -A
-git restore --staged "oMLX.*.app"   # ← exclude macOS build artifact (hundreds of files)
-git commit -m "fix: ..."
+source .venv/bin/activate                  # venv is always .venv/
+pip install -e ".[dev,mcp,grammar]"        # NEVER add the [audio] extra on Linux (conflicts with mlx-lm)
+export PYTHONPATH=.                        # makes `import omlx` hit the repo → installs the MLX mock first
 ```
 
-> **⚠️ Build artifact warning:** `oMLX.0.3.x.app/` is a macOS `.app` bundle that may appear as
-> hundreds of staged files. Always run `git restore --staged "oMLX.*.app"` before committing.
+> On Linux there is **no MLX**: the NumPy mock (`omlx/utils/mlx_mock.py`) stands in. Tests verify logic only; hardware numerics are `@pytest.mark.slow` (Apple Silicon only).
+
+### Security scan failed — what to do
+
+`scripts/security_scan.py` fails on anything **new** versus the reviewed `scripts/security_baseline.json`. Read each `[FAIL]` line and decide:
+
+| Finding | Question to answer | Action |
+|---------|-------------------|--------|
+| `[new-network-host] x.com` | Is this a documented feature (HF download, web search, update check, omlx.ai upload)? Is it opt-in / user-initiated? | Legit → `--update-baseline` + justify in PR. Unknown/unexplained → **remove the code**, treat as suspicious. |
+| `[telemetry:*]` | Does any data leave the device without explicit user opt-in? | Almost always **reject**. Only baseline if it is a false positive (docs, dataset text, minified lib). |
+| `[exfil:*]` (ssh/browser/keychain/webhook/IP) | Is it the feature's stated purpose (cluster SSH keys, HF-token keychain item)? | Legit → baseline + explain. Anything else → **reject and escalate**. |
+| `[danger:dyn-exec / pickle / os-system / shell-true / pipe-to-shell]` | Can attacker-controlled data (network, model files, prompts) reach it? | Reachable → rewrite (no eval/pickle on untrusted input; arg lists, no shell). Not reachable → baseline + justify. |
+| `[obfuscation:*]` | Why is code/base64 unreadable? | Test fixtures only → baseline. Otherwise **reject**. |
+| `[unexpected-binary/executable]` | Who built it, from which reviewed source? | Rebuild from `csrc/` in CI, then `--update-baseline --dist` and note the SHA-256. |
+| `merge-conflict markers in …` | — | Resolve the conflict; never baseline. |
+| `deps:url-or-git-dependency` | Is the git SHA pinned and the repo trusted? | Pinned + trusted → baseline. Unpinned → pin it. |
+
+Rules: **never run `--update-baseline` just to turn the scan green.** Review `git diff scripts/security_baseline.json` line by line and explain every addition in the PR description. Full policy: `SECURITY_AUDIT.md` §5.6.
+
+### Triage test failures (gate 4)
+
+```bash
+PYTHONPATH=. pytest -m "not slow" --tb=short -q 2>&1 | tee /tmp/test_output.txt
+sed 's/\x1b\[[0-9;]*m//g' /tmp/test_output.txt | grep "^FAILED\|^ERROR" | sed 's/::.*//' | sort | uniq -c | sort -rn
+```
+
+| Symptom | Root cause | Fix (never extend the mock for MLX *internals*) |
+|---------|-----------|-----|
+| **Collection error** (`NotImplementedError` / `ModuleNotFoundError: mlx_audio` at import) | Module-scope MLX/vendor code or missing `[audio]` extra | Add the file to `_MLX_IMPORT_SKIP` in `tests/conftest.py` with a one-line reason. |
+| Test fails with `NotImplementedError: mlx.foo()` | Simple op (reshape, mean, passthrough…) | Add `foo` to `omlx/utils/mlx_mock.py` (see *Adding a missing MLX function*). |
+| …same, but needs real MLX internals (RotatingKVCache, `mx.key`, `as_strided`, `grid_sample`, quantize shapes, `TokenizerWrapper.tool_parser`) | Mock cannot reproduce C++ behaviour | Add the file to `_MLX_SKIP_REASONS` in `tests/conftest.py`. |
+| Needs real Harmony token IDs | Mock can't emit them | Nothing — conftest auto-skips "harmony" tests. |
+| Needs a model/vocab file not in repo | Offline CI | `pytest.skip()` in the fixture, or `@pytest.mark.slow`. |
+| Numerical precision assertion | NumPy ≠ MLX numerics | `@pytest.mark.slow`. |
+| Fails only in this container (process groups, ports) | Environment | Mark/skip with reason; do not "fix" the code. |
+| Anything else | Real bug | Fix the logic. |
+
+Repeat until `PYTHONPATH=. pytest -m "not slow" --tb=no -q | tail -3` shows `N passed, M skipped, K deselected` with **zero failed and zero errors**. Do not hide a failure by deleting a test.
+
+> **Known state (2026-10-15, Linux, no MLX):** ~135 mock-limitation failures remain untriaged (`tests/integration/test_e2e_streaming.py`, `test_k2_*`, `test_mlx0324_compat.py`, `test_sampling.py`, `test_output_parser.py`, audio tests, `test_splash_engine.py`, …). Treat them as "triage per table above", not as regressions, unless your change touched that area.
+
+> **⚠️ Build artifact warning:** `oMLX.0.3.x.app/` is a macOS `.app` bundle that may appear as hundreds of staged files. Always run `git restore --staged "oMLX.*.app"` before committing.
 
 ---
 
@@ -89,7 +101,8 @@ git commit -m "fix: ..."
 | `omlx/scheduler.py` | Request scheduling (FCFS + chunked prefill) |
 | `omlx/settings.py` | Global/per-model settings — **security-sensitive defaults** |
 | `omlx/utils/mlx_mock.py` | **The MLX mock — single source of truth for Linux/CI testing** |
-| `scripts/compliance_check.py` | Automated security/license compliance gate |
+| `scripts/compliance_check.py` | Compliance gate: security defaults, README privacy, license headers |
+| `scripts/security_scan.py` + `security_baseline.json` | Merge-time malware/telemetry/exfiltration scan (source + built packages) |
 | `tests/` | ~4600+ fast tests, ~10 slow (Apple Silicon only) |
 | `packaging/` | macOS `.app` and `.dmg` build scripts |
 
@@ -148,7 +161,7 @@ PYTHONPATH=. pytest
 
 ### Adding a missing MLX function
 
-When a test fails with `NotImplementedError: mlx.foo() is not implemented in the MLX mock`, add `foo` to the `if self.__name__ == "mlx.core":` block inside `MockModule.__getattr__` in `omlx/utils/mlx_mock.py`:
+**Only for simple ops** (passthrough, NumPy delegation, shape reductions). If the test needs real MLX internals, skip it via `tests/conftest.py` instead (see triage table). When a test fails with `NotImplementedError: mlx.foo() is not implemented in the MLX mock`, add `foo` to the `if self.__name__ == "mlx.core":` block inside `MockModule.__getattr__` in `omlx/utils/mlx_mock.py`:
 
 ```python
 # No-op / passthrough
@@ -201,13 +214,13 @@ if name in ("mean", "max", "min", "sum"):
 
 ## Merge Conflict Resolution
 
-> **Scope conflict scans to project files only:**
+> **Find conflicts, scoped to project files only:**
 > ```bash
-> # CORRECT — only scans omlx/ and tests/
-> grep -rl "<<<<<<" omlx/ tests/
-> # WRONG — scans packaging/_export/ (thousands of vendored stdlib files → false positives)
-> grep -rl "<<<<<<" .
+> git diff --name-only --diff-filter=U                      # files git still sees as unmerged
+> grep -rlE "^(<<<<<<<|>>>>>>>) " omlx/ tests/ scripts/ apps/ *.md   # leftover markers
+> # WRONG: `grep -rl "<<<<<<" .` scans packaging/_export/ (vendored stdlib → false positives)
 > ```
+> `security_scan.py` also fails on any leftover marker. After resolving, `git add` the file so it leaves the *unmerged* state.
 
 Priority order when resolving conflicts:
 
@@ -225,7 +238,9 @@ Priority order when resolving conflicts:
 
 5. **`tests/conftest.py`** — Must `import omlx` before any `import mlx.*`.
 
-6. **General rule:** When both branches add different features to the same file, keep both. Only discard a change if it is a direct logical contradiction.
+6. **`scripts/security_baseline.json`** — Never hand-merge. Take either side, then run `python scripts/security_scan.py`; if it fails on legitimate additions from both branches, review them and run `--update-baseline`.
+
+7. **General rule:** When both branches add different features to the same file, keep both. Only discard a change if it is a direct logical contradiction.
 
 ---
 

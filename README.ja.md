@@ -79,8 +79,9 @@ brew update && brew upgrade omlx
 # バックグラウンドサービスとして実行（クラッシュ時に自動再起動）
 omlx start
 
-# オプション: MCP（Model Context Protocol）サポート
+# オプション: MCP（Model Context Protocol）サポート。読み込むには再起動
 /opt/homebrew/opt/omlx/libexec/bin/pip install mcp
+omlx restart
 ```
 
 オプションの GLM-5.2 / MiniMax M3 ネイティブカスタムカーネルは、現在 HEAD ビルドが必要です:
@@ -94,11 +95,21 @@ brew install omlx --HEAD --with-custom-kernel
 ```bash
 git clone https://github.com/jundot/omlx.git
 cd omlx
+<<<<<<< HEAD
 pip install -e .          # コアのみ
 pip install -e ".[mcp]"   # MCP（Model Context Protocol）サポート付き
 
 # オプション: GLM-5.2 / MiniMax M3 ネイティブカスタムカーネル
 OMLX_WITH_CUSTOM_KERNEL=1 pip install -e .
+||||||| f5c7dbc9
+make install                # Web UIとネイティブカスタムカーネルを含むeditableインストール
+# フルXcodeがない場合は make install-no-kernels でカーネルなしでインストール
+make mcp                    # オプション: MCP（Model Context Protocol）サポートを追加
+=======
+make install                # Web UIとネイティブカスタムカーネルを含むeditableインストール
+# フルXcodeがない場合は make install-no-kernels でカーネルなしでインストール
+make mcp                    # オプション: MCP サポートを追加。`omlx serve` の再起動で読み込み
+>>>>>>> main
 ```
 
 Python 3.10+とApple Silicon（M1/M2/M3/M4/M5）が必要です。
@@ -232,7 +243,7 @@ OpenAIとAnthropic APIのドロップイン代替です。ストリーミング�
 | `POST /v1/messages` | Anthropic Messages API |
 | `POST /v1/embeddings` | テキストエンベディング |
 | `POST /v1/rerank` | ドキュメントリランキング |
-| `POST /v1/systemone` | Decision モデルによる型付き判定 (TypeSafe System One) |
+| `POST /v1/systemone` | Decision モデルまたはチャットモデルによる型付き判定 (TypeSafe System One) |
 | `GET /v1/models` | 利用可能なモデル一覧 |
 | `POST /tokenize`, `POST /detokenize` | vLLM 互換トークナイザー API（`/v1` 配下でも利用可） |
 

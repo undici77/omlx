@@ -111,8 +111,9 @@ brew update && brew upgrade omlx
 # Run as a background service (auto-restarts on crash)
 omlx start
 
-# Optional: MCP (Model Context Protocol) support
+# Optional: MCP (Model Context Protocol) support, then restart to load it
 /opt/homebrew/opt/omlx/libexec/bin/pip install mcp
+omlx restart
 ```
 
 Optional GLM-5.2 / MiniMax M3 native custom kernels currently require a HEAD build:
@@ -126,12 +127,22 @@ brew install jundot/omlx/omlx --HEAD --with-custom-kernel
 ```bash
 git clone https://github.com/jundot/omlx.git
 cd omlx
+<<<<<<< HEAD
 pip install -e .          # Core only
 pip install -e ".[mcp]"   # With MCP (Model Context Protocol) support
 
 # GLM-5.2 / MiniMax M3 / Qwen3.5 native custom kernels (strongly recommended
 # if you serve those families -- see note below)
 OMLX_WITH_CUSTOM_KERNEL=1 pip install -e .
+||||||| f5c7dbc9
+make install                # Editable install with the web UI and native custom kernels
+# No full Xcode? make install-no-kernels installs without the kernels
+make mcp                    # Optional: MCP (Model Context Protocol) support
+=======
+make install                # Editable install with the web UI and native custom kernels
+# No full Xcode? make install-no-kernels installs without the kernels
+make mcp                    # Optional: MCP support, restart `omlx serve` to load it
+>>>>>>> main
 ```
 
 Requires macOS 15.0+ (Sequoia), Python 3.11–3.13, and Apple Silicon (M1/M2/M3/M4/M5).
@@ -294,7 +305,7 @@ Drop-in replacement for OpenAI and Anthropic APIs. Supports streaming usage stat
 | `POST /v1/messages` | Anthropic Messages API |
 | `POST /v1/embeddings` | Text embeddings |
 | `POST /v1/rerank` | Document reranking |
-| `POST /v1/systemone` | Typed decisions with decision models (TypeSafe System One) |
+| `POST /v1/systemone` | Typed decisions with decision models or chat models (TypeSafe System One) |
 | `GET /v1/models` | List available models |
 | `POST /tokenize`, `POST /detokenize` | vLLM-compatible tokenizer API (also under `/v1`) |
 
@@ -389,9 +400,9 @@ The default SSD cache limit, `auto`, uses 50% of the sum of free disk space and 
 
 
 Most settings can also be configured from the web admin panel at `/admin`. Settings are persisted to `~/.omlx/settings.json`, and CLI flags take precedence.
-Set the main API key before changing the server host to a LAN address or `0.0.0.0`, or save both settings together. oMLX refuses to start on any non-loopback address without a main API key. The existing `skip_api_key_verification` option remains restricted to loopback-only binds.
+Set the main API key before changing the server host to a LAN address or `0.0.0.0`, or save both settings together. oMLX refuses to start on any non-loopback address without a main API key. "Disable all authentication" (`skip_api_key_verification`) turns off both inference and admin authentication, so it stays restricted to loopback-only binds.
 
-For keyless inference, stop oMLX, manually set `auth.allow_unauthenticated_inference` to `true` in `settings.json`, and restart. It defaults to `false` and has no UI toggle. This allows anyone who can reach the server to use inference (including stored Responses and audio), MCP tools, and web search. On network binds, keep a main API key configured and `skip_api_key_verification` set to `false`; management endpoints still require authentication.
+For keyless inference on a network bind, turn on "Allow inference without API key" in the web admin settings or the Security screen of the macOS app. It sets `auth.allow_unauthenticated_inference`, defaults to `false`, and applies without a restart. This allows anyone who can reach the server to use inference (including stored Responses and audio), MCP tools, and web search. Management endpoints still require the main API key or an admin login.
 
 <details>
 <summary>Architecture</summary>

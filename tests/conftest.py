@@ -102,6 +102,12 @@ _MLX_IMPORT_SKIP = [
     # Same module-scope patch stack as above, plus attn_fused._gpu_class() and
     # the qwen4_exp vendor modules — all real-MLX/macOS-only.
     "test_qwen4_attn_fused.py",
+    # language.nax_sparse_mla_available() in a module-level skipif; NAX is
+    # Apple-GPU hardware state.
+    "test_glm5_next_mtp.py",
+    # Imports mlx_audio at module scope; the [audio] extra is not installed
+    # on Linux (conflicts with mlx-lm).
+    "test_audio_stt.py",
 ]
 
 collect_ignore = list(_MLX_IMPORT_SKIP) if _MOCKS_HARMONY else []

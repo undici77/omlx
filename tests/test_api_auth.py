@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Tests for API key authentication."""
 
+import importlib.util
 import json
 import os
 import subprocess
@@ -644,7 +645,13 @@ class TestUnauthenticatedInference:
             "/v1/systemone",
             "/v1/decisions",
             "/v1/responses",
-            "/v1/audio/speech",
+            pytest.param(
+                "/v1/audio/speech",
+                marks=pytest.mark.skipif(
+                    importlib.util.find_spec("mlx_audio") is None,
+                    reason="audio router is only mounted when mlx_audio is installed",
+                ),
+            ),
             "/tokenize",
             "/v1/tokenize",
             "/detokenize",

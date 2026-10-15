@@ -50,7 +50,7 @@ SKIP_DIRS = {
 }
 # Files that legitimately describe the patterns we search for.
 SELF_FILES = {"scripts/security_scan.py", "scripts/compliance_check.py",
-              "SECURITY_AUDIT.md", "QWEN.md"}
+              "SECURITY_AUDIT.md", "QWEN.md", "scripts/security_baseline.json"}
 MAX_BYTES = 5_000_000
 # Pure data / minified vendor bundles: free text and third-party libs make the
 # pattern rules meaningless. They are still checked for hosts, binaries and

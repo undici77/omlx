@@ -95,21 +95,11 @@ brew install omlx --HEAD --with-custom-kernel
 ```bash
 git clone https://github.com/jundot/omlx.git
 cd omlx
-<<<<<<< HEAD
 pip install -e .          # コアのみ
 pip install -e ".[mcp]"   # MCP（Model Context Protocol）サポート付き
 
 # オプション: GLM-5.2 / MiniMax M3 ネイティブカスタムカーネル
 OMLX_WITH_CUSTOM_KERNEL=1 pip install -e .
-||||||| f5c7dbc9
-make install                # Web UIとネイティブカスタムカーネルを含むeditableインストール
-# フルXcodeがない場合は make install-no-kernels でカーネルなしでインストール
-make mcp                    # オプション: MCP（Model Context Protocol）サポートを追加
-=======
-make install                # Web UIとネイティブカスタムカーネルを含むeditableインストール
-# フルXcodeがない場合は make install-no-kernels でカーネルなしでインストール
-make mcp                    # オプション: MCP サポートを追加。`omlx serve` の再起動で読み込み
->>>>>>> main
 ```
 
 Python 3.10+とApple Silicon（M1/M2/M3/M4/M5）が必要です。

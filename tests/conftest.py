@@ -170,6 +170,11 @@ def _apply_mlx_mock_skips(items):
     # depend on real MLX behaviour.  This follows the project rule: "mlx test
     # must be skipped" on non-macOS — keep the mock minimal and maintainable.
     _MLX_SKIP_REASONS: list[tuple[str, str]] = [
+        # Mock tokenizer/parser/cache internals (TokenizerWrapper.encode/tool_parser, mx._cache_state, grid_sample, rng state)
+        ("test_e2e_streaming", "MLX mock active — server streaming path needs real mlx-lm tool-parser internals"),
+        ("test_k2_tool_protocol", "MLX mock active — mlx-lm tool-call parsing internals unavailable"),
+        ("test_k2_tokenizer", "MLX mock active — TokenizerWrapper.encode unavailable"),
+        ("test_mlx0324_compat", "MLX mock active — requires exact real mlx 0.32.4 internals"),
         # MLX cache / MTP internals (RotatingKVCache, PoolingCache, etc.)
         ("test_mlx_lm_mtp_patch", "MLX mock active — RotatingKVCache internals unavailable"),
         ("test_deepseek_v4_patch", "MLX mock active — PoolingCache / cache patch internals unavailable"),
@@ -399,6 +404,19 @@ def _apply_mlx_mock_skips(items):
         ("test_minimax_m3_budget_close_starts_output", "stale xgrammar wheel 0.2.3 (pin 0.2.8): no minimax_m3 structural tag"),
         ("test_minimax_m3_adaptive_budget_waits_for_opener", "stale xgrammar wheel 0.2.3 (pin 0.2.8): no minimax_m3 structural tag"),
         ("test_minimax_m3_grammar_follows_template_thinking_mode", "stale xgrammar wheel 0.2.3 (pin 0.2.8): no minimax_m3 structural tag"),
+        # Added after the muse_spark/dev merge; all need real MLX or macOS process behaviour
+        ("test_splash_engine.py::TestLifecycle::test_start_serves_the_staged_model_and_stop_ends_the_group", "Linux counts a zombie-only process group as alive (macOS gives EPERM); container PID 1 does not reap"),
+        ("test_splash_engine.py::TestLifecycle::test_stop_waits_for_splash_and_kills_a_stuck_one", "Linux counts a zombie-only process group as alive (macOS gives EPERM); container PID 1 does not reap"),
+        ("test_splash_engine.py::TestProcessMemory::test_list_process_group_pids", "list_process_group_pids uses macOS libproc and returns [] off Darwin by design"),
+        ("test_sampling.py::test_shared_sampler_filters_a_batch_like_one_row_calls", "mlx.key() unavailable in the mock"),
+        ("test_sampling.py::test_no_repeat_ngram_matches_reference", "mlx.as_strided() unavailable in the mock"),
+        ("test_output_parser.py::test_k2_reasoning_modes_and_tool_envelopes", "mlx-lm _normalize_arguments unavailable in the mock"),
+        ("test_output_parser.py::TestOutputParserFactory::test_tool_parser_kept_without_template_conflict", "TokenizerWrapper.tool_parser is real mlx-lm only"),
+        ("test_paged_ssd_cache.py::TestNumericsSignature::test_yarn_scaled_rotary_tags_the_revision", "mlx-vlm rotary class is a mock placeholder"),
+        ("test_hf_uploader.py::TestGenerateModelCard::test_card_tables_follow_stored_tensors", "mock tensors report zero stored bytes"),
+        ("test_modernbert_attention.py::test_patch_is_idempotent_and_scoped", "mock attention module cannot be patched like the real one"),
+        ("test_audio_realtime.py::TestQwen3TokenIdStreaming", "mlx_audio Qwen3 tokenizer internals unavailable"),
+        ("test_audio_tts.py::TestTTSVoiceClonePassthrough::test_ref_audio_decoded_only_for_array_only_models", "mlx_audio TTS internals unavailable"),
         # Quantized nn.Embedding (.bits) only exists in real MLX
         ("test_audio_stt.py::TestQwen3ASRAudioQuantization", "quantized nn.Embedding attributes unavailable"),
     ]

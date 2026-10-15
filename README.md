@@ -127,22 +127,12 @@ brew install jundot/omlx/omlx --HEAD --with-custom-kernel
 ```bash
 git clone https://github.com/jundot/omlx.git
 cd omlx
-<<<<<<< HEAD
 pip install -e .          # Core only
 pip install -e ".[mcp]"   # With MCP (Model Context Protocol) support
 
 # GLM-5.2 / MiniMax M3 / Qwen3.5 native custom kernels (strongly recommended
 # if you serve those families -- see note below)
 OMLX_WITH_CUSTOM_KERNEL=1 pip install -e .
-||||||| f5c7dbc9
-make install                # Editable install with the web UI and native custom kernels
-# No full Xcode? make install-no-kernels installs without the kernels
-make mcp                    # Optional: MCP (Model Context Protocol) support
-=======
-make install                # Editable install with the web UI and native custom kernels
-# No full Xcode? make install-no-kernels installs without the kernels
-make mcp                    # Optional: MCP support, restart `omlx serve` to load it
->>>>>>> main
 ```
 
 Requires macOS 15.0+ (Sequoia), Python 3.11–3.13, and Apple Silicon (M1/M2/M3/M4/M5).

@@ -25,6 +25,8 @@ METHODS = [
     "onModelSettingsChange",
     "cancelPersistModelSettingsTimer",
     "schedulePersistModelSettings",
+    "reasoningLevels",
+    "samplingSource",
     "snapshotGenerationSettings",
 ]
 

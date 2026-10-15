@@ -340,8 +340,6 @@ def _apply_mlx_mock_skips(items):
         ("test_vlm_vision_fallback.py", "MLX mock active — ArraysCache.extract / tree_flatten unavailable"),
         # Singleton cache passthrough (ArraysCache left_padding/item assignment)
         ("test_singleton_cache_passthrough.py", "MLX mock active — ArraysCache internals unavailable"),
-        # dflash lifecycle (snapshot serialization requires real MLX cache layout)
-        ("test_dflash_lifecycle.py", "MLX mock active — dflash snapshot serialization requires real MLX"),
         # Memory monitor (hybrid model cache spec requires real MLX)
         ("test_memory_monitor.py", "MLX mock active — hybrid model cache specs require real MLX"),
         # Batched DFlash drafter asserts bit-exact parity between batched and
@@ -433,6 +431,42 @@ def glm5_fused_decode():
     if not language._DECODE_FUSION:
         pytest.skip("the fused GLM-5.3 decode kernels run on M3 and newer GPUs")
     return language
+
+
+@pytest.fixture
+def apply_drafter_target(monkeypatch):
+    """``drafter_target.apply`` that restores the patched classes afterwards.
+
+    The patch rewrites shared mlx-lm/mlx-vlm model and layer classes, which
+    other tests in the session build too.
+    """
+    from omlx.patches.mlx_lm_mtp import drafter_target
+
+    model_names = (
+        "__call__",
+        "mtp_partial_rollback",
+        "rollback_speculative_cache",
+        "_omlx_drafter_single_row",
+        "_omlx_drafter_target",
+    )
+    layer_names = ("__call__", "_omlx_drafter_capture_wrapped")
+
+    def apply(model):
+        targets = [(type(model), model_names)]
+        targets += [
+            (cls, layer_names) for cls in {type(layer) for layer in model.model.layers}
+        ]
+        for cls, names in targets:
+            for name in names:
+                if name in cls.__dict__:
+                    monkeypatch.setattr(cls, name, cls.__dict__[name])
+                else:
+                    # Records the name as absent so teardown deletes it.
+                    monkeypatch.setattr(cls, name, None, raising=False)
+                    delattr(cls, name)
+        return drafter_target.apply(model)
+
+    return apply
 
 
 @pytest.fixture(autouse=True)

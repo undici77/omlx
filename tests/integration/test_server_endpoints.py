@@ -1965,7 +1965,10 @@ class TestSystemOneEndpoint:
     }
 
     def test_systemone_response_shape(self, client, mock_decision_engine):
-        response = client.post("/v1/systemone", json={**self._BODY, "truncate": False})
+        video = "data:video/mp4;base64,AAAA"
+        response = client.post(
+            "/v1/systemone", json={**self._BODY, "truncate": False, "videos": [video]}
+        )
 
         assert response.status_code == 200
         assert response.json() == {
@@ -1978,10 +1981,31 @@ class TestSystemOneEndpoint:
         }
         (call,) = mock_decision_engine.encoded
         assert call["truncate"] is False
+        assert call["request"]["videos"] == [video]
         assert call["request"]["questions"]["team"]["criteria"] == {
             "billing": None,
             "tech": None,
         }
+
+    def test_systemone_leases_model_before_encode(
+        self, client, mock_engine_pool, mock_decision_engine
+    ):
+        # An idle decision model can be evicted while encode() runs (#4413).
+        leases_at_encode = []
+        encode = mock_decision_engine.encode
+
+        async def leased_encode(request, truncate=True):
+            leased = sum(call["_lease"] for call in mock_engine_pool.get_engine_calls)
+            leases_at_encode.append(leased - len(mock_engine_pool.release_calls))
+            return await encode(request, truncate)
+
+        mock_decision_engine.encode = leased_encode
+        response = client.post("/v1/systemone", json=self._BODY)
+
+        assert response.status_code == 200
+        assert leases_at_encode == [1]
+        assert [call["_lease"] for call in mock_engine_pool.get_engine_calls] == [True]
+        assert mock_engine_pool.release_calls == ["test-clef-model"]
 
     @pytest.mark.parametrize(
         "error,status",
@@ -1991,12 +2015,13 @@ class TestSystemOneEndpoint:
         ],
     )
     def test_systemone_request_errors_keep_status(
-        self, client, mock_decision_engine, error, status
+        self, client, mock_engine_pool, mock_decision_engine, error, status
     ):
         mock_decision_engine.encode_error = error
         response = client.post("/v1/systemone", json=self._BODY)
         assert response.status_code == status
         assert str(error) in response.text
+        assert mock_engine_pool.release_calls == ["test-clef-model"]
 
     def test_systemone_rejects_non_decision_model(self, client):
         response = client.post(
@@ -2016,6 +2041,112 @@ class TestSystemOneEndpoint:
     def test_systemone_schema_validation(self, client, change):
         response = client.post("/v1/systemone", json={**self._BODY, **change})
         assert response.status_code == 422
+
+
+class TestDecisionsEndpoint:
+    """Tests for the /v1/decisions endpoint."""
+
+    _QUESTIONS = [
+        {"type": "predicate", "name": "urgent", "instructions": "Is this urgent?"},
+        {
+            "type": "choice",
+            "name": "team",
+            "instructions": "Which team?",
+            "choices": [{"value": "billing"}, {"value": "tech"}],
+        },
+    ]
+
+    @staticmethod
+    def _letter_chat(engine):
+        import mlx.core as mx
+
+        class _CharTokenizer:
+            def encode(self, text, add_special_tokens=False):
+                return [ord(c) for c in text]
+
+        async def chat(messages, **kwargs):
+            logits = [-30.0] * 128
+            logits[ord("A")] = 1.0
+            logits[ord("B")] = 0.0
+            kwargs["logits_observer"](None, mx.array([logits]))
+            return MockGenerationOutput(prompt_tokens=7)
+
+        engine._tokenizer = _CharTokenizer()
+        engine.chat = chat
+        engine.count_chat_tokens = lambda messages, tools=None, **kwargs: 7
+
+    def test_decisions_with_chat_model(self, client, mock_llm_engine, mock_engine_pool):
+        self._letter_chat(mock_llm_engine)
+        response = client.post(
+            "/v1/decisions",
+            json={
+                "model": "test-model",
+                "input": "Checkout is down",
+                "questions": self._QUESTIONS,
+            },
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["model"] == "test-model"
+        assert data["usage"] == {"input_tokens": 14, "output_tokens": 0}
+        urgent, team = data["answers"]
+        assert urgent == {"type": "predicate", "name": "urgent", "probability": 0.7311}
+        assert team["choice"] == "billing"
+        assert [p["value"] for p in team["probabilities"]] == ["billing", "tech"]
+        assert mock_engine_pool.release_calls == ["test-model"]
+
+    def test_decisions_prompt_over_context_window_is_400(
+        self, client, mock_llm_engine, mock_engine_pool, monkeypatch
+    ):
+        self._letter_chat(mock_llm_engine)
+        monkeypatch.setattr(
+            "omlx.server.get_max_context_window", lambda model_id=None: 6
+        )
+        response = client.post(
+            "/v1/decisions",
+            json={
+                "model": "test-model",
+                "input": "Checkout is down",
+                "questions": self._QUESTIONS,
+            },
+        )
+
+        assert response.status_code == 400
+        assert response.json()["error"]["code"] == "context_length_exceeded"
+        assert mock_engine_pool.release_calls == ["test-model"]
+
+    def test_decisions_with_decision_model(
+        self, client, mock_engine_pool, mock_decision_engine
+    ):
+        mock_engine_pool._entries["test-clef-model"] = SimpleNamespace(
+            engine_type="decision"
+        )
+        response = client.post(
+            "/v1/decisions",
+            json={
+                "model": "test-clef-model",
+                "input": "Checkout is down",
+                "questions": self._QUESTIONS[:1],
+            },
+        )
+
+        assert response.status_code == 200
+        assert response.json()["answers"] == [
+            {"type": "predicate", "name": "urgent", "probability": 0.75}
+        ]
+        (call,) = mock_decision_engine.encoded
+        assert call["request"]["state"] == "Checkout is down"
+        assert [call["_lease"] for call in mock_engine_pool.get_engine_calls] == [True]
+        assert mock_engine_pool.release_calls == ["test-clef-model"]
+
+    def test_decisions_tokenizer_without_letters_is_400(self, client, mock_llm_engine):
+        response = client.post(
+            "/v1/decisions",
+            json={"model": "test-model", "input": "x", "questions": self._QUESTIONS},
+        )
+        assert response.status_code == 400
+        assert "option letter" in response.text
 
 
 class TestTokenCountEndpoint:

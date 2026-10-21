@@ -5,14 +5,14 @@ import mlx.core as mx
 import numpy as np
 import pytest
 
-from omlx.custom_kernels.glm_moe_dsa import fast
+from omlx.custom_kernels.quant_matmul import fast
 from omlx.patches.deepseek_v41.activation import quantize_swiglu_activation
 from omlx.patches.deepseek_v41.config import ModelConfig
 from omlx.patches.deepseek_v41.language import Expert
 from omlx.patches.deepseek_v41.quantization import QuantizedProjection
 
 pytestmark = pytest.mark.skipif(
-    not fast.has_symbol("deepseek_v41_grouped_expert"),
+    not fast.has_symbol("grouped_expert"),
     reason="Grouped expert extension is not built",
 )
 
@@ -48,7 +48,7 @@ def test_grouped_expert_async_streams_and_temporary_lifetime():
     for i in range(12):
         with mx.stream(streams[i % 2]):
             graph = make_graph()
-            grouped = fast.deepseek_v41_grouped_expert(*graph)
+            grouped = fast.grouped_expert(*graph)
             mx.async_eval(grouped)
             outputs.append((grouped, graph[-1]))
         mx.clear_cache()
@@ -62,7 +62,7 @@ def test_grouped_expert_rejects_evaluated_graph():
     graph = make_graph()
     mx.eval(*graph)
     with pytest.raises(ValueError, match="unevaluated"):
-        fast.deepseek_v41_grouped_expert(*graph)
+        fast.grouped_expert(*graph)
 
 
 @pytest.mark.parametrize("length", [1, 2, 4, 6, 8])
@@ -142,4 +142,4 @@ def test_grouped_expert_rejects_mixed_streams():
             mode="mxfp4",
         )
     with pytest.raises(ValueError, match="share a GPU stream"):
-        fast.deepseek_v41_grouped_expert(gate, up, activation, down)
+        fast.grouped_expert(gate, up, activation, down)

@@ -36,6 +36,7 @@
   "cdn.jsdelivr.net",
   "cdnjs.cloudflare.com",
   "chat.example.com",
+  "claude.ai",
   "console.mistral.ai",
   "custom.modelscope.cn",
   "discord.gg",
@@ -54,6 +55,7 @@
   "hop1.example",
   "hop2.example",
   "htmlpurifier.org",
+  "hub.test",
   "huggingface.co",
   "i.imgur.com",
   "i10.tinypic.com",
@@ -118,7 +120,7 @@
  "patterns": {
   "danger:ctypes-load": {
    "omlx/cluster/rdma/words.py": 2,
-   "omlx/custom_kernels/qwen35_prefill/csrc/qwen35_ane.mm": 1,
+   "omlx/custom_kernels/quant_matmul/csrc/ane/ane_hybrid.mm": 1,
    "omlx/patches/mimo_v2/decode_fast.py": 1,
    "omlx/utils/proc_memory.py": 4,
    "omlx/utils/psutil_compat.py": 1,
@@ -128,6 +130,7 @@
    "omlx/models/embedding.py": 1,
    "omlx/patches/mlx_vlm_mlx0322_compat.py": 2,
    "omlx/utils/mlx_mock.py": 1,
+   "tests/fixtures/record_deepseek_v41_expected.py": 2,
    "tests/test_cluster_progressive_loading.py": 2,
    "tests/test_cluster_runtime_version_source.py": 1,
    "tests/test_glm5_next_mtp.py": 1,
@@ -136,13 +139,12 @@
    "tests/test_qwen4_runtime_ple_fork_cpu.py": 2
   },
   "danger:dynamic-import": {
-   ".github/workflows/build-wheels.yml": 1,
-   "Formula/omlx.rb": 1,
    "omlx/__init__.py": 1,
    "omlx/adapter/output_parser.py": 1,
    "omlx/cluster/pipeline_compat.py": 2,
-   "omlx/cluster/planner.py": 1,
+   "omlx/cluster/planner.py": 2,
    "omlx/custom_kernels/__init__.py": 1,
+   "omlx/custom_kernels/_loader.py": 1,
    "omlx/engine/vlm.py": 4,
    "omlx/patches/deepseek_v4/__init__.py": 1,
    "omlx/patches/deepseek_v4/tokenizer_patch.py": 2,
@@ -165,8 +167,8 @@
    "omlx/patches/spark2_5/__init__.py": 1,
    "omlx/utils/mlx_mock.py": 1,
    "tests/test_admin_api_key.py": 2,
+   "tests/test_affine4_integration.py": 2,
    "tests/test_benchmark.py": 3,
-   "tests/test_custom_kernel_import_warning.py": 1,
    "tests/test_eval_worker_pool.py": 1,
    "tests/test_glm5_next_mtp.py": 1,
    "tests/test_minimax_m3_mlx_lm_patch.py": 1,
@@ -214,6 +216,7 @@
    "tests/test_cluster_control_plane.py": 3,
    "tests/test_cluster_rdma_links.py": 1,
    "tests/test_cluster_rdma_pipeline.py": 1,
+   "tests/test_deepseek_v41.py": 1,
    "tests/test_jaccl_side_channel.py": 1,
    "tests/test_qwen35_pipeline_forward.py": 1,
    "tests/test_server_main.py": 1,
@@ -226,7 +229,7 @@
    "omlx/cluster/staging.py": 3,
    "omlx/cluster/transport.py": 1,
    "tests/test_cluster_seams.py": 1,
-   "tests/test_cluster_staging.py": 6
+   "tests/test_cluster_staging.py": 7
   },
   "danger:swift-process": {
    "Formula/omlx.rb": 3,
@@ -312,6 +315,9 @@
   "telemetry:phone-home": {
    "omlx/utils/hardware.py": 3,
    "tests/test_hardware_benchmark.py": 1
+  },
+  "telemetry:telemetry-sdk": {
+   "tests/test_audio_realtime.py": 2
   },
   "telemetry:updater-framework": {
    "apps/omlx-mac/Sources/App/AppDelegate.swift": 1,

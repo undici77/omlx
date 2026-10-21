@@ -78,6 +78,10 @@ class _MockDevice:
 _MOCK_DEVICE_CPU = _MockDevice("cpu")
 _MOCK_DEVICE_GPU = _MockDevice("gpu")
 
+# mlx_{lm,vlm}.models members that are plain modules, so their attributes are
+# functions/classes and must never be resolved as nested submodules.
+_MODEL_LEAF_MODULES = ("base", "cache", "rope_utils", "activations")
+
 
 def _e4m3_decode(codes):
     """Decode E4M3FN byte codes back to float32 values."""
@@ -262,9 +266,15 @@ class MockMLXLoader(importlib.abc.Loader):
             return self.__class__(self._data @ self._unwrap(other))
 
         def __eq__(self, other):
+            # MLX cannot promote a str/bytes operand, so `arr in ("marker", ...)`
+            # must fall back to Python identity, not a NumPy elementwise bool array.
+            if isinstance(other, (str, bytes)):
+                return NotImplemented
             return self.__class__(self._data == self._unwrap(other), dtype="bool_")
 
         def __ne__(self, other):
+            if isinstance(other, (str, bytes)):
+                return NotImplemented
             return self.__class__(self._data != self._unwrap(other), dtype="bool_")
 
         def __lt__(self, other):
@@ -759,9 +769,19 @@ class MockMLXLoader(importlib.abc.Loader):
                         if name == "load_tool_module":
                             return lambda *a, **k: _make_tool_module()
 
-                    if self.__name__ in ("mlx_lm.models", "mlx_vlm.models") and name and name[0].islower():
+                    _parent = self.__name__
+                    _leaf = _parent.rsplit(".", 1)[-1]
+                    if name and name[0].islower() and (
+                        _parent in ("mlx_lm.models", "mlx_vlm.models")
+                        or (
+                            _parent.startswith(("mlx_lm.models.", "mlx_vlm.models."))
+                            and _leaf not in _MODEL_LEAF_MODULES
+                        )
+                    ):
+                        # Model packages nest (mlx_vlm.models.qwen3_5.language). Leaf
+                        # utility modules must not, or their functions become modules.
                         mod = loader.create_module(
-                            importlib.machinery.ModuleSpec(f"{self.__name__}.{name}", loader)
+                            importlib.machinery.ModuleSpec(f"{_parent}.{name}", loader)
                         )
                         self.__mock_items[name] = mod
                         return mod
@@ -1876,7 +1896,7 @@ class MockMLXLoader(importlib.abc.Loader):
             sys.modules[spec.name] = m
             return m
 
-        if spec.name.startswith("mlx_lm.models.cache"):
+        if spec.name.startswith(("mlx_lm.models.cache", "mlx_vlm.models.cache")):
             m = MockModule(spec.name)
 
             class _BaseCache:
@@ -1933,6 +1953,9 @@ class MockMLXLoader(importlib.abc.Loader):
 
                 def size(self):
                     return self.keys.shape[2] if self.keys is not None else 0
+
+                def empty(self):
+                    return self.keys is None
 
                 def merge(self, caches):
                     """Merge singleton caches into a batched cache. Returns self for mock."""
@@ -2084,6 +2107,15 @@ class MockMLXLoader(importlib.abc.Loader):
                 def extract(self, idx):
                     c = ArraysCache(len(self.cache))
                     c.cache = [x[idx : idx + 1] for x in self.cache]
+                    return c
+
+                def filter(self, idx):
+                    c = ArraysCache(len(self.cache))
+                    c.cache = [None if x is None else x[idx] for x in self.cache]
+                    if self.left_padding is not None:
+                        c.left_padding = self.left_padding[idx]
+                    if self.lengths is not None:
+                        c.lengths = self.lengths[idx]
                     return c
 
                 def extend(self, *a, **k):

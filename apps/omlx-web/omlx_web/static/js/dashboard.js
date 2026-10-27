@@ -601,6 +601,7 @@
             oqDtype: 'bfloat16',
             oqSensitivityModelPath: '',
             oqPreserveMtp: false,
+            oqPreserveNgram: false,
             oqMtpAssistantPath: '',
             oqEnhanced: false,
             oqeReuseImatrixCache: true,
@@ -7047,9 +7048,39 @@
             // HuggingFace Downloader Functions
             // =================================================================
 
+            // Convert Hugging Face and configured mirror model URLs to owner/repo ids.
+            // Leave plain repository IDs and other input unchanged for model lookup.
+            hfRepoIdFromInput(value) {
+                const raw = String(value ?? '').trim();
+                const officialLink = /^(?:(?:https?:)?\/\/)?(?:www\.)?(?:huggingface\.co|hf\.co)\/([^/?#\s]+\/[^/?#\s]+)/i;
+                const officialMatch = raw.match(officialLink);
+                if (officialMatch) return officialMatch[1];
+
+                const endpoint = String(this.globalSettings?.huggingface?.endpoint ?? '').trim();
+                if (endpoint) {
+                    try {
+                        const mirror = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(endpoint)
+                            ? endpoint : `https://${endpoint}`);
+                        const escape = text => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                        const prefix = mirror.pathname.split('/').filter(Boolean).map(escape).join('/');
+                        const pathPrefix = prefix ? `(?:${prefix}/)?` : '';
+                        const mirrorLink = new RegExp(
+                            `^(?:(?:https?:)?//)?(?:www\\.)?${escape(mirror.host)}/${pathPrefix}([^/?#\\s]+/[^/?#\\s]+)`,
+                            'i',
+                        );
+                        const mirrorMatch = raw.match(mirrorLink);
+                        if (mirrorMatch) return mirrorMatch[1];
+                    } catch {
+                        // Ignore invalid mirror settings and keep the official hosts.
+                    }
+                }
+                return raw;
+            },
+
             startHFDownload() {
-                const repoId = this.hfRepoId.trim();
+                const repoId = this.hfRepoIdFromInput(this.hfRepoId);
                 if (!repoId) return;
+                this.hfRepoId = repoId;
                 this.openModelDetail(repoId, 'files');
             },
 
@@ -7289,6 +7320,7 @@
                         preserve_mtp: this.oqSelectedModelHasMtp() ? this.oqPreserveMtp : false,
                         mtp_assistant_model_path: this.oqMtpAssistantCandidates().some(m => m.path === this.oqMtpAssistantPath)
                             ? this.oqMtpAssistantPath : '',
+                        preserve_ngram_table: this.oqPreservesNgram(),
                     };
                     if (this.oqEnhanced) {
                         payload.enhanced = true;
@@ -7436,6 +7468,10 @@
                 return model?.model_type || '';
             },
 
+            oqPreservesNgram() {
+                return this.oqSelectedModelType() === 'deepseek_v41' && this.oqPreserveNgram;
+            },
+
             oqAvailableLevels() {
                 return this.oqSelectedModelType() === 'deepseek_v41'
                     ? [2, 2.5, 2.7, 3, 4] : [2, 2.5, 2.7, 3, 3.5, 4, 5, 6, 8];
@@ -7507,6 +7543,7 @@
                             model_path: this.oqSelectedModelPath,
                             oq_level: this.oqLevel,
                             preserve_mtp: this.oqSelectedModelHasMtp() && this.oqPreserveMtp ? 'true' : 'false',
+                            preserve_ngram_table: this.oqPreservesNgram() ? 'true' : 'false',
                         });
                         const resp = await fetch(`/admin/api/oq/estimate?${params}`);
                         if (resp.ok) {

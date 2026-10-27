@@ -12,8 +12,9 @@ Features:
 - Tiered cache (GPU + paged SSD offloading)
 """
 
-import sys
+import os
 import platform
+import sys
 
 # Install MLX and Harmony mocks for non-macOS environments BEFORE any other imports.
 # This ensures that any module in the package (or its dependencies) that
@@ -22,8 +23,7 @@ if platform.system() != "Darwin":
     try:
         # Use absolute-like path discovery to avoid premature package loading
         import importlib.util
-        import os
-        
+
         # Path to mlx_mock.py
         mock_path = os.path.join(os.path.dirname(__file__), "utils", "mlx_mock.py")
         if os.path.exists(mock_path):
@@ -37,6 +37,11 @@ if platform.system() != "Darwin":
         pass
 
 from omlx._version import __version__
+
+# Apple's Metal driver reads this once, when the process creates its GPU device,
+# and relaxes the compute preemption timeout behind ImpactingInteractivity kills.
+if sys.platform == "darwin":
+    os.environ.setdefault("AGX_RELAX_CDM_CTXSTORE_TIMEOUT", "1")
 
 _LAZY = {
     "Request": "omlx.request",

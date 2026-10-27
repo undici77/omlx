@@ -26,16 +26,13 @@ import types
 import mlx.core as mx
 import pytest
 
+from test_deepseek_v41 import load_reference_weights, tiny
+
 import omlx.patches.deepseek_v41.language as v41_lang
 from omlx.memory_monitor import MemoryMonitor, make_prefill_memory_profile
 from omlx.patches.deepseek_v41 import apply_patch
 from omlx.patches.deepseek_v41.config import ModelConfig
 from omlx.scheduler import Scheduler
-
-
-def _tiny_model():
-    # The reference defaults are a small runnable shape (5 layers, dim 1024).
-    return v41_lang.LanguageModel(ModelConfig())
 
 
 @pytest.mark.skip(
@@ -49,7 +46,7 @@ def test_v41_prefill_evals_stream_per_layer(monkeypatch):
     class — the measured +14.5GB/chunk flat sawtooth. The loop must eval the
     running (h, pre) stream per layer during prefill and clear the allocator
     pool at the same boundaries; decode widths stay lazy for latency."""
-    model = _tiny_model()
+    model = v41_lang.LanguageModel(tiny())
     n_layers = model._config.n_layers
 
     calls = []
@@ -198,8 +195,6 @@ def test_set_model_info_wires_v41_profile_through_scheduler():
     reason="MLX mock active — v41 forward graph calls mx.fast.metal_kernel"
 )
 def test_v41_resident_estimate_matches_stored_cache_bytes():
-    from test_deepseek_v41 import load_reference_weights, tiny
-
     config = tiny(index_head_dim=64)
     model = v41_lang.LanguageModel(config)
     load_reference_weights(model)

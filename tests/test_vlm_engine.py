@@ -152,6 +152,7 @@ class FakeStreamingCore:
             finished=False,
             finish_reason=None,
             tool_calls=None,
+            logprobs=None,
             cached_tokens=0,
         )
 
@@ -203,6 +204,7 @@ class TestVLMStreamingCleanup:
                     finished=True,
                     finish_reason="length",
                     tool_calls=None,
+                    logprobs=None,
                     cached_tokens=0,
                     generated_at=10.0,
                     generated_until=12.0,
@@ -250,6 +252,7 @@ class TestVLMToolForwarding:
             finished=streaming,
             finish_reason="stop",
             tool_calls=None,
+            logprobs=None,
             cached_tokens=0,
             first_token_at=None,
         )
@@ -3288,6 +3291,7 @@ class TestVLMEngineFrequencyPenalty:
             completion_tokens=2,
             finish_reason="stop",
             tool_calls=None,
+            logprobs=None,
             cached_tokens=0,
             first_token_at=None,
         )
@@ -3364,6 +3368,7 @@ class TestVLMEngineFrequencyPenalty:
                 finished=True,
                 finish_reason="stop",
                 tool_calls=None,
+                logprobs=None,
                 cached_tokens=0,
             )
 

@@ -31,6 +31,7 @@ from omlx.server import (
     ServerState,
     _format_generation_speed_for_log,
     _reject_diffusion_structured_outputs,
+    _remove_legacy_ced_ssd_cache_for_server,
     _reset_boundary_snapshots_for_server,
     _resolve_metric_durations,
     app,
@@ -76,6 +77,24 @@ class TestBoundarySnapshotLifecycle:
             _reset_boundary_snapshots_for_server()
 
         assert stale_dir.exists()
+
+
+def test_legacy_ced_ssd_cache_is_removed_and_root_kept(tmp_path):
+    root_block = tmp_path / "a" / "root.safetensors"
+    legacy_block = tmp_path / "deepseek_v41_ced_v1" / "a" / "ced.safetensors"
+    for block in (root_block, legacy_block):
+        block.parent.mkdir(parents=True)
+        block.write_text("cache")
+
+    state = ServerState()
+    state.engine_pool = SimpleNamespace(
+        _scheduler_config=SimpleNamespace(paged_ssd_cache_dir=tmp_path)
+    )
+    with patch("omlx.server._server_state", state):
+        _remove_legacy_ced_ssd_cache_for_server()
+
+    assert not (tmp_path / "deepseek_v41_ced_v1").exists()
+    assert root_block.exists()
 
 
 @pytest.mark.asyncio
@@ -1827,3 +1846,57 @@ def test_chat_routes_reuse_final_prepared_prompt(
         ]
         start = next(event for event in events if event["type"] == "message_start")
         assert start["message"]["usage"]["input_tokens"] == len(prepared[1])
+
+
+@pytest.mark.parametrize("ignore_eos", [None, True])
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("path", ["/v1/chat/completions", "/v1/completions"])
+def test_ignore_eos_reaches_the_engine(
+    monkeypatch, prepared_chat_engine, path, stream, ignore_eos
+):
+    chat = path == "/v1/chat/completions"
+    engine = prepared_chat_engine
+    output = GenerationOutput(text="Hello", finished=True, finish_reason="length")
+    engine.preflight_chat = AsyncMock()
+    engine.chat = AsyncMock(return_value=output)
+    engine.generate = AsyncMock(return_value=output)
+    streamed_kwargs = []
+
+    async def streamed(**kwargs):
+        streamed_kwargs.append(kwargs)
+        yield output
+
+    engine.stream_chat = streamed
+    engine.stream_generate = streamed
+    pool = MagicMock()
+    pool.preload_pinned_models = AsyncMock()
+    pool.check_ttl_expirations = AsyncMock()
+    pool.shutdown = AsyncMock()
+    pool.get_entry.return_value = None
+    state = ServerState()
+    state.engine_pool = pool
+    monkeypatch.setattr(srv, "_server_state", state)
+    monkeypatch.setattr(srv, "get_engine_for_model", AsyncMock(return_value=engine))
+    monkeypatch.setattr(srv, "resolve_model_id", lambda name: name)
+    monkeypatch.setattr(srv, "get_model_settings_for_request", lambda name: None)
+    monkeypatch.setattr(srv, "validate_context_window", MagicMock())
+    monkeypatch.setitem(
+        srv.app.dependency_overrides, srv.verify_inference_api_key, lambda: True
+    )
+    body = {"model": "test-model", "stream": stream, "max_tokens": 16}
+    if chat:
+        body["messages"] = [{"role": "user", "content": "Hello"}]
+    else:
+        body["prompt"] = "Hello"
+    if ignore_eos is not None:
+        body["ignore_eos"] = ignore_eos
+
+    with TestClient(srv.app, raise_server_exceptions=False) as client:
+        response = client.post(path, json=body)
+
+    assert response.status_code == 200, response.text
+    if stream:
+        generated = streamed_kwargs[0]
+    else:
+        generated = (engine.chat if chat else engine.generate).call_args.kwargs
+    assert generated.get("ignore_eos", False) is bool(ignore_eos)

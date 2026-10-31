@@ -165,7 +165,6 @@
    "omlx/patches/mlx_vlm_mtp/__init__.py": 1,
    "omlx/patches/mlx_vlm_muse_glimmer_compat/__init__.py": 1,
    "omlx/patches/mlx_vlm_muse_spark_compat/__init__.py": 1,
-   "omlx/patches/mlx_vlm_unlimited_ocr_compat/__init__.py": 1,
    "omlx/patches/qwen35_moe_weighted_sum.py": 1,
    "omlx/patches/qwen35_oq_a8.py": 1,
    "omlx/patches/qwen35_q4_mlp.py": 3,
@@ -179,6 +178,7 @@
    "tests/test_hf_downloader.py": 1,
    "tests/test_minimax_m3_mlx_lm_patch.py": 1,
    "tests/test_mlx_lm_mtp_patch.py": 1,
+   "tests/test_oq.py": 1,
    "tests/test_output_parser.py": 3,
    "tests/test_qwen35_q4_mlp.py": 1,
    "tests/test_tool_calling.py": 1,
@@ -210,7 +210,7 @@
    "omlx/cluster/cuda_worker_bootstrap.py": 1,
    "omlx/cluster/discovery.py": 2,
    "omlx/cluster/jaccl_side_channel.py": 4,
-   "omlx/cluster/launch.py": 6,
+   "omlx/cluster/launch.py": 5,
    "omlx/cluster/rdma/daemon.py": 1,
    "omlx/cluster/rdma/mailbox.py": 1,
    "omlx/cluster/system_socket_proxy.py": 3,
@@ -239,7 +239,8 @@
    "tests/test_cluster_staging.py": 7
   },
   "danger:swift-process": {
-   "Formula/omlx.rb": 3,
+   "Formula/omlx.rb": 1,
+   "apps/omlx-mac/Sources/App/AppDelegate.swift": 1,
    "apps/omlx-mac/Sources/AppView/AppView.swift": 3,
    "apps/omlx-mac/Sources/AppView/Screens/AboutScreen.swift": 1,
    "apps/omlx-mac/Sources/AppView/Screens/AccuracyBenchScreen.swift": 7,
@@ -256,7 +257,8 @@
    "apps/omlx-mac/Sources/AppView/Screens/ServerScreen.swift": 1,
    "apps/omlx-mac/Sources/AppView/Screens/StatusScreen.swift": 2,
    "apps/omlx-mac/Sources/AppView/Screens/ThroughputBenchScreen.swift": 7,
-   "apps/omlx-mac/Sources/AskAI/AskAIPanelView.swift": 4,
+   "apps/omlx-mac/Sources/AskAI/AskAIPanelView.swift": 5,
+   "apps/omlx-mac/Sources/AskAI/TalkAIPanel.swift": 1,
    "apps/omlx-mac/Sources/Menubar/MenubarVisibilityWatcher.swift": 1,
    "apps/omlx-mac/Sources/Server/PortConflictResolver.swift": 1,
    "apps/omlx-mac/Sources/Server/ServerProcess.swift": 1,
@@ -279,10 +281,13 @@
    "omlx/memory_monitor.py": 1,
    "omlx/utils/mlx_mock.py": 1,
    "tests/test_cluster_rdma_probe.py": 2,
-   "tests/test_homebrew_formula.py": 3
+   "tests/test_homebrew_formula.py": 1
   },
   "danger:swift-url-session": {
+   "apps/omlx-mac/Sources/AppView/Screens/AskAIScreen.swift": 2,
+   "apps/omlx-mac/Sources/AskAI/AskAIToolRunner.swift": 2,
    "apps/omlx-mac/Sources/AskAI/ChatCompletionStream.swift": 2,
+   "apps/omlx-mac/Sources/AskAI/RealtimeVoiceClient.swift": 2,
    "apps/omlx-mac/Sources/Menubar/MenubarStatsPoller.swift": 5,
    "apps/omlx-mac/Sources/Net/OMLXClient.swift": 3,
    "apps/omlx-mac/Sources/Server/PortConflictResolver.swift": 4,
@@ -292,15 +297,19 @@
    "apps/omlx-mac/Tests/oMLXTests/ModelSettingsScreenVMTests.swift": 1
   },
   "deps:url-or-git-dependency": {
-   "mlx-audio @ git+https://github.com/Blaizzy/mlx-audio@94c7716212b2228f178d2f9c7619a591fd1b0b78": 1,
-   "mlx-audio[tts,stt,sts] @ git+https://github.com/Blaizzy/mlx-audio@94c7716212b2228f178d2f9c7619a591fd1b0b78": 1,
+   "mlx-audio @ git+https://github.com/Blaizzy/mlx-audio@8c244a1faff44cfa69e3151c195f52a4c1c90be5": 1,
+   "mlx-audio[tts,stt,sts] @ git+https://github.com/Blaizzy/mlx-audio@8c244a1faff44cfa69e3151c195f52a4c1c90be5": 1,
    "mlx-embeddings @ git+https://github.com/Blaizzy/mlx-embeddings@32981fa4e8064ed664b52071789dd18271fe4206": 1,
    "mlx-lm @ git+https://github.com/ml-explore/mlx-lm@0d4d3d04f8ab7ce4a51e7209e8615755a48ba94d": 2,
-   "mlx-vlm @ git+https://github.com/Blaizzy/mlx-vlm@4319ef2c837b7226b758c3dd69edda51b7079785": 1
+   "mlx-vlm @ git+https://github.com/Blaizzy/mlx-vlm@138d7617d39653b39a5cbc379b1b5907a4481d67": 1
   },
   "exfil:browser-data": {
    "apps/omlx-mac/Sources/Menubar/MenubarStatsPoller.swift": 1,
    "apps/omlx-mac/Sources/Net/OMLXClient.swift": 1
+  },
+  "exfil:clipboard-read": {
+   "apps/omlx-mac/Sources/AppView/Screens/AskAIScreen.swift": 1,
+   "apps/omlx-mac/Sources/AskAI/PromptPlaceholders.swift": 1
   },
   "exfil:ip-literal-url": {
    "tests/test_cluster_worker_bundle.py": 1,
@@ -313,8 +322,12 @@
    "apps/omlx-mac/Sources/Updater/AppUpdater.swift": 1,
    "apps/omlx-mac/Sources/Updater/UpdateInstaller.swift": 1
   },
+  "exfil:screen-capture": {
+   "apps/omlx-mac/Sources/AskAI/ScreenCapture.swift": 1
+  },
   "obfuscation:chr-join": {
    "omlx/eval/data/humaneval.jsonl": 1,
+   "tests/test_audio_realtime.py": 1,
    "tests/test_prefix_divergence_probe.py": 1,
    "tests/test_systemone.py": 1
   },

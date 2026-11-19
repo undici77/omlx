@@ -40,7 +40,7 @@ dynlib_exclude = [
 ]
 
 [tool.uv]
-exclude-newer = "2026-04-23T00:00:00Z"
+exclude-newer = "2026-11-05T00:00:00Z"
 environments = [
     "sys_platform == 'darwin' and platform_machine == 'arm64'",
 ]

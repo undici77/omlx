@@ -480,6 +480,13 @@ def _apply_mlx_mock_skips(items):
         # New from main; real MLX cache/module internals the mock omits.
         ("test_deepseek_v4_batch_padding.py", "MLX mock active — RotatingKVCache.is_trimmable unavailable in mock"),
         ("test_activation_fp16_recast.py", "MLX mock active — nn.Module.set_dtype and mx.finfo unavailable in mock"),
+        # v0.8.0 additions: real-MLX-only suites
+        ("test_prefill_helper", "MLX mock active — Prefill Accelerator splits real MLX model stages"),
+        ("test_affine4", "MLX mock active — affine4/8 KV cache needs real mx.quantize + rotation kernels"),
+        ("test_qwen35_padded_row_attention", "MLX mock active — padded-row attention kernels need real MLX"),
+        ("test_qwen4_batch_qsa_indexer", "MLX mock active — BatchQSAKVCache / mx.random.key unavailable"),
+        ("test_lfm3_rope_patch", "MLX mock active — mx.random.key / fast rope unavailable"),
+        ("test_switch_nvfp4_global_scale", "MLX mock active — nn.Module.parameters / nvfp4 quantize unavailable"),
     ]
 
     # Node-level skips: this venv cannot be re-synced from the pins, so these
@@ -513,6 +520,18 @@ def _apply_mlx_mock_skips(items):
         ("test_audio_tts.py::TestTTSVoiceClonePassthrough::test_ref_audio_decoded_only_for_array_only_models", "mlx_audio TTS internals unavailable"),
         # Quantized nn.Embedding (.bits) only exists in real MLX
         ("test_audio_stt.py::TestQwen3ASRAudioQuantization", "quantized nn.Embedding attributes unavailable"),
+        ("test_audio_realtime.py::test_lfm3", "LiquidCodec decoder internals unavailable"),
+        ("test_audio_realtime.py::test_codec_stream_matches_full_decode", "LiquidCodec decoder internals unavailable"),
+        ("test_raon1_mini_patch.py::test_preflight_trusts_only_the_vendored_module", "mx download helper unavailable in the mock"),
+        ("test_raon1_mini_patch.py::test_nvfp4_checkpoint_loads_strictly_without_remote_code", "ModelArgs shape differs from the real mlx-lm"),
+        ("test_memory_monitor_vlm_config.py::TestSetModelInfoTurboQuantDtype::test_affine_prefill_prices_packed_words_and_fp32_scales", "rotation/RHT helpers unavailable in the mock"),
+        ("test_sampling.py::test_nucleus_support_is_the_dense_top_p_density", "real MLX sort/cumsum numerics unavailable in the mock"),
+        ("test_sampling.py::test_nucleus_verify_packet_matches_dense", "real MLX sort/cumsum numerics unavailable in the mock"),
+        ("test_batched_engine.py::TestBatchedEngineToolParserRepair::test_api_tokenizer_repair_is_limited_to_mimo", "TokenizerWrapper.tool_parser is real mlx-lm only"),
+        ("test_qwen35_yarn_without_mlx_vlm.py::test_yarn_patch_imports_and_applies_without_mlx_vlm", "needs the real MLX in a clean subprocess"),
+        ("test_integrations.py::TestCodexIntegration::test_capture_kills_the_whole_codex_process_group", "macOS process-group semantics"),
+        ("test_splash_engine.py::TestLifecycle::test_stop_signals_a_process_that_missed_the_first_sigterm", "macOS process/signal timing"),
+        ("test_splash_engine.py::TestEnginePool::test_cancelled_start_stops_splash_without_waiting_for_readiness", "macOS process/signal timing"),
     ]
 
     _mock_skip = pytest.mark.skip(

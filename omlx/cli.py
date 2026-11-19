@@ -1652,30 +1652,6 @@ def _steer_list(args) -> int:
             f"model={model.get('model_type') or '?'}{mark}  {desc}"
         )
     return 0
-    model_info = _steer_model_info(args.model) if args.model else None
-    for entry in sorted(sdir.iterdir()):
-        if not entry.is_dir():
-            continue
-        try:
-            pack = load_pack(entry)
-        except (SteeringPackError, OSError, ValueError) as exc:
-            print(f"{entry.name:24s} INVALID: {exc}")
-            continue
-        model = pack.manifest.get("model") or {}
-        desc = str(pack.manifest.get("description") or "").splitlines()[0][:40]
-        mark = ""
-        if model_info is not None:
-            same_type = model.get("model_type") == model_info.get("model_type")
-            same_size = not model.get("hidden_size") or (
-                model.get("hidden_size") == model_info.get("hidden_size")
-            )
-            mark = "  [compatible]" if same_type and same_size else "  [incompatible]"
-        print(
-            f"{pack.name:24s} {pack.component}/{pack.mode} "
-            f"{pack.n_layers}x{pack.hidden_size} "
-            f"model={model.get('model_type') or '?'}{mark}  {desc}"
-        )
-    return 0
 
 
 def _steer_export(args) -> int:

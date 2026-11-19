@@ -2915,6 +2915,49 @@ async def load_model(
     return {"status": "ok", "model_id": model_id, "message": f"Loaded {model_id}"}
 
 
+@router.get("/api/models/{model_id}/steering/packs")
+async def list_model_steering_packs(
+    model_id: str, is_admin: bool = Depends(require_admin)
+):
+    """Local packs, each marked whether it fits this model (type and shape)."""
+    from ..steering.adapters import VALIDATED_MODEL_TYPES
+    from ..steering.pack import list_packs, model_shape_from_config, pack_fits
+
+    entry = _require_model(model_id)
+    shape: dict[str, Any] = {}
+    config = Path(entry.model_path) / "config.json"
+    try:
+        shape = model_shape_from_config(json.loads(config.read_text()))
+    except (OSError, ValueError):
+        pass
+    model_type = (
+        shape.get("model_type") or entry.config_model_type or ""
+    ).replace("-", "_").lower()
+    packs = []
+    for name, pack, error in list_packs():
+        if pack is None:
+            packs.append({"name": name, "valid": False, "error": error})
+            continue
+        usage = pack.usage
+        packs.append(
+            {
+                "name": name,
+                "valid": True,
+                "fits": pack_fits(pack, shape),
+                "component": pack.component,
+                "model_type": (pack.manifest.get("model") or {}).get("model_type"),
+                "description": pack.manifest.get("description") or "",
+                "recommended": usage.get("recommended"),
+                "recommended_scope": usage.get("recommended_scope"),
+            }
+        )
+    return {
+        "model_id": model_id,
+        "supported": model_type in VALIDATED_MODEL_TYPES,
+        "packs": packs,
+    }
+
+
 @router.get("/api/models/{model_id}/steering")
 async def get_model_steering(model_id: str, is_admin: bool = Depends(require_admin)):
     """Live steering state of a loaded engine (pack, scales, salt, debug hits)."""

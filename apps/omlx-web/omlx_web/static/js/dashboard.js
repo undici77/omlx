@@ -70,7 +70,14 @@
         'vlm_mtp_enabled',
         'vlm_mtp_draft_model',
         'vlm_mtp_draft_block_size',
+        'steering_pack',
+        'steering_ffn_scale',
+        'steering_attn_scale',
+        'steering_scope',
     ]);
+    // Directional steering is experimental and validated on these only
+    // (mirrors omlx.steering.adapters.VALIDATED_MODEL_TYPES).
+    const STEERING_MODEL_TYPES = new Set(['qwen4_exp']);
     const DIFFUSION_UNSUPPORTED_CT_KWARGS = new Set([
         'enable_thinking',
         'reasoning_effort',
@@ -301,6 +308,10 @@
                 max_tool_result_tokens: null,
                 ctKwargEntries: [],
                 is_diffusion_model: false,
+                steering_supported: false,
+                steering_pack: '',
+                steering_scale: null,
+                steering_scope: '',
                 qwen35_ane_prefill_enabled: false,
                 qwen35_ane_prefill_sequence_length: 2048,
                 qwen35_ane_prefill_tail_padding_min_tokens: 0,
@@ -333,6 +344,8 @@
             importingMtplx: false,
             loadingGenDefaults: false,
             reasoningParsers: [],
+            // Packs that fit the model in the settings modal (steering).
+            steeringPacks: [],
             aneTuning: {
                 tuningId: null,
                 modelId: null,
@@ -1931,6 +1944,47 @@
                     console.error('Failed to load profiles:', e);
                 }
             },
+            async loadSteeringPacks(model) {
+                const type = String(model?.config_model_type || '').toLowerCase().replaceAll('-', '_');
+                this.steeringPacks = [];
+                if (!STEERING_MODEL_TYPES.has(type)) return;
+                try {
+                    const resp = await fetch(
+                        `/admin/api/models/${encodeURIComponent(model.id)}/steering/packs`);
+                    if (resp.ok) {
+                        const data = await resp.json();
+                        this.steeringPacks = (data.packs || []).filter(p => p.valid && p.fits);
+                    } else if (resp.status === 401) {
+                        window.location.href = '/admin';
+                    }
+                } catch (_) { /* network error: the picker shows no packs */ }
+            },
+
+            steeringPackInfo() {
+                const name = this.modelSettings.steering_pack;
+                return this.steeringPacks.find(p => p.name === name) || null;
+            },
+
+            // The scale the pack's quality gate recommends, for the placeholder.
+            steeringRecommendedScale() {
+                const pack = this.steeringPackInfo();
+                const rec = pack?.recommended;
+                if (rec && typeof rec === 'object') return rec[pack.component] ?? null;
+                return null;
+            },
+
+            steeringPayload(ms) {
+                if (!ms.steering_pack) return { steering_pack: null };
+                const component = this.steeringPackInfo()?.component || 'attn';
+                const scale = Number.isFinite(ms.steering_scale) ? ms.steering_scale : null;
+                return {
+                    steering_pack: ms.steering_pack,
+                    steering_attn_scale: component === 'attn' ? scale : null,
+                    steering_ffn_scale: component === 'ffn' ? scale : null,
+                    steering_scope: ms.steering_scope || null,
+                };
+            },
+
             async loadTemplates() {
                 try {
                     const r = await fetch('/admin/api/profile-templates');
@@ -2249,6 +2303,15 @@
                     activation_fp16_supported: model?.activation_fp16_supported === true,
                     qwen4_gdn_decode_wide_proj_supported:
                         String(model?.config_model_type || '').toLowerCase().replaceAll('-', '_') === 'qwen4_exp',
+                    // Keep in sync with STEERING_MODEL_TYPES (this function
+                    // is also evaluated standalone by the web tests).
+                    steering_supported:
+                        String(model?.config_model_type || '').toLowerCase().replaceAll('-', '_') === 'qwen4_exp',
+                    steering_pack: s.steering_pack || '',
+                    // One scale field in the UI; the pack's component decides
+                    // which setting it is saved to.
+                    steering_scale: s.steering_attn_scale ?? s.steering_ffn_scale ?? null,
+                    steering_scope: s.steering_scope || '',
                     deepseek_v41_engram_ssd_offload: model?.deepseek_v41_engram_ssd_offload_forced === true
                         || s.deepseek_v41_engram_ssd_offload === true,
                     deepseek_v41_engram_ssd_offload_requested:
@@ -3087,6 +3150,7 @@
                     await Promise.all([
                         this.loadProfilesForModel(model.id),
                         this.loadTemplates(),
+                        this.loadSteeringPacks(model),
                     ]);
                     if (this.reasoningParsers.length === 0) {
                         try {
@@ -3708,6 +3772,9 @@
                 if (this.showsA8Prefill(this.selectedModel)) {
                     payload.a8_prefill_enabled = !!ms.a8_prefill_enabled;
                     payload.a8_prefill_min_tokens = Number(ms.a8_prefill_min_tokens) || 128;
+                }
+                if (ms.steering_supported) {
+                    Object.assign(payload, this.steeringPayload(ms));
                 }
                 if (isDiffusion) {
                     Object.assign(payload, {

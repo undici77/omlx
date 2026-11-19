@@ -70,6 +70,44 @@ def get_steering_dir(base_path: Path | None = None) -> Path:
     return Path(base_path) / "steering"
 
 
+def model_shape_from_config(config: dict[str, Any]) -> dict[str, Any]:
+    """model_type / hidden_size / n_layers from a model's config.json dict."""
+    text = config.get("text_config") or {}
+    return {
+        "model_type": config.get("model_type") or text.get("model_type"),
+        "hidden_size": text.get("hidden_size", config.get("hidden_size")),
+        "n_layers": text.get("num_hidden_layers", config.get("num_hidden_layers")),
+    }
+
+
+def pack_fits(pack: SteeringPack, shape: dict[str, Any]) -> bool:
+    """Whether ``pack`` can install on a model of ``shape`` (unknown fields pass)."""
+    built_for = (pack.manifest.get("model") or {}).get("model_type")
+    if shape.get("model_type") and built_for and built_for != shape["model_type"]:
+        return False
+    if shape.get("hidden_size") and pack.hidden_size != shape["hidden_size"]:
+        return False
+    return not (shape.get("n_layers") and pack.n_layers != shape["n_layers"])
+
+
+def list_packs(
+    base_path: Path | None = None,
+) -> list[tuple[str, SteeringPack | None, str | None]]:
+    """Every pack directory under the steering dir: (name, pack, error)."""
+    sdir = get_steering_dir(base_path)
+    if not sdir.is_dir():
+        return []
+    out: list[tuple[str, SteeringPack | None, str | None]] = []
+    for entry in sorted(sdir.iterdir()):
+        if not entry.is_dir():
+            continue
+        try:
+            out.append((entry.name, load_pack(entry), None))
+        except (SteeringPackError, OSError, ValueError) as exc:
+            out.append((entry.name, None, str(exc)))
+    return out
+
+
 def _normalize_rows(v: np.ndarray) -> tuple[np.ndarray, bool]:
     norms = np.linalg.norm(v, axis=1, keepdims=True)
     off = bool(np.any(np.abs(norms - 1.0) > 1e-3))

@@ -1604,9 +1604,11 @@ def _steer_show(args) -> int:
 
 
 def _steer_model_info(model_ref: str) -> dict | None:
-    """Read model_type/hidden_size from a model directory's config.json."""
+    """model_type / hidden_size / n_layers from a model directory's config.json."""
     import json
     from pathlib import Path
+
+    from .steering.pack import model_shape_from_config
 
     config = Path(model_ref).expanduser() / "config.json"
     if not config.is_file():
@@ -1619,19 +1621,37 @@ def _steer_model_info(model_ref: str) -> dict | None:
     except (OSError, ValueError) as exc:
         print(f"warning: cannot read {config}: {exc}")
         return None
-    return {
-        "model_type": data.get("model_type"),
-        "hidden_size": data.get("hidden_size"),
-    }
+    return model_shape_from_config(data)
 
 
 def _steer_list(args) -> int:
-    from .steering.pack import SteeringPackError, get_steering_dir, load_pack
+    from .steering.pack import get_steering_dir, list_packs, pack_fits
 
     sdir = get_steering_dir()
     if not sdir.is_dir():
         print(f"No steering directory at {sdir} — build or import a pack first")
         return 0
+    packs = list_packs()
+    if not packs:
+        print(f"No packs in {sdir} — build or import a pack first")
+        return 0
+    model_info = _steer_model_info(args.model) if args.model else None
+    for name, pack, error in packs:
+        if pack is None:
+            print(f"{name:24s} INVALID: {error}")
+            continue
+        model = pack.manifest.get("model") or {}
+        desc = str(pack.manifest.get("description") or "").splitlines()[0][:40]
+        mark = ""
+        if model_info is not None:
+            fits = pack_fits(pack, model_info)
+            mark = "  [compatible]" if fits else "  [incompatible]"
+        print(
+            f"{pack.name:24s} {pack.component}/{pack.mode} "
+            f"{pack.n_layers}x{pack.hidden_size} "
+            f"model={model.get('model_type') or '?'}{mark}  {desc}"
+        )
+    return 0
     model_info = _steer_model_info(args.model) if args.model else None
     for entry in sorted(sdir.iterdir()):
         if not entry.is_dir():

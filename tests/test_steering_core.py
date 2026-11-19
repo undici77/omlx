@@ -574,3 +574,53 @@ def test_qwen4_exp_defaults_to_the_attention_component():
     from omlx.steering.adapters import ADAPTERS
 
     assert ADAPTERS["qwen4_exp"].default_component == "attn"
+
+
+@pytest.mark.asyncio
+async def test_packs_route_marks_fit_per_model(monkeypatch, tmp_path):
+    import json as _json
+    from unittest.mock import patch
+
+    import omlx.server  # noqa: F401 - server module first, as the admin tests do
+    from omlx.admin import routes as admin_routes
+    from omlx.engine_pool import EngineEntry, EnginePool
+    from omlx.steering import pack as pack_mod
+
+    sdir = tmp_path / "steering"
+    save_pack(
+        SteeringPack("fits", _vecs(2, 4), {"model": {"model_type": "qwen4_exp"}}),
+        sdir / "fits",
+    )
+    save_pack(
+        SteeringPack("other", _vecs(3, 4), {"model": {"model_type": "llama"}}),
+        sdir / "other",
+    )
+    (sdir / "broken").mkdir()
+    monkeypatch.setattr(pack_mod, "get_steering_dir", lambda base_path=None: sdir)
+
+    model_dir = tmp_path / "m"
+    model_dir.mkdir()
+    (model_dir / "config.json").write_text(
+        _json.dumps(
+            {
+                "model_type": "qwen4_exp",
+                "text_config": {"hidden_size": 4, "num_hidden_layers": 2},
+            }
+        )
+    )
+    pool = EnginePool()
+    pool._entries["m"] = EngineEntry(
+        model_id="m",
+        model_path=str(model_dir),
+        model_type="vlm",
+        engine_type="vlm",
+        estimated_size=1,
+    )
+    with patch("omlx.admin.routes._get_engine_pool", return_value=pool):
+        out = await admin_routes.list_model_steering_packs("m", is_admin=True)
+
+    by_name = {p["name"]: p for p in out["packs"]}
+    assert out["supported"] is True
+    assert by_name["fits"]["fits"] is True
+    assert by_name["other"]["fits"] is False
+    assert by_name["broken"]["valid"] is False

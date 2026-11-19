@@ -396,7 +396,7 @@ def test_build_direction_recovers_axis_after_orthogonalization():
     assert abs(float(v @ bias)) < 0.2  # ...with the control mean removed
     assert out["mu_good"][0] > out["mu_bad"][0]
     assert abs(float(np.linalg.norm(v)) - 1.0) < 1e-5
-    # Above the plan's 0.8 layer-drop bar for this noise level.
+    # Above the 0.8 layer-drop bar for this noise level.
     assert out["split_half_cos"][0] is not None and out["split_half_cos"][0] > 0.8
     assert out["direction_method"] == "mean_diff" and out["n_pairs"] == 6
 
@@ -549,3 +549,28 @@ async def test_settings_refuse_pack_on_unvalidated_model():
     assert err.value.status_code == 400
     assert "not supported" in err.value.detail
     manager.set_settings.assert_not_called()
+
+
+def test_capture_carrier_hooks_without_steering(monkeypatch):
+    """A model with no pack gets a scale-0 carrier so the first build can
+    capture: hooks are on, nothing is applied, the cache salt stays empty."""
+    from omlx.steering.install import install_capture_carrier
+
+    _fake_vlm_verifier_module(monkeypatch, _FakeVerifier)
+    model = _FakeModel(2)
+    model.language_model.args.hidden_size = 4
+    st = install_capture_carrier(model, "attn")
+
+    assert get_state(model) is st
+    assert st.components == frozenset({"attn"})
+    assert st.attn_scale == 0.0 and st.ffn_scale == 0.0
+    assert not st.active() and st.salt() == ""
+    x = mx.array(np.array([[1.0, 2.0, 3.0, 4.0]], np.float32))
+    attn = model.language_model.model.layers[0].self_attn
+    assert np.array(attn(x)).tolist() == [[1.0, 2.0, 3.0, 4.0]]  # passthrough
+
+
+def test_qwen4_exp_defaults_to_the_attention_component():
+    from omlx.steering.adapters import ADAPTERS
+
+    assert ADAPTERS["qwen4_exp"].default_component == "attn"

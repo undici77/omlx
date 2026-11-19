@@ -2956,7 +2956,8 @@ class SteeringBuildRequest(BaseModel):
     name: str
     good: list[str]
     bad: list[str]
-    component: str = "ffn"
+    # None: the architecture's default (attn on Qwen3.8 Flash Next).
+    component: str | None = None
     system: str | None = None
     thinking: bool = False
     pair_normalize: bool = False
@@ -2985,19 +2986,37 @@ async def build_steering_pack(
         raise HTTPException(409, f"model {model_id} is not loaded")
     if len(request.good) < 2 or len(request.bad) < 2:
         raise HTTPException(400, "capture needs at least 2 good and 2 bad prompts")
+    model = getattr(engine, "_model", None) or getattr(engine, "_vlm_model", None)
+    if model is None:
+        raise HTTPException(409, f"model {model_id} has no loaded weights")
+    from ..engine_core import get_mlx_executor
+    from ..steering import get_state
+    from ..steering.adapters import SteeringUnsupportedError, get_adapter
+    from ..steering.install import install_capture_carrier
+
+    try:
+        adapter = get_adapter(model)
+    except SteeringUnsupportedError as e:
+        raise HTTPException(400, str(e)) from e
+    if request.component is None:
+        request.component = adapter.default_component
     if request.component not in ("ffn", "attn"):
         raise HTTPException(400, "component must be 'ffn' or 'attn'")
-    model = getattr(engine, "_model", None) or getattr(engine, "_vlm_model", None)
-    from ..steering import get_state
 
-    st = get_state(model) if model is not None else None
+    st = get_state(model)
     if st is None:
-        raise HTTPException(409, "steering is not installed on the loaded engine")
+        # First pack on this model: hook the component at scale 0 so
+        # capture has something to record from (no reload needed).
+        st = await asyncio.get_running_loop().run_in_executor(
+            get_mlx_executor(),
+            lambda: install_capture_carrier(model, request.component),
+        )
     if request.component not in st.components:
         raise HTTPException(
             400,
-            f"pack component is {sorted(st.components)}; cannot capture "
-            f"{request.component!r}",
+            f"the installed pack hooks {sorted(st.components)}; cannot capture "
+            f"{request.component!r}. Clear the model's steering pack (reload) "
+            "and build again.",
         )
     job_id = uuid.uuid4().hex[:12]
     n = min(len(request.good), len(request.bad))

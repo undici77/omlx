@@ -5,7 +5,7 @@
 
 Writes ``<base>/steering/NAME``. The direction is random, so it proves hooks,
 scopes, cache salt and coverage work on the real model; it will not steer a
-behaviour. Real vectors come from the Phase 2 builder or a DS4 ``.f32``.
+behaviour. Real vectors come from `omlx steer build` or a DS4 ``.f32``.
 """
 
 from __future__ import annotations

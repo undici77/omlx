@@ -59,13 +59,62 @@ def install_steering(
     """
     ref = getattr(settings, "steering_pack", None) if settings is not None else None
     if not ref:
-        return None  # R1: nothing touched
+        return None  # nothing touched
+    pack = resolve_pack_ref(ref, base_path=base_path, shape=None)
+    return install_pack(model, pack, settings)
 
+
+def _hidden_size(model: Any) -> int:
+    for obj in (model, getattr(model, "language_model", None)):
+        if obj is None:
+            continue
+        for src in (getattr(obj, "args", None), getattr(obj, "config", None)):
+            for cfg in (src, getattr(src, "text_config", None)):
+                size = getattr(cfg, "hidden_size", None)
+                if isinstance(size, int) and size > 0:
+                    return size
+                if isinstance(cfg, dict) and isinstance(cfg.get("hidden_size"), int):
+                    return int(cfg["hidden_size"])
+    raise SteeringUnsupportedError("cannot determine the model's hidden size")
+
+
+def install_capture_carrier(model: Any, component: str) -> SteeringState:
+    """Hook ``component`` at scale 0 so a first pack can be captured.
+
+    Capture records branch outputs through the same hooks that steer, so a
+    model with no pack installed has nothing to record from. The carrier's
+    direction is never applied (both scales are 0, so the hooks pass through
+    and the cache salt stays empty); it lives until the next reload, which a
+    real pack setting triggers anyway.
+    """
+    from types import SimpleNamespace
+
+    from .pack import SteeringPack
+
+    adapter = get_adapter(model)
+    n_layers = len(find_main_layers(model))
+    vectors = np.zeros((n_layers, _hidden_size(model)), np.float32)
+    vectors[:, 0] = 1.0
+    pack = SteeringPack(
+        "capture-carrier",
+        vectors,
+        {
+            "description": "capture carrier (scale 0, never applied)",
+            "hook": {"component": component, "mode": adapter.mode},
+        },
+    )
+    settings = SimpleNamespace(
+        steering_ffn_scale=0.0, steering_attn_scale=0.0, steering_scope="all"
+    )
+    return install_pack(model, pack, settings)
+
+
+def install_pack(model: Any, pack: Any, settings: Any = None) -> SteeringState:
+    """Install an already-loaded pack; ``settings`` overrides manifest values."""
     adapter = get_adapter(model)
     layers = find_main_layers(model)
     n_layers = len(layers)
 
-    pack = resolve_pack_ref(ref, base_path=base_path, shape=None)
     if pack.n_layers != n_layers:
         raise SteeringPackError(
             f"steering pack {pack.name}: {pack.n_layers} layers, model has {n_layers}"
@@ -81,7 +130,7 @@ def install_steering(
     usage = pack.usage
     rec = usage.get("recommended") or {}
     comp = pack.component
-    # R2: hook only the components the pack was built for.
+    # Hook only the components the pack was built for.
     components = frozenset({comp}) & adapter.components
     if not components:
         raise SteeringUnsupportedError(f"adapter {adapter.name} lacks component {comp!r}")

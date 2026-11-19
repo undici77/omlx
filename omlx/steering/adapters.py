@@ -29,6 +29,9 @@ class SteeringAdapter:
     find_targets: Callable[[Any], list]
     bypass_handlers: tuple = ()
     mode: str = "block"
+    # Component `omlx steer build` captures when none is given: the one
+    # that measurably steers on this architecture.
+    default_component: str = "ffn"
 
     def on_scales_changed(self, model: Any) -> None:
         pass
@@ -119,6 +122,9 @@ _register(
         "qwen4_exp", 1, _COMPONENTS,
         lambda m: _generic_targets(m, ("linear_attn", "self_attn"), ("mlp",)),
         mode="branch",
+        # The FFN branch hook is inert on this model even at |scale| 2; the
+        # attention branch carries the measured verbosity effect.
+        default_component="attn",
     ),
     "qwen4_exp",
 )

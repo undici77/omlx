@@ -219,3 +219,37 @@ def test_steer_import_rejects_corrupt_pack(pack_dir, tmp_path, monkeypatch, caps
     code, out, err = _run_main(["steer", "import", str(zpath)], monkeypatch, capsys)
     assert code == 1
     assert "Import failed" in err
+
+
+def test_steering_data_is_declared_package_data():
+    """verify, --preset and sweep read omlx/steering/data at runtime; a wheel
+    without the package-data entry would drop every file there."""
+    import tomllib
+    from fnmatch import fnmatch
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    pyproject = root / "pyproject.toml"
+    if not pyproject.is_file():
+        pytest.skip("pyproject.toml not available")
+    globs = tomllib.loads(pyproject.read_text())["tool"]["setuptools"][
+        "package-data"
+    ]["omlx.steering"]
+    data = root / "omlx" / "steering" / "data"
+    for needed in (
+        "ds4/succinct.txt",
+        "ds4/verbose.txt",
+        "ds4/eval_prompts.txt",
+        "quality/gen_prompts.txt",
+        "neutral/para_001_050.txt",
+    ):
+        assert (data / needed).is_file(), needed
+        assert any(fnmatch(f"data/{needed}", g) for g in globs), needed
+
+
+def test_build_preset_uses_bundled_prompts(monkeypatch):
+    from omlx import cli
+
+    good, bad = cli._STEER_PRESETS["verbosity"]
+    assert len(cli._steer_read_prompts(str(cli._steer_data_dir() / good))) == 100
+    assert len(cli._steer_read_prompts(str(cli._steer_data_dir() / bad))) == 100

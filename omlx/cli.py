@@ -1207,13 +1207,34 @@ def _steer_read_prompts(path: str) -> list[str]:
     return prompts
 
 
+# Bundled prompt sets (DS4, MIT): `--preset NAME` -> (good file, bad file).
+_STEER_PRESETS = {"verbosity": ("succinct.txt", "verbose.txt")}
+
+
+def _steer_data_dir():
+    from pathlib import Path
+
+    return Path(__file__).parent / "steering" / "data" / "ds4"
+
+
 def _steer_build(args) -> int:
     import time
 
     import requests
 
-    good = _steer_read_prompts(args.good_file)
-    bad = _steer_read_prompts(args.bad_file)
+    good_file, bad_file = args.good_file, args.bad_file
+    if args.preset:
+        good_name, bad_name = _STEER_PRESETS[args.preset]
+        good_file = good_file or str(_steer_data_dir() / good_name)
+        bad_file = bad_file or str(_steer_data_dir() / bad_name)
+    if not good_file or not bad_file:
+        print(
+            "Give --good-file and --bad-file, or --preset verbosity",
+            file=sys.stderr,
+        )
+        return 1
+    good = _steer_read_prompts(good_file)
+    bad = _steer_read_prompts(bad_file)
     if len(good) < 2 or len(bad) < 2:
         print("Capture needs at least 2 good and 2 bad prompts", file=sys.stderr)
         return 1
@@ -1290,9 +1311,10 @@ def _steer_sweep(args) -> int:
     if not scales:
         print("No scales parsed from --scales", file=sys.stderr)
         return 1
-    prompts = _steer_read_prompts(args.prompts)
+    prompts_file = args.prompts or str(_steer_data_dir() / "eval_prompts.txt")
+    prompts = _steer_read_prompts(prompts_file)
     if not prompts:
-        print(f"No prompts found in {args.prompts}", file=sys.stderr)
+        print(f"No prompts found in {prompts_file}", file=sys.stderr)
         return 1
     base_url, headers = _steer_server(args)
     model_url = _steer_model_url(base_url, args.model)
@@ -2350,15 +2372,24 @@ Example directory structure:
     )
     steer_build_parser.add_argument(
         "--good-file",
-        required=True,
+        default=None,
         metavar="G",
         help="Prompt file with the desired behaviour, one per line (# comments allowed)",
     )
     steer_build_parser.add_argument(
         "--bad-file",
-        required=True,
+        default=None,
         metavar="B",
         help="Prompt file with the undesired behaviour, one per line",
+    )
+    steer_build_parser.add_argument(
+        "--preset",
+        choices=sorted(_STEER_PRESETS),
+        default=None,
+        help=(
+            "Use a bundled prompt set instead of files: 'verbosity' = 100 "
+            "DS4 succinct/verbose pairs (good = succinct)"
+        ),
     )
     steer_build_parser.add_argument(
         "--name",
@@ -2369,8 +2400,8 @@ Example directory structure:
     steer_build_parser.add_argument(
         "--component",
         choices=("ffn", "attn"),
-        default="ffn",
-        help="Hook component to capture (default: ffn)",
+        default=None,
+        help="Hook component to capture (default: the model's, attn on Qwen3.8)",
     )
     steer_build_parser.add_argument(
         "--system",
@@ -2415,9 +2446,12 @@ Example directory structure:
     )
     steer_sweep_parser.add_argument(
         "--prompts",
-        required=True,
+        default=None,
         metavar="P",
-        help="Held-out prompts, one per line (# comments allowed)",
+        help=(
+            "Held-out prompts, one per line (# comments allowed; default: "
+            "5 bundled DS4 evaluation prompts)"
+        ),
     )
     steer_sweep_parser.add_argument(
         "--scales",

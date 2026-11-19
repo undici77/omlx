@@ -2,8 +2,7 @@
 """Directional steering (DS4-style rank-1 projection on branch outputs).
 
 See docs/steering.md (experimental). Nothing in this package
-touches a model unless ``install_steering`` is called with a pack configured
-(plan rule R1).
+touches a model unless ``install_steering`` is called with a pack configured.
 """
 
 from .install import get_state, install_steering, steering_active

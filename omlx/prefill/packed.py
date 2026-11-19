@@ -354,6 +354,9 @@ def run_packed_prefill(model: Any, rows: Sequence[PackedRow]) -> Any:
 
     Prefill callers evaluate only the row caches, so logits stay unbuilt.
     """
+    from ..steering.install import mark_prefill
+
+    mark_prefill(model)
     batch = PackedBatch(rows)
     layer_count = len(batch.rows[0].cache)
     caches = [

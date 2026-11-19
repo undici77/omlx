@@ -1,0 +1,103 @@
+# oMLX neutral quality corpus, part 3/4 — original text written for oMLX, Apache-2.0 (see README.md)
+
+The Rosetta Stone, carved in 196 BC, carries the same decree in three scripts: hieroglyphic, demotic, and Greek. Found by French soldiers in 1799 while fortifying a Nile delta fort, it gave scholars the key they had lacked for centuries. Twenty years later Champollion cracked the phonetic system, and five thousand years of Egyptian writing opened.
+
+The Silk Road was never a single road but a shifting web of routes linking Chang'an to the Mediterranean. Caravans carried silk west and horses, glass, and Buddhism east; paper, gunpowder, and the plague travelled the same paths. Oases like Samarkand grew rich on the traffic, and the road's importance faded only when sea routes out-carried the camels.
+
+Great Zimbabwe, built between the eleventh and fifteenth centuries, is the largest ancient stone structure south of the Sahara. Its dry-stone walls, up to eleven metres high, were fitted without mortar and still stand. The city controlled gold and ivory trade to the Swahili coast, and its soapstone birds are now the national emblem of Zimbabwe.
+
+The Library of Alexandria aimed to hold all the world's knowledge. Ships docking in the city were searched for texts to copy; the originals were kept and copies returned. Scholars there measured Earth's circumference with shadows and wells, catalogued the stars, and argued about anatomy. Its slow death by fire, neglect, and budget cuts remains the emblem of lost knowledge.
+
+Machu Picchu sits on a ridge 2,430 metres above sea level, built around 1450 and abandoned a century later during the Spanish conquest. The Spanish never found it. Its stones are fitted so precisely that a knife blade will not slide between them, and its terraces drain rainwater through layers of gravel, which is why the citadel still stands after five hundred years of mountain rain.
+
+The Antikythera mechanism, recovered from a Roman-era shipwreck in 1901, is a bronze astronomical calculator of at least thirty hand-cut gears. Turn the crank and it predicts eclipses, planetary positions, and even Olympic cycles. Nothing of comparable mechanical complexity appears again in the record for over a thousand years.
+
+Mansa Musa, ruler of Mali in the fourteenth century, undertook a pilgrimage to Mecca with a caravan said to include thousands of soldiers and camels bearing gold. His spending in Cairo was so lavish that it depressed the local gold market for years. Under his rule, Timbuktu became a byword for scholarship and book trade.
+
+The Viking settlement at L'Anse aux Meadows in Newfoundland proves Norse sailors reached North America around the year 1000, five centuries before Columbus. The sagas called the region Vinland. The site held turf-walled houses, a smithy, and evidence of boat repair, and was abandoned within a generation, perhaps because the winters and the neighbours proved difficult.
+
+The Terracotta Army was discovered in 1974 by farmers digging a well near Xi'an. Thousands of life-sized soldiers, each with an individual face, guard the tomb of China's first emperor, Qin Shi Huang, who died in 210 BC. The figures were originally painted in bright colours, and the emperor's unopened burial mound remains sealed, its rivers of mercury still detectable in the soil.
+
+The printing press with movable metal type appeared in Europe around 1440, and within fifty years presses had produced twenty million books — more than all the scribes of the preceding millennium. Literacy climbed, Luther's theses went viral, and scientific results could finally be reproduced from identical texts. The information age has older roots than electricity.
+
+The Antikythera wreck also carried glassware, coins, and statues, but the mechanism's fragments were overlooked for decades until a physicist noticed a gear tooth in an X-ray. Modern tomography has since read its inscriptions, a user's manual in bronze. Its existence moved the history of precision engineering back by a millennium.
+
+The Kingdom of Aksum, in what is now Ethiopia and Eritrea, minted its own coins, raised carved granite stelae up to thirty-three metres tall, and was listed among the four great powers of the third century alongside Persia, Rome, and China. Its king converted to Christianity in the fourth century, and Ethiopian churches carved down into rock still draw pilgrims.
+
+The Dead Sea Scrolls, found by a shepherd in desert caves near Qumran in 1947, include manuscripts a thousand years older than the then-oldest known biblical texts. The find confirmed how faithfully texts had been copied and added hundreds of previously unknown writings. The caves have yielded fragments of nearly nine hundred manuscripts.
+
+Angkor Wat in Cambodia is the largest religious monument on Earth, built in the twelfth century as a Hindu temple and later re-centred on Buddhism. Its moat is five kilometres around, and its towers mirror Mount Meru, home of the gods. The Khmer capital around it supported perhaps a million people on an engineered water network of canals and reservoirs.
+
+The Bronze Age city of Pompeii froze mid-motion when Vesuvius erupted in 79 AD. Bread still in ovens, election slogans on walls, a dog writhing at the end of its chain — ash preserved the ordinary. Pliny the Younger's letters to Tacitus describe the eruption itself, the first eyewitness account of its kind, and the reason such events bear his name.
+
+The Hajj caravan routes of the Ottoman era built whole towns along the desert roads to Mecca, with forts, cisterns, and hospitals spaced a day apart. The Hejaz railway, begun in 1900, cut the journey from weeks to days and was famously harried during the Arab Revolt. The pilgrim roads carried not only travellers but mail, medicine, and ideas.
+
+The Epic of Gilgamesh, pressed into clay tablets in cuneiform, is humanity's oldest surviving great work of literature. Its hero searches for immortality after his friend's death and learns instead to accept mortality. A tablet recovered in 2019 added lines to a previously broken passage, showing that even a four-thousand-year-old text can still grow.
+
+The Battle of Salamis in 480 BC decided the survival of Greek city-states against the Persian fleet. Themistocles lured the larger navy into the narrow strait where its numbers counted against it. A playwright who fought there, Aeschylus, later staged the battle from the Persian side, the oldest surviving tragedy on a historical subject.
+
+Istanbul's Grand Bazaar has traded since 1461 across sixty covered streets and thousands of shops. Its keystone arches survived earthquakes and fires, and its guilds once regulated quality, prices, and even shopfront decoration. Under its roofs, carpets, gold, spices, and now mobile phones change hands in the same lanes where Ottoman merchants bargained.
+
+The Bayeux Tapestry is not a tapestry but a seventy-metre embroidery on linen, stitched within a generation of the 1066 Norman conquest of England. It narrates the events in Latin with hundreds of figures, from feasts and shipwrights to the death of Harold with an arrow in the eye. Its survival through nine centuries of war and revolution is its own epic.
+
+Timbuktu's manuscript families hid their libraries in wooden chests and desert caches for centuries. Hundreds of thousands of texts on law, astronomy, medicine, and poetry, in Arabic and local languages, testify to a scholarly economy where a book could cost more than a horse. Modern digitisation projects now photograph them page by page.
+
+The Inca road network ran forty thousand kilometres through mountains without the wheel, the horse, or iron tools. Chasqui runners relayed messages along it at speeds that outran Spanish horses, carrying knotted cords called quipu that encoded numbers and, some scholars argue, narrative. Sections of polished stone stair survive on Andean slopes today.
+
+The Hagia Sophia's dome, completed in 537 AD, spans thirty-one metres and seems to float on a ring of windows. Earthquakes collapsed parts of it twice, and each repair taught builders more about buttressing. For a thousand years it was the largest enclosed space on Earth, and architects still study how its weight flows to the ground.
+
+The Phoenicians, traders of the Levant, gave the world its alphabet — twenty-two consonant letters that Greeks later fitted with vowels. Because it was simple enough for merchants to learn, writing escaped the scribe class. Every Latin, Arabic, Hebrew, and Cyrillic letter in use today descends from those sea traders' signs.
+
+The Indus Valley cities of Mohenjo-daro and Harappa, built around 2500 BC, had grid streets, covered drains, and private wells — urban sanitation two thousand years ahead of Rome. Their script remains undeciphered, and no palace or grand tomb has been found, which suggests a society whose wealth ran through its baths and granaries rather than its kings.
+
+The Great Wall is not one wall but a succession of ramparts, trenches, and beacon towers built by different dynasties over two thousand years, with a total length in the tens of thousands of kilometres. Signal towers relayed smoke by day and fire by night; a warning could cross five hundred kilometres in hours, faster than any rider.
+
+The Dead Sea is dropping by about a metre a year as its inflows are diverted for drinking and agriculture. As it shrinks, sinkholes open along its shores, swallowing roads and trees. Its salinity, ten times the ocean's, makes swimming a buoyant experience and once made its bitumen and salts a trade good for Egypt.
+
+The Maya developed the concept of zero, tracked Venus to within hours over centuries, and built cities aligned to solstice sunrises. Their glyphs record dynasties, wars, and ballgames, and were only read fluently from the 1970s onward. Their collapse in the southern lowlands remains debated: drought, warfare, and politics likely combined.
+
+The Hajj of Mansa Musa's era was not unique; West African rulers had crossed the Sahara by camel for centuries, linking the Niger River to the Mediterranean. Salt from Saharan mines traded for gold from the south, pound for pound in some markets. The salt slabs still travel the same caravan routes to Timbuktu's markets.
+
+The Lindisfarne Gospels, made around 700 AD on a tidal island off Northumbria, combine Mediterranean Christian text with Insular art — interlaced beasts and knotwork of astonishing precision. A single page could take weeks. When Viking raids came, monks fled with the book, and it survived to be displayed a millennium later.
+
+The Code of Hammurabi, carved on a basalt stele around 1754 BC, lists 282 laws from builders' liability to family disputes, with punishments graded by rank. Its prologue claims the gods chose the king to make justice shine on the land. Whether enforced to the letter or not, it is the longest surviving legal text of ancient Mesopotamia.
+
+The Vasa warship sank within a mile of Stockholm on her maiden voyage in 1628, toppling in a breeze that her insufficient ballast could not survive. Salvaged intact in 1961 after 333 years underwater, she is now a museum carrying ninety-eight percent original wood, along with the skeletons of crew and the buttons they wore.
+
+The Library of Celsus at Ephesus, built by a Roman governor's son as a tomb as much as a library, held twelve thousand scrolls in wall niches designed to keep them dry. Its facade still stands, its statues representing wisdom, virtue, intellect, and knowledge. Beneath it, crypts held the sarcophagus of Celsus himself.
+
+The Kingdom of Kush ruled Egypt as its Twenty-fifth Dynasty, and its pyramids at Meroë outnumber Egypt's own. Built steep and narrow over royal burials, they held chambers sealed with painted reliefs. Kushite ironworking fed trade across Africa, and their script, Meroitic, is still only partly understood.
+
+The Nazca Lines, etched into Peruvian desert by removing dark stones to expose pale ground, depict hummingbirds, monkeys, and a heron with a serpentine neck. Their scale is visible only from the air, yet they were made a millennium before flight. Lines of spiral walkways show how makers could have surveyed shapes they never saw whole.
+
+The Terracotta warriors were found standing in battle formation in three pits, with infantry, archers, chariots, and a rear guard. Each was assembled from interchangeable limbs with a face applied individually, then fired and painted. Looters burned the wooden roof beams centuries ago, collapsing the army where it stood.
+
+The Silk Road's most durable export was not silk but ideas. Paper-making reached Samarkand by 751, Baghdad by 793, and Spain by the twelfth century, transforming administration, scholarship, and eventually banking. The word itself travelled: from Chinese through Persian and Arabic into the papers of every European chancery.
+
+The Bantu expansion, beginning some four thousand years ago, spread farming and ironworking across sub-Saharan Africa in one of history's great migrations. Descendant languages, from Swahili to Zulu, still share the same grammatical skeleton. The movement carried crops like yams and oil palms into the rainforest and cattle onto the savannah.
+
+The Parthenon's columns lean inward slightly and bulge at the middle — refinements that make straight lines look straight from below. Built in nine years in the fifth century BC, it survived intact for two millennia as temple, church, and mosque, until an ammunition store inside it exploded during a Venetian bombardment in 1687.
+
+The Hajj pilgrim roads of Mali and Egypt met at Cairo, where Mansa Musa's caravan distributed so much gold that the metal's value fell. Chroniclers recorded his courtiers' silk and his Friday prayers in the city's great mosque. The story reached Europe in Catalan maps, where a crowned African king holds a golden orb.
+
+The Terracotta Army's craftsmen signed their work — stamps and inscriptions name workshop overseers, a quality-control system that let the empire trace faulty armour to its maker. Some soldiers were mass-produced from eight face moulds, then customised with ears, beards, and expressions added by hand before firing.
+
+The Dead Sea's shores hold the lowest land on Earth, 430 metres below sea level, and the air above it is oxygen-rich and filtered of harsh UV by the extra atmosphere. Herod built fortresses on its cliffs, and its asphalt surfaced ancient ships. Today sinkholes and evaporation ponds redraw its map almost yearly.
+
+The Great Library's fall was gradual, not a single fire. Caesar's flames in 48 BC burned warehouses near the harbour; later, declining funding, purges, and the movement of scholars to Athens and Beirut emptied the shelves. By late antiquity the geographer Strabo found the Mouseion empty. Institutions die by budget more often than by flame.
+
+The Silk Road oasis of Dunhuang hid a walled-up cave library containing forty thousand manuscripts — Buddhist sutras, contracts, a printed diamond sutra from 868 that is the world's oldest dated printed book. Sealed in the eleventh century and reopened in 1900, its contents are now dispersed across museums on three continents.
+
+The Inca kept accounts with knotted cords called khipu: colours, ply directions, and knot positions encode numbers with decimal precision. Colonial administrators recorded the cords in use for herds and tribute. Recent statistical analyses suggest some khipu encode words as well, making them the Andes' only known writing.
+
+The Rosetta Stone's decree granted tax remissions to the priesthood of Memphis and ordered its text in the scripts of ruler, administration, and temple. That bureaucratic habit — the same message in three writing systems — is precisely what made the stone a decoding key. Empires write everything down; that is their weakness and their gift.
+
+The Antikythera mechanism's front dial may have displayed the heavens with planets as rotating pointers, driven by pin-and-slot gears that modelled the Moon's variable speed — a mechanical solution to a problem not formally solved until centuries later. Its maker remains unknown; the island of Rhodes and the school of Archimedes are the leading suspects.
+
+The Great Mosque of Djenné in Mali is the largest mud-brick building in the world, its walls of sun-dried earth smoothed anew each year by a community festival that is part maintenance, part celebration. Palm wood beams project from the walls as scaffolding and decoration, and rain drainage spouts of baked clay protect the base.
+
+The Bayeux Tapestry's margins hold the medieval world's asides: ploughmen, ravens, a bishop with a mace, and a ship's dog. The main narrative marches in Latin, but the borders gossip in pictures. Scholars still debate whether the embroidery was made in England by English hands for Norman patrons — the needlework style says Canterbury.
+
+The Phoenician port of Carthage grew into a Mediterranean empire that nearly defeated Rome. Its harbour had two circular basins, an inner one ringed with 140 ship sheds for war galleys, each with its own workshop. The navy's quinqueremes, rowed by five men per bench, dominated the sea for a century before the Punic Wars turned.
+
+The Indus people traded with Mesopotamia: cuneiform records mention ships from Meluhha carrying carnelian, lapis, and cotton — the word likely meaning the Indus. Indus weights, cut in precise binary ratios, turn up in Persian Gulf ports. A civilisation that left no monuments to itself left its measures in other people's harbours.

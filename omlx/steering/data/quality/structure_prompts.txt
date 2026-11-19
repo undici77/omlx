@@ -1,0 +1,17 @@
+# Structure prompts for steering quality checks (Q7 structure metric).
+# Each answer must contain parseable JSON; the verifier extracts the first
+# JSON object/array from the reply and json.loads()es it.
+# One prompt per line; '#' lines are comments (DS4 rule).
+
+Return only a JSON object with keys "name" set to Ada Lovelace and "born" set to 1815.
+Return only a JSON array of the numbers 1, 2, 3.
+Return only a JSON object with key "status" set to "ok" and key "code" set to 200.
+Return only a JSON object describing a book with keys "title", "author", and "year".
+Return only a JSON array of the colours red, green, and blue.
+Return only a JSON object with key "city" set to Tokyo and key "population_millions" set to 14.
+Return only a JSON object with keys "width" and "height" set to 1920 and 1080.
+Return only a JSON array of the weekdays Monday through Friday.
+Return only a JSON object with key "temperature_c" set to 21 and key "condition" set to "sunny".
+Return only a JSON object with keys "from" and "to" describing a train from Paris to Lyon.
+Return only a JSON array of three animals of your choice.
+Return only a JSON object with key "version" set to 2 and key "stable" set to true.

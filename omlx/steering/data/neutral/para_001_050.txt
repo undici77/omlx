@@ -1,0 +1,97 @@
+# oMLX neutral quality corpus, part 1/4 — original text written for oMLX, Apache-2.0 (see README.md)
+
+The planet Mercury completes an orbit around the Sun in eighty-eight days, yet it rotates so slowly that a single day on its surface lasts about fifty-nine Earth days. This mismatch between its year and its day gives Mercury one of the strangest calendars in the solar system. Because it has almost no atmosphere to trap heat, the temperature swings from about 430 degrees Celsius at noon to minus 180 before dawn.
+
+Beneath its shell of rock, Earth holds a core of iron so hot that part of it stays liquid. Motion in this molten layer generates a magnetic field that reaches far into space. That field deflects charged particles streaming from the Sun, which is why compasses point north and why the polar skies glow green and red when solar storms arrive.
+
+Water is the only common substance that naturally exists as a solid, a liquid, and a gas within Earth's normal temperature range. Its molecules stick together strongly enough to pull sap up the tallest trees and to carry blood nutrients through capillaries narrower than a hair. Without this unusual stickiness, rivers would not carve valleys and clouds would not form.
+
+A glacier moves by a paradox: ice, a solid, flows like an extremely thick liquid under its own weight. Alpine glaciers creep downhill at speeds from a few centimetres to a few metres per day, grinding the rock beneath them into the fine flour that turns meltwater streams grey. The lines of rock debris they carry mark their paths long after the ice has gone.
+
+Lightning is a giant spark that briefly heats the air around it to roughly thirty thousand degrees Celsius, several times hotter than the surface of the Sun. The sudden expansion of that air produces the shock wave we hear as thunder. Because light travels far faster than sound, counting the seconds between the flash and the rumble estimates the storm's distance.
+
+Salt dissolves in water until the solution can hold no more, and that limit depends strongly on temperature. Heat a pan of salty water and it accepts more salt; cool it and the excess crystallises out. This simple behaviour explains why sea spray leaves residue on windows, why mineral deposits form in kettles, and why salt was historically harvested by evaporating seawater in shallow ponds.
+
+The Earth's crust is broken into large plates that drift a few centimetres each year, about the speed at which fingernails grow. Where plates pull apart, new seafloor wells up along mid-ocean ridges; where they collide, mountains such as the Himalayas rise. Most earthquakes and volcanoes trace the boundaries of these restless plates.
+
+Air pressure at sea level supports a column of mercury about seventy-six centimetres tall. Climb a mountain and the pressure drops, which is why water boils at a lower temperature at altitude and why mountaineers' cooking takes longer. A vacuum flask of tea carried up a high pass may never quite reach the boil it had at home.
+
+Sound travels through air at roughly 343 metres per second, but through water nearly five times faster, because water molecules are packed closer and pass the vibration along more quickly. Whales exploit this: their songs carry across entire ocean basins. The same principle once let shipwrecked sailors signal shore by striking a submerged bell.
+
+Quartz crystals keep time by vibrating at a precise frequency when a small voltage is applied. A quartz watch counts these vibrations and loses or gains only a few seconds a month. The same physics, scaled up and refined, lets atomic clocks define the second so exactly that satellite navigation would fail within minutes without them.
+
+Glass is a solid that behaves, at the molecular level, like a liquid frozen in place before its atoms could arrange into crystals. This disordered structure gives glass its transparency, since there are no grain boundaries to scatter light. Roman glassmakers already made clear window panes, though their product rippled and bubbled.
+
+Rust is electrochemistry in slow motion. Iron gives up electrons to oxygen and water, forming flaky oxide that does not protect the metal beneath, so corrosion eats inward. Adding chromium to iron produces stainless steel, whose oxide layer is invisible, tight, and self-repairing, sealing the surface against further attack.
+
+The aurora borealis appears when charged particles from the Sun funnel along Earth's magnetic field lines into the upper atmosphere. There they strike oxygen and nitrogen, which release the energy as green, red, and violet light. The display is brightest at high latitudes because that is where the field lines dive toward the poles.
+
+Diamonds and graphite are both pure carbon; the difference is arrangement. In diamond each atom bonds to four neighbours in a rigid tetrahedral lattice, making the hardest natural material. In graphite, atoms bond in flat sheets that slide easily over one another, which is why a pencil leaves marks and why graphite lubricates locks.
+
+Concrete is the most used manufactured material on Earth, and its key ingredient, cement, is made by heating limestone until it releases carbon dioxide. The Romans mixed lime with volcanic ash and built domes still standing after two millennia. Modern concrete's weakness is the opposite of stone: it is strong under compression but needs steel bars to survive tension.
+
+A rainbow appears when sunlight enters a raindrop, bends, reflects off the back, and bends again on the way out, splitting into colours. Each observer sees light from a different set of drops, so no two people see exactly the same rainbow. The arc always sits opposite the Sun, centred on the shadow of your own head.
+
+The deepest part of the ocean, the Challenger Deep, reaches nearly eleven kilometres below the surface, deeper than Mount Everest is tall. Pressure there exceeds a thousand atmospheres, crushing anything hollow that is not engineered for it. Yet snailfish, shrimp-like amphipods, and microbial mats thrive on the seafloor in permanent darkness.
+
+Tides arise from the Moon's gravity tugging Earth's oceans, with the Sun adding a smaller pull. When Sun, Moon, and Earth line up, their pulls combine into spring tides; at right angles, neap tides. Coastal life runs on this rhythm: crabs time their egg release, and tidal mills ground flour centuries before steam power.
+
+Hot air rises because it is less dense than the air around it. This simple fact drives weather: the Sun heats the ground, the ground heats the air, and columns of warm air climb, cool, and condense into cumulus clouds. Glider pilots read these rising bubbles of air and circle inside them to gain altitude without an engine.
+
+Static electricity builds when two surfaces touch and separate, transferring electrons. Shuffle across a carpet in dry weather and your body can charge to thousands of volts — harmless because the total energy is tiny, but enough to light a spark an inch long. The same discharge, scaled enormously, is lightning.
+
+Magnetism and electricity are two faces of one phenomenon. Move a magnet past a coil and current flows; run current through a coil and you get a magnet. Generators, electric motors, transformers, and metal detectors all rest on this single symmetry, discovered in the nineteenth century and industrialised ever since.
+
+The speed of light in a vacuum is a fixed constant, about three hundred thousand kilometres per second, and nothing carrying information outruns it. Sunlight is eight minutes old when it arrives; the starlight you see tonight may have left its star before human history began. Looking up is looking back in time.
+
+Metals conduct electricity because their outer electrons detach from individual atoms and wander freely through the lattice. Apply a voltage and this electron sea drifts, carrying current. The same freedom makes metals shiny, since free electrons re-radiate light, and it makes them feel cold, as they quickly carry heat away from skin.
+
+Volcanoes come in temperaments. Shield volcanoes like those in Hawaii ooze fluid lava that travellers can outwalk, while stratovolcanoes like Vesuvius trap gas in sticky magma and erupt explosively. The difference traces to silica content: the more silica, the stiffer the magma, and the more pressure it can build before giving way.
+
+Permafrost is ground that stays frozen for at least two consecutive years, underlain in places by ice hundreds of metres thick. Across Siberia, Alaska, and northern Canada it preserves mammoth remains, ancient seeds, and the carbon of untold summers of plants. As it thaws, that carbon can escape as greenhouse gases, a feedback that worries climate scientists.
+
+The Coriolis effect bends the paths of winds and ocean currents because Earth rotates beneath anything moving above it. Storms spin counterclockwise in the north and clockwise in the south for this reason. The effect is negligible for a thrown ball but decisive for hurricanes and for the great gyres that steer drifting plastic and seaweed.
+
+Sand grains tell stories. Rounded, frosted quartz speaks of long tumbling in deserts; angular grains with many minerals suggest young mountain rubble; grains with coral and shell fragments betray a tropical shore. Geologists read beaches and dunes the way archivists read ledgers, each layer a page of the coast's history.
+
+Sound needs a medium; in vacuum, silence. On the Moon, an astronaut's shout would never reach a companion a metre away, which is why radio carried every Apollo conversation. Film-makers add whooshes and explosions to space battles anyway, because a silent starship battle, however accurate, feels empty.
+
+The greenhouse effect is not a modern invention; without it, Earth's average temperature would sit near minus eighteen degrees Celsius and the oceans would freeze. Water vapour, carbon dioxide, and methane let sunlight in but slow the infrared radiation trying to leave. The problem of recent decades is not the effect but its strengthening.
+
+Frost forms when a surface drops below the freezing point while surrounding air holds moisture; water vapour skips the liquid phase and deposits as ice crystals directly. The patterns differ by surface: feathery on glass, needles on soil. Gardeners whisper about frost pockets, low spots where cold, dense air pools on clear, calm nights.
+
+Why is the sky blue and sunsets red? Air molecules scatter short wavelengths far more strongly than long ones. Overhead, scattered blue reaches your eye from every direction. Near the horizon at dusk, light crosses much more air, the blue is scattered away entirely, and the surviving reds and oranges paint the clouds.
+
+A mirage is real light, not imagination. Hot road air bends light rays upward, so the sky appears reflected on the asphalt ahead and looks like water. In cold seas, the bending can reverse, lifting ships above the horizon. Both are the same physics: refraction through layers of air at different temperatures.
+
+Ice floats, and this oddity keeps lakes alive. Water reaches its densest state at about four degrees Celsius, so a cooling lake sinks until the whole volume sits at that temperature; only then does the surface cool further and freeze. The ice lid insulates the water below, and fish overwinter in the liquid layer under the sheet.
+
+Earthquakes release energy in waves that travel through rock at several kilometres per second. The fast, gentle primary waves arrive first; the slower, shaking secondary waves follow; surface waves bring the strongest motion last. The lag between arrivals lets seismologists locate a quake's origin from a single station's recording.
+
+Coal is compressed plant matter, a library of ancient swamps. A single seam may record hundreds of thousands of years of peat accumulation, later buried, heated, and squeezed. Burn it and the energy of ancient photosynthesis returns as heat, along with the carbon those plants drew from a Carboniferous atmosphere.
+
+Lightning strikes tall objects not because height attracts electricity mystically, but because a rising leader from the ground meets the descending stroke more easily along the shortest gap. That is why lightning rods work: they offer a preferential, well-grounded path and bleed off charge continuously through corona discharge.
+
+The ozone layer is a thin veil of three-atom oxygen molecules between fifteen and thirty-five kilometres up. It absorbs the ultraviolet light that shreds DNA. Industrial chlorofluorocarbons nearly depleted it before the Montreal Protocol phased them out; the layer is now slowly healing, one of environmental regulation's clearest successes.
+
+Rivers meander because any bend amplifies itself: faster flow on the outside of a curve erodes the bank, while slower water on the inside drops sediment. Over centuries the loops wander across the floodplain, occasionally pinching through to cut themselves off, leaving crescent oxbow lakes as signatures of old channels.
+
+Carbon dating works because cosmic rays make a known trickle of radioactive carbon-14 in the atmosphere. Living things exchange carbon constantly and hold the ratio steady; on death, exchange stops and carbon-14 decays with a half-life of about 5,700 years. Measuring what remains dates charcoal, cloth, and bone back roughly fifty millennia.
+
+Bubbles in a boiling kettle are not air but water vapour, born where the liquid touches the hot metal. They rise, cool, and collapse with a click until the whole pot reaches boiling point, after which steam bubbles survive to the surface and the sound deepens. A watched kettle's song is the sound of its approach to the boil.
+
+Why do mirrors swap left and right but not up and down? They do neither: they swap front and back. Your reflection raises the hand opposite yours because the image is you rotated about a vertical axis, a transformation no physical rotation can achieve. The left-right puzzle dissolves once the axis of the flip is named.
+
+Sweat cools by evaporation, and humidity decides how well. Dry air accepts vapour eagerly and cooling is fast; in a tropical wet season the air is nearly saturated, sweat drips instead of evaporating, and the same temperature feels far hotter. Fans help by sweeping saturated air away from skin, not by lowering temperature.
+
+The Moon always shows Earth the same face because its rotation period equals its orbital period, a condition called tidal locking, achieved by Earth's gravity braking the Moon's spin over billions of years. The far side, misnamed the dark side, gets just as much sunlight; it was simply hidden from human eyes until 1959.
+
+Salted roads work because dissolved salt lowers water's freezing point, so ice melts even when the air is below zero. The limit is about minus nine degrees Celsius for ordinary salt; below that, magnesium or calcium chloride takes over. The price of grip is corrosion and salty runoff into streams each spring.
+
+Why does a day lengthen in summer? Earth's rotation axis tilts about twenty-three degrees relative to its orbit. When your hemisphere leans sunward, the Sun climbs higher and spends more hours above the horizon; six months later the lean reverses. The tropics and poles experience this differently, which is why midsummer daylight never ends above the Arctic Circle.
+
+Geysers are plumbing accidents of geology. Groundwater seeps down, meets rock heated by shallow magma, and boils under pressure in a narrow constricted shaft. Superheated water finally flashes to steam and hurls the column skyward, then the system refills and repeats on a schedule that Old Faithful has kept, roughly, for centuries.
+
+Meteors are usually no larger than grains of sand. They blaze across the sky because they hit the atmosphere at tens of kilometres per second, and at such speeds even a speck carries the kinetic energy of a rifle bullet. The annual meteor showers recur when Earth crosses the dust trails left by comets.
+
+Why does metal feel colder than wood at the same room temperature? It is not temperature but conductivity: metal ferries heat away from your warm hand quickly, wood slowly. A metal bench and a wooden bench in the same room are equally warm by thermometer; your nerves report the rate of heat loss, not the temperature itself.

@@ -1,0 +1,25 @@
+# oMLX neutral quality corpus, part 5/5 — original text written for oMLX, Apache-2.0 (see README.md)
+
+The postal code is a child of urban growth. As cities swelled in the nineteenth century, mail sorters memorised ever-larger districts until errors outpaced memory. London divided itself into numbered districts in 1857, and the idea spread worldwide, culminating in machines that read printed codes and sort a letter in fractions of a second.
+
+The library card catalogue was a database of oak. Each card carried a call number, author, title, and subjects, filed so that any clerk could find a book among millions in minutes. The drawers survived a century before databases replaced them, and their ordering principles — author, subject, classification — survive inside every modern library system.
+
+The city grid is a decision that outlives its planners. Gridiron streets simplify land sales, navigation, and plumbing, at the cost of long diagonals and monotony. Radiating boulevards, as in Paris, favour vistas and artillery; winding suburbs favour slow traffic. Every map of a city records a negotiation between the landowner, the engineer, and the soldier.
+
+Street lighting began as flame behind glass. Whale oil, then gas, then electricity each extended the hours of the city, and each conversion was argued over in the press. The electric arc lamps of the 1870s were so bright that they drew crowds; the humble sodium lamp that followed turned whole districts orange for a century.
+
+The fire hydrant dates to a Philadelphia engineer's 1801 patent, and its cast-iron body has changed little. Cities paint them different colours to encode flow rate, and mechanics test them annually by flushing sediment. In dry seasons, hydrants are the first thing a drought plan protects, because everything else depends on them.
+
+The public clock, the newspaper, and the train timetable grew up together. Once trains ran to a schedule, every town on the line had to agree on what time meant, and standard time zones were invented for the railways before any government adopted them. The timetable was the first database most people ever consulted.
+
+The drinking fountain spread with the temperance movement, which hoped that clean public water would rival the saloon. Its bubbler — a small arc of water — was engineered in the 1930s to be drinkable without lips touching the spout. School corridors, parks, and courthouses still carry the argument of that era in porcelain and steel.
+
+The pedestrian crossing is a negotiated truce. Zebra stripes appeared in London in 1951 after experiments with metal studs and traffic lights; the flashing amber beacon followed. Rules differ by country — in some, a raised hand stops cars by law, in others by hope — but the paint's purpose is everywhere the same: to make the vulnerable visible.
+
+The parking meter arrived in Oklahoma City in 1935 to solve a real problem: shopkeepers complained that commuters filled the curb all day. The first meters took nickels and were hated so thoroughly that they were sued, vandalised, and protested. They survived because turnover, it turned out, helped everyone who needed a space after ten in the morning.
+
+The bus stop shelter is furniture with a timetable. Its glass sides advertise, its bench rests, and its roof shelters, but its true function is the printed line: which route, which direction, which minute. Cities that remove shelters discover that ridership follows comfort, and that a timetable under open rain is a timetable ignored.
+
+The public telephone booth once promised a call from anywhere for a coin. Its glass box was designed to be recognisable from a moving car, and its colour became civic identity — red in London, yellow in Germany, stainless steel in Tokyo. Mobile phones emptied the booths; cities now debate whether the boxes are heritage or scrap.
+
+The fountain in a city square is older than plumbing pride: Roman fountains displayed an emperor's aqueducts, Renaissance fountains displayed a duke's taste, and modern fountains display, above all, that the water is safe to touch. Children wade in them within minutes of any hot day, to the despair of every parks department.

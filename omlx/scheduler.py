@@ -932,6 +932,11 @@ def _patched_generation_batch_step(self):
     # the grammar-accept loop read them by position.
     _omlx_realign_generation_batch_rows(self)
 
+    # Directional steering phase signal (no-op without a steering state).
+    from .steering.install import mark_decode
+
+    mark_decode(model, self.uids)
+
     # Must run after the realignment: it reads self.logits_processors[e] as
     # the row state for uids[e], which is exactly what the realignment above
     # is there to guarantee.
@@ -1337,6 +1342,9 @@ def _prepare_mrope_prompt(self):
 
 def _patched_ppb_prompt(self, tokens):
     _prepare_mrope_prompt(self)
+    from .steering.install import mark_prefill
+
+    mark_prefill(self.model)
     # Late-bound so model patches can swap the loop under this wrapper.
     with _mtp_priming.prefill_scope(self.model, self.uids, tokens, self.prompt_cache):
         return PromptProcessingBatch._omlx_base_prompt(self, tokens)
@@ -2387,6 +2395,9 @@ class Scheduler:
         # of step() (same cross-thread idiom as _pending_abort_ids) because the
         # enforcer must never touch Metal directly.
         self._pending_reclaim_request: bool = False
+        # Directional steering live update (attn, ffn, kwargs); drained at the
+        # top of step() on the MLX thread so a scale never changes mid-forward.
+        self._pending_steering: tuple | None = None
 
         # Set by ProcessMemoryEnforcer.request_pressure_reclaim() when memory
         # pressure is hard. Unlike _pending_reclaim_request (idle-gated), this
@@ -2663,6 +2674,11 @@ class Scheduler:
                 paged_cache_manager=self.paged_cache_manager,
                 gdn_ssd_split_enabled=self.config.gdn_ssd_split_enabled,
             )
+            from .steering.install import get_state as _get_steering_state
+
+            _steer = _get_steering_state(model)
+            if _steer is not None:
+                self.paged_cache_manager.set_hash_salt(_steer.salt())
 
             # Initialize paged SSD cache. If the backing directory is not
             # usable (for example, an external cache drive is disconnected),
@@ -4442,6 +4458,9 @@ class Scheduler:
             _PrefillAbortedError: If prefill is interrupted by a pending abort.
             RuntimeError: If memory limit exceeded during prefill.
         """
+        from .steering.install import mark_prefill
+
+        mark_prefill(self.model)
         _mtp_priming.activate_request(self.model, request.request_id)
         request.prefill_started_at = time.monotonic()
         n_tokens = len(tokens)
@@ -7489,6 +7508,9 @@ class Scheduler:
         return done
 
     def _forward_prefill_chunk(self, plan: _PrefillChunkPlan) -> None:
+        from .steering.install import mark_prefill
+
+        mark_prefill(self.model)
         state = plan.state
         n = plan.tokens
         chunk = state.tokens_remaining[:, :n]
@@ -12346,6 +12368,31 @@ class Scheduler:
         logger.debug(f"Enqueued deferred abort for request {request_id}")
         return True
 
+    def request_steering_update(self, attn=None, ffn=None, **kwargs) -> None:
+        """Queue a live steering change (any thread); applied at next step()."""
+        self._pending_steering = (attn, ffn, kwargs)
+
+    def _process_pending_steering_update(self) -> None:
+        pending = self._pending_steering
+        if pending is None:
+            return
+        self._pending_steering = None
+        from .steering.install import get_state
+
+        state = get_state(self.model)
+        if state is None:
+            return
+        attn, ffn, kwargs = pending
+        state.set(attn=attn, ffn=ffn, **kwargs)
+        if self.paged_cache_manager is not None:
+            self.paged_cache_manager.set_hash_salt(state.salt())
+        # Running KV is now mixed-scale (C5): never store it to the shared cache.
+        for req in list(self.running.values()) + list(self.prefilling):
+            req.skip_cache_store = True
+        drafter = getattr(self, "_dflash_drafter", None)
+        if drafter is not None and hasattr(drafter, "clear"):
+            drafter.clear()
+
     def _process_pending_aborts(self) -> None:
         """Drain and process pending abort requests.
 
@@ -15950,6 +15997,7 @@ class Scheduler:
 
         # Process pending aborts FIRST (thread-safe with hybrid executor)
         self._process_pending_aborts()
+        self._process_pending_steering_update()
         self._process_pending_memory_requeue()
         if self._prefill_helper is not None:
             self._prefill_helper.sync(self._prefill_states)

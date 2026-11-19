@@ -1296,6 +1296,8 @@ class EnginePool:
         add("trust_remote_code", bool(data.get("trust_remote_code", False)))
         add("external_engine", data.get("external_engine") or None)
         add("index_cache_freq", normalized_index_cache_freq())
+        # Pack only: scales/scope are live-pushed and must not reload.
+        add("steering_pack", data.get("steering_pack") or None)
         # Embedding audio tower residency is decided at load. The audio length
         # only matters while the tower is loaded.
         audio_active = bool(data.get("embedding_audio_enabled", False))
@@ -3507,6 +3509,30 @@ class EnginePool:
             return engine._engine.engine  # type: ignore[attr-defined]
         except AttributeError:
             return None
+
+    def apply_steering_scales(self, model_id: str, **fields) -> bool:
+        """Queue a live steering change on a loaded engine (plan §10).
+
+        Returns False when the model is not loaded or has no scheduler (the
+        persisted settings apply at the next load). The scheduler drains the
+        request at the start of its next step on the MLX thread.
+        """
+        entry = self._entries.get(model_id)
+        engine = entry.engine if entry is not None else None
+        if engine is None:
+            return False
+        core = self._resolve_engine_core_from_engine(engine)
+        scheduler = getattr(core, "scheduler", None)
+        push = getattr(scheduler, "request_steering_update", None)
+        if not callable(push):
+            return False
+        attn = fields.pop("attn", None)
+        ffn = fields.pop("ffn", None)
+        push(attn=attn, ffn=ffn, **fields)
+        wake = getattr(core, "_wake_engine_loop", None)
+        if callable(wake):
+            wake()
+        return True
 
     async def _reclaim_pooled_buffers_for_prefill(
         self, model_id: str, request_id: str

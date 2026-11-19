@@ -506,6 +506,17 @@ class PagedCacheManager(CacheManager):
         enable_caching: Whether to enable prefix caching (default: True)
     """
 
+    @property
+    def hash_namespace(self):
+        """Value fed to ``compute_block_hash``: model_name plus steering salt."""
+        salt = getattr(self, "_hash_salt", "")
+        if not salt:
+            return self.model_name
+        return f"{self.model_name or ''}|steer:{salt}"
+
+    def set_hash_salt(self, salt: str) -> None:
+        self._hash_salt = salt or ""
+
     def __init__(
         self,
         block_size: int = 64,
@@ -518,6 +529,9 @@ class PagedCacheManager(CacheManager):
         self.max_blocks = max_blocks
         self.enable_caching = enable_caching
         self.model_name = model_name
+        # Hash-only salt (directional steering). model_name itself must stay
+        # unchanged: SSD validation compares it and would discard other-salt blocks.
+        self._hash_salt = ""
         self.initial_blocks = initial_blocks
 
         # Warn if model_name is not set (cache isolation may not work)
@@ -981,7 +995,7 @@ class PagedCacheManager(CacheManager):
                 # Compute chain hash
                 block_hash = compute_block_hash(
                     parent_hash, block_tokens,
-                    extra_keys=extra_keys, model_name=self.model_name,
+                    extra_keys=extra_keys, model_name=self.hash_namespace,
                 )
                 block.block_hash = block_hash
                 block.token_count = len(block_tokens)
@@ -1032,7 +1046,7 @@ class PagedCacheManager(CacheManager):
                 # Compute expected hash
                 block_hash = compute_block_hash(
                     parent_hash, block_tokens,
-                    extra_keys=block_extra_keys, model_name=self.model_name,
+                    extra_keys=block_extra_keys, model_name=self.hash_namespace,
                 )
 
                 # Look up in cache
@@ -1109,7 +1123,7 @@ class PagedCacheManager(CacheManager):
         with self._lock:
             block_hash = compute_block_hash(
                 parent_hash, tokens, extra_keys=extra_keys,
-                model_name=self.model_name,
+                model_name=self.hash_namespace,
             )
             block = self.cached_block_hash_to_block.get_block(block_hash)
             if block:
@@ -1142,7 +1156,7 @@ class PagedCacheManager(CacheManager):
         with self._lock:
             block_hash = compute_block_hash(
                 parent_hash, tokens, extra_keys=extra_keys,
-                model_name=self.model_name,
+                model_name=self.hash_namespace,
             )
             block.block_hash = block_hash
             self.cached_block_hash_to_block.insert(block_hash, block)
@@ -1227,7 +1241,7 @@ class PagedCacheManager(CacheManager):
                     extra_key_token_start=extra_key_token_start,
                     extra_key_ranges=extra_key_ranges,
                 ),
-                model_name=self.model_name,
+                model_name=self.hash_namespace,
             )
             if expected != tail_hash:
                 continue

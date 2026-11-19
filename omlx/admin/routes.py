@@ -81,6 +81,7 @@ from ..model_settings import (
     ane_prefill_backend,
     ane_prefill_fraction,
     resolve_qwen35_prefill_conflicts,
+    validate_steering,
     resolve_vlm_mtp_conflicts,
     validate_ane_prefill,
     validate_moe_expert_offload,
@@ -399,6 +400,18 @@ def _profile_draft_problem(mgr, model_id: str, settings: dict, exposed) -> str |
     return _draft_usability_problem(merged, set(settings))
 
 
+_STEERING_LIVE_FIELDS = (
+    "steering_ffn_scale",
+    "steering_attn_scale",
+    "steering_scope",
+    "steering_decode_tokens",
+    "steering_method",
+    "steering_norm_preserve",
+    "steering_skip_thinking",
+)
+_STEERING_FIELDS = ("steering_pack",) + _STEERING_LIVE_FIELDS
+
+
 class ModelSettingsRequest(BaseModel):
     """Request model for updating per-model settings."""
 
@@ -406,6 +419,14 @@ class ModelSettingsRequest(BaseModel):
 
     model_alias: str | None = None
     model_type_override: str | None = None
+    steering_pack: str | None = None
+    steering_ffn_scale: float | None = None
+    steering_attn_scale: float | None = None
+    steering_scope: str | None = None
+    steering_decode_tokens: int | None = Field(default=None, ge=1, le=4096)
+    steering_method: str | None = None
+    steering_norm_preserve: bool | None = None
+    steering_skip_thinking: bool | None = None
     max_context_window: int | None = None
     max_tokens: int | None = Field(default=None, ge=1)
     temperature: float | None = None
@@ -2894,6 +2915,317 @@ async def load_model(
     return {"status": "ok", "model_id": model_id, "message": f"Loaded {model_id}"}
 
 
+@router.get("/api/models/{model_id}/steering")
+async def get_model_steering(model_id: str, is_admin: bool = Depends(require_admin)):
+    """Live steering state of a loaded engine (pack, scales, salt, debug hits)."""
+    entry = _require_model(model_id)
+    settings_manager = _get_settings_manager()
+    saved = settings_manager.get_settings(model_id) if settings_manager else None
+    out = {
+        "model_id": model_id,
+        "pack": getattr(saved, "steering_pack", None),
+        "loaded": entry.engine is not None,
+        "installed": False,
+    }
+    engine = entry.engine
+    model = getattr(engine, "_model", None) or getattr(engine, "_vlm_model", None)
+    if model is not None:
+        from ..steering import get_state
+
+        st = get_state(model)
+        if st is not None:
+            out.update(
+                installed=True,
+                active=st.active(),
+                attn_scale=st.attn_scale,
+                ffn_scale=st.ffn_scale,
+                scope=st.scope,
+                decode_tokens=st.decode_tokens,
+                method=st.method,
+                norm_preserve=st.norm_preserve,
+                components=sorted(st.components),
+                salt=st.salt(),
+                epoch=st.epoch,
+                debug=st.debug,
+                hits={f"{k}:{i}": n for (k, i), n in sorted(st.hits.items())},
+            )
+    return out
+
+
+class SteeringBuildRequest(BaseModel):
+    name: str
+    good: list[str]
+    bad: list[str]
+    component: str = "ffn"
+    system: Optional[str] = None
+    thinking: bool = False
+    pair_normalize: bool = False
+    orthogonalize: bool = True
+    description: str = ""
+    # Plan §2e Q2: layers whose split-half stability falls below this are
+    # excluded via the steer.layers mask (None disables the mask).
+    min_split_half: Optional[float] = Field(default=0.8, ge=0.0, le=1.0)
+
+
+_STEERING_JOBS: dict[str, dict[str, Any]] = {}
+
+
+@router.post("/api/models/{model_id}/steering/build")
+async def build_steering_pack(
+    model_id: str,
+    request: SteeringBuildRequest,
+    is_admin: bool = Depends(require_admin),
+):
+    """Capture paired prompts on the live engine and build a pack (plan §13)."""
+    import uuid
+
+    entry = _require_model(model_id)
+    engine = entry.engine
+    if engine is None:
+        raise HTTPException(409, f"model {model_id} is not loaded")
+    if len(request.good) < 2 or len(request.bad) < 2:
+        raise HTTPException(400, "capture needs at least 2 good and 2 bad prompts")
+    if request.component not in ("ffn", "attn"):
+        raise HTTPException(400, "component must be 'ffn' or 'attn'")
+    model = getattr(engine, "_model", None) or getattr(engine, "_vlm_model", None)
+    from ..steering import get_state
+    from ..steering.adapters import get_adapter
+
+    st = get_state(model) if model is not None else None
+    if st is None:
+        raise HTTPException(409, "steering is not installed on the loaded engine")
+    if request.component not in st.components:
+        raise HTTPException(
+            400,
+            f"pack component is {sorted(st.components)}; cannot capture "
+            f"{request.component!r}",
+        )
+    job_id = uuid.uuid4().hex[:12]
+    n = min(len(request.good), len(request.bad))
+    _STEERING_JOBS[job_id] = {
+        "job_id": job_id,
+        "model_id": model_id,
+        "status": "running",
+        "done": 0,
+        "total": 2 * n,
+        "pack": None,
+        "error": None,
+    }
+    asyncio.create_task(
+        _run_steering_build(job_id, model_id, engine, model, st, request, n)
+    )
+    return {"job_id": job_id, "total": 2 * n}
+
+
+async def _run_steering_build(
+    job_id: str,
+    model_id: str,
+    engine: Any,
+    model: Any,
+    st: Any,
+    request: SteeringBuildRequest,
+    n: int,
+) -> None:
+    from ..engine_core import get_mlx_executor
+    from ..steering.adapters import get_adapter, model_type_of
+    from ..steering.capture import build_direction, capture_one
+    from ..steering.pack import SteeringPack, get_steering_dir, save_pack
+
+    job = _STEERING_JOBS[job_id]
+    loop = asyncio.get_running_loop()
+    executor = get_mlx_executor()
+    fwd = model if not hasattr(model, "language_model") else model.language_model
+    from mlx_lm.models.cache import make_prompt_cache
+
+    async def _tokenize(prompt: str) -> list[int]:
+        messages = []
+        if request.system:
+            messages.append({"role": "system", "content": request.system})
+        messages.append({"role": "user", "content": prompt})
+        kwargs = {"enable_thinking": request.thinking}
+        if hasattr(engine, "tokenize_chat"):
+            return await engine.tokenize_chat(messages, chat_template_kwargs=kwargs)
+        _, ids = engine.prepare_chat_prompt(messages, chat_template_kwargs=kwargs)
+        return ids
+
+    async def _capture(prompts: list[str]) -> list[dict[int, Any]]:
+        caps = []
+        for prompt in prompts[:n]:
+            ids = await _tokenize(prompt)
+            caps.append(
+                await loop.run_in_executor(
+                    executor,
+                    lambda: capture_one(
+                        fwd,
+                        ids,
+                        st,
+                        request.component,
+                        lambda: make_prompt_cache(fwd),
+                    ),
+                )
+            )
+            job["done"] += 1
+        return caps
+
+    try:
+        good_caps = await _capture(request.good)
+        bad_caps = await _capture(request.bad)
+        result = build_direction(
+            good_caps,
+            bad_caps,
+            pair_normalize=request.pair_normalize,
+            orthogonalize=request.orthogonalize,
+        )
+        # Q2: drop unstable layers from the mask; the vectors keep all rows
+        # (shape validation needs the model's layer count), the installer
+        # simply does not tag the masked-out layers.
+        layer_mask = None
+        if request.min_split_half is not None and request.min_split_half > 0:
+            keep = [
+                i
+                for i, c in enumerate(result["split_half_cos"])
+                if c is None or c >= request.min_split_half
+            ]
+            if 0 < len(keep) < len(result["split_half_cos"]):
+                layer_mask = keep
+        adapter = get_adapter(model)
+        steer_block = {
+            "mu_good": result["mu_good"].tolist(),
+            "mu_bad": result["mu_bad"].tolist(),
+        }
+        if layer_mask is not None:
+            steer_block["layers"] = layer_mask
+        manifest = {
+            "description": request.description
+            or f"captured on {model_id} from {result['n_pairs']} pairs",
+            "model": {
+                "model_type": model_type_of(model),
+                "hidden_size": int(result["vectors"].shape[1]),
+                "n_layers": int(result["vectors"].shape[0]),
+            },
+            "hook": {"component": request.component, "mode": adapter.mode},
+            "build": {
+                "direction_method": result["direction_method"],
+                "orthogonalize": request.orthogonalize,
+                "split_half_cos": result["split_half_cos"],
+                "min_split_half": request.min_split_half,
+                "layer_mask": layer_mask,
+            },
+            "steer": steer_block,
+            "usage": {"scope": "prefill+k", "decode_tokens": 32},
+        }
+        dest = save_pack(
+            SteeringPack(request.name, result["vectors"], manifest),
+            get_steering_dir() / request.name,
+        )
+        job.update(
+            status="done",
+            pack=str(dest),
+            manifest=manifest,
+            split_half_cos=result["split_half_cos"],
+            layer_mask=layer_mask,
+        )
+    except Exception as e:
+        logger.exception("steering build job %s failed", job_id)
+        job.update(status="error", error=str(e))
+
+
+@router.get("/api/steering/jobs/{job_id}")
+async def get_steering_job(job_id: str, is_admin: bool = Depends(require_admin)):
+    job = _STEERING_JOBS.get(job_id)
+    if job is None:
+        raise HTTPException(404, f"no such steering job {job_id!r}")
+    return job
+
+
+class SteeringVerifyRequest(BaseModel):
+    scopes: list[str] = Field(default_factory=lambda: ["prefill+k"])
+    scales: list[float] = Field(default_factory=lambda: [-0.5, -1.0])
+    quick: bool = False
+    thinking: bool = False
+    samples: int = Field(default=300, ge=10, le=2000)
+    neutral_limit: int | None = Field(default=None, ge=1, le=1000)
+    gen_limit: int | None = Field(default=None, ge=1, le=100)
+
+
+@router.post("/api/models/{model_id}/steering/verify")
+async def verify_steering_pack(
+    model_id: str,
+    request: SteeringVerifyRequest,
+    is_admin: bool = Depends(require_admin),
+):
+    """Run the Q7 quality gate on the loaded engine (plan §2e)."""
+    import uuid
+
+    entry = _require_model(model_id)
+    engine = entry.engine
+    if engine is None:
+        raise HTTPException(409, f"model {model_id} is not loaded")
+    if not request.scales:
+        raise HTTPException(400, "verify needs at least one scale")
+    for scope in request.scopes:
+        if scope not in ("all", "prefill", "prefill+k"):
+            raise HTTPException(400, f"unknown steering scope {scope!r}")
+    model_obj = getattr(engine, "_model", None) or getattr(engine, "_vlm_model", None)
+    from ..steering import get_state
+
+    st = get_state(model_obj) if model_obj is not None else None
+    if st is None:
+        raise HTTPException(409, "steering is not installed on the loaded engine")
+    # Results are written into named packs; a bare .f32 has no manifest to fill.
+    pack_dir = None
+    settings_manager = _get_settings_manager()
+    saved = settings_manager.get_settings(model_id) if settings_manager else None
+    pack_ref = getattr(saved, "steering_pack", None)
+    if pack_ref:
+        from ..steering.pack import get_steering_dir
+
+        named = get_steering_dir() / pack_ref
+        if (named / "manifest.json").is_file():
+            pack_dir = named
+    job_id = uuid.uuid4().hex[:12]
+    total = 1 + len(request.scopes) * sum(1 for s in request.scales if s != 0.0)
+    _STEERING_JOBS[job_id] = {
+        "job_id": job_id,
+        "model_id": model_id,
+        "status": "running",
+        "done": 0,
+        "total": total,
+        "quality": [],
+        "recommended": None,
+        "error": None,
+    }
+    from ..steering.quality import VerifyRequest
+
+    verify_request = VerifyRequest(
+        scopes=request.scopes,
+        scales=request.scales,
+        quick=request.quick,
+        thinking=request.thinking,
+        samples=request.samples,
+        neutral_limit=request.neutral_limit,
+        gen_limit=request.gen_limit,
+    )
+    asyncio.create_task(
+        _run_steering_verify(job_id, engine, model_obj, st, verify_request, pack_dir)
+    )
+    return {"job_id": job_id, "total": total}
+
+
+async def _run_steering_verify(
+    job_id: str,
+    engine: Any,
+    model: Any,
+    st: Any,
+    request: Any,
+    pack_dir: Any,
+) -> None:
+    from ..steering.quality import run_verify_job
+
+    job = _STEERING_JOBS[job_id]
+    await run_verify_job(job, engine, model, st, request, pack_dir)
+
+
 @router.get("/api/models/{model_id}/moe-offload-fit")
 async def get_moe_offload_fit(
     model_id: str,
@@ -3212,6 +3544,19 @@ async def update_model_settings(
         current_settings.forced_ct_kwargs = request.forced_ct_kwargs
     if "ttl_seconds" in sent:
         current_settings.ttl_seconds = request.ttl_seconds
+    _steering_sent = [k for k in _STEERING_FIELDS if k in sent]
+    if _steering_sent:
+        for k in _steering_sent:
+            v = getattr(request, k)
+            setattr(current_settings, k, None if v in ("", None) else v)
+        if "steering_pack" in sent and not current_settings.steering_pack:
+            # Removing the pack drops every dependent field (DS4 rule).
+            for k in _STEERING_FIELDS:
+                setattr(current_settings, k, None)
+        try:
+            validate_steering(current_settings.__dict__)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
     if "index_cache_freq" in sent:
         # 0 means disable (reset to None)
         current_settings.index_cache_freq = (
@@ -3699,6 +4044,32 @@ async def update_model_settings(
             except Exception as e:
                 logger.warning(f"Auto-reload failed for pinned model {model_id}: {e}")
 
+    steering_applied_live = False
+    _live = {
+        k.removeprefix("steering_"): getattr(current_settings, k)
+        for k in _STEERING_LIVE_FIELDS
+        if k in sent
+    }
+    if _live and not requires_reload and entry.engine is not None:
+        _renames = {"ffn_scale": "ffn", "attn_scale": "attn"}
+        steering_applied_live = engine_pool.apply_steering_scales(
+            model_id,
+            **{
+                _renames.get(k, k): v
+                for k, v in _live.items()
+                if k
+                in (
+                    "ffn_scale",
+                    "attn_scale",
+                    "scope",
+                    "decode_tokens",
+                    "method",
+                    "norm_preserve",
+                )
+                and v is not None
+            },
+        )
+
     return {
         "success": True,
         "model_id": model_id,
@@ -3706,6 +4077,7 @@ async def update_model_settings(
         "model_type": entry.model_type,
         "engine_type": entry.engine_type,
         "requires_reload": requires_reload,
+        "steering_applied_live": steering_applied_live,
         "auto_unloaded": auto_unloaded,
         "auto_reloaded": auto_reloaded,
         "reload_deferred": reload_deferred,
@@ -8062,7 +8434,14 @@ async def probe_cache(
     # Compute chain-hashed block sequence.
     from ..cache.paged_cache import compute_block_hash
 
-    model_name = getattr(paged_cache, "model_name", None) if paged_cache else None
+    # hash_namespace carries the steering salt; probing with the bare
+    # model_name would miss every block stored while steering is on.
+    model_name = (
+        getattr(paged_cache, "hash_namespace", None)
+        or getattr(paged_cache, "model_name", None)
+        if paged_cache
+        else None
+    )
     ssd_index = getattr(ssd_manager, "_index", None) if ssd_manager else None
     ssd_hot = getattr(ssd_manager, "_hot_cache", None) if ssd_manager else None
 

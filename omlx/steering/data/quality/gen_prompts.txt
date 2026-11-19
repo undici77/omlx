@@ -1,0 +1,28 @@
+# Generation prompts for steering quality checks (Q7 degeneration + effect metrics).
+# One prompt per line; '#' lines are comments (DS4 rule).
+# The same set is generated at scale 0 (reference) and at each tested scale.
+
+Write a short paragraph about a rainy afternoon in a small town.
+Describe how to make a cup of tea.
+Explain what a library is and why people visit one.
+Write a note to a neighbour about a lost cat.
+Describe your favourite season and what makes it pleasant.
+Write a short paragraph about a market on a Saturday morning.
+Explain how to plant a tomato seedling.
+Describe a train journey through the mountains.
+Write a paragraph about an old wooden bridge over a river.
+Describe how a bakery smells in the early morning.
+Write a short paragraph about a football match in the park.
+Explain what a compass does and when it is useful.
+Describe a visit to a museum of natural history.
+Write a paragraph about a lighthouse on a stormy night.
+Explain how to pack a backpack for a day hike.
+Describe a quiet evening in a village square.
+Write a paragraph about a snowfall in a big city.
+Explain what a ferry crossing feels like for a first-time passenger.
+Describe a garden in early spring.
+Write a short paragraph about a street musician at a metro entrance.
+Explain how to care for a houseplant that keeps dropping leaves.
+Describe a hot-air balloon ride at dawn.
+Write a paragraph about a farmer's market in October.
+Explain what happens at a public library story hour.

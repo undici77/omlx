@@ -742,6 +742,16 @@ class BatchedEngine(BaseEngine):
             except Exception:
                 logger.debug("qwen3_5 ragged decode patch not applied", exc_info=True)
 
+        # Directional steering: must be the LAST class-level patch so its hook is
+        # the outermost __call__. No pack configured -> nothing is touched (R1).
+        if getattr(self._model_settings, "steering_pack", None):
+            from ..steering import install_steering
+
+            def _install_steering_sync():
+                return install_steering(self._model, self._model_settings)
+
+            await loop.run_in_executor(get_mlx_executor(), _install_steering_sync)
+
         # Create engine config (copy to avoid mutating the shared instance)
         scheduler_config = (
             copy.copy(self._scheduler_config)

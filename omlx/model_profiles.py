@@ -44,6 +44,14 @@ UNIVERSAL_PROFILE_FIELDS = (
 
 # Model-specific fields — eligible for per-model profiles only (never templates).
 MODEL_SPECIFIC_PROFILE_FIELDS = (
+    "steering_pack",
+    "steering_ffn_scale",
+    "steering_attn_scale",
+    "steering_scope",
+    "steering_decode_tokens",
+    "steering_method",
+    "steering_norm_preserve",
+    "steering_skip_thinking",
     "turboquant_kv_enabled",
     "turboquant_kv_scheme",
     "turboquant_kv_bits",

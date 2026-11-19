@@ -279,3 +279,26 @@ Run `python -m pytest -q tests/test_gpu_power.py` to check the GPU power limiter
 Run `python -m pytest -q tests/test_prefill_helper.py` for the host side: splits against an unsplit prefill on small models of each family, the SSH and control-channel transports with fake helpers, GPU budgets, and the link-aware layer choice. `test_payload_matches_the_contract_fixture` compares each family's boundary, state and prefix arrays with the recorded fixture in `tests/fixtures/prefill_contract/<family>/`. When it fails because the arrays changed on purpose, raise the adapter's `contract` and record again with `python tests/fixtures/record_prefill_contract.py <family> --force`; a Linux helper is then refused for the family until its own contract is raised too.
 
 Run `python -m pytest -q apps/omlx-cuda-helper/tests` for the Linux helper. `test_protocol.py` pairs the helper with a real `PairingManager` and drives its control channel with the host's `agent` module, `test_chain.py` runs two stage processes with a fake family, and the per-family files replay the same contract fixtures through the helper's own implementation. On CUDA, `test_qwen3_5.py` also checks that an oQh linear equals its weight rotated back and that the rotation has the host's bits, `test_qwen4_exp.py` checks the oQh expert kernel against the experts rebuilt dense, and `test_glm5_next.py` runs GLM-5.3 oQh experts through it. They need no NVIDIA GPU: on a Mac the stages run on Metal, and on the helper machine the same files run on CUDA. CI does not run this folder.
+
+# Directional steering tests
+
+Fast logic tests run in any container (the NumPy MLX mock covers structure, not numerics):
+
+```bash
+PYTHONPATH=. python -m pytest -q tests/test_steering_core.py tests/test_steering_cli.py \
+    tests/test_steering_quality.py
+```
+
+`test_steering_core.py` covers pack load/save (sha and size mismatch refusal, DS4 `.f32` import, name resolution), settings validation, hook idempotence and tag placement outside the parameter tree, scheduler pending-update drain, and the cache-salt namespace. `test_steering_cli.py` covers the `omlx steer` command surface and the local pack list/export/import round trips, including zip-traversal refusal and corrupt-pack rejection. `test_steering_quality.py` covers the Q7 metrics (repetition rate, JSON extraction, gate rows, manifest `quality[]` write) and the corpus contract (200+ paragraphs shipped). `test_steering_bench.py` covers the §2b gate rows and prompt builders of the bench harness.
+
+Mac-only (real MLX, run them there and paste failures back):
+
+```bash
+# Numerics: projection maths, s=0 bit-identity, tiny-model logits
+.venv-macos/bin/python -m pytest -q tests/test_steering_numerics.py
+
+# Slow-marked KL pair invariants also live in tests/test_steering_quality.py
+.venv-macos/bin/python -m pytest -q tests/test_steering_quality.py -m slow
+```
+
+Real-model checks need a loaded server: capture returns finite non-zero `L×E` rows, greedy output with MTP matches without MTP, and a verbosity pack shrinks word counts at `ffn=-1` (`omlx steer build` → `sweep` → `verify --quick`, commands in [steering.md](steering.md)). Performance gates come from `benchmarks/steering_bench.py` against the §2b table.

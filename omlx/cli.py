@@ -1122,6 +1122,700 @@ def cluster_command(args) -> int:
     return 2
 
 
+def steer_command(args) -> int:
+    """Dispatch 'omlx steer <action>' (directional steering plan §14)."""
+    action = getattr(args, "steer_action", None)
+    if action == "build":
+        return _steer_build(args)
+    if action == "sweep":
+        return _steer_sweep(args)
+    if action == "verify":
+        return _steer_verify(args)
+    if action == "set":
+        return _steer_set(args)
+    if action == "show":
+        return _steer_show(args)
+    if action == "list":
+        return _steer_list(args)
+    if action == "export":
+        return _steer_export(args)
+    if action == "import":
+        return _steer_import(args)
+    print(
+        "Unknown steer action. Available: build, sweep, set, show, "
+        "list, import, export",
+        file=sys.stderr,
+    )
+    return 2
+
+
+def _steer_server(args) -> tuple[str, dict[str, str]]:
+    """Resolve the server base URL and admin auth headers (plan §14)."""
+    import requests
+
+    from .integrations.base import bracket_host
+    from .settings import GlobalSettings
+
+    settings = GlobalSettings.load()
+    host = args.host or settings.server.host
+    port = args.port or settings.server.port
+    # host may be a comma-separated list of bind addresses; pick the first
+    # one for connecting and fall back to localhost for wildcard binds.
+    first_bind = [h.strip() for h in host.split(",") if h.strip()][0] if host else ""
+    connect_host = (
+        first_bind if first_bind not in ("", "0.0.0.0", "::") else "127.0.0.1"
+    )
+    base_url = f"http://{bracket_host(connect_host)}:{port}"
+    try:
+        requests.get(f"{base_url}/health", timeout=3).raise_for_status()
+    except Exception:
+        print(f"oMLX server is not running at {base_url}")
+        print("Start the server first: omlx start")
+        sys.exit(1)
+    # The admin API accepts only the main API key.
+    api_key = getattr(args, "api_key", None) or settings.auth.api_key or ""
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    return base_url, headers
+
+
+def _steer_model_url(base_url: str, model: str) -> str:
+    from urllib.parse import quote
+
+    return f"{base_url}/admin/api/models/{quote(str(model), safe='')}"
+
+
+def _steer_fail(action: str, resp) -> int:
+    try:
+        detail = resp.json().get("detail", resp.text)
+    except Exception:
+        detail = resp.text
+    print(
+        f"steer {action} failed: HTTP {resp.status_code}: {detail}",
+        file=sys.stderr,
+    )
+    return 1
+
+
+def _steer_read_prompts(path: str) -> list[str]:
+    """One prompt per non-empty line; '#' lines are comments (DS4 rule)."""
+    prompts = []
+    with open(path, encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if line and not line.startswith("#"):
+                prompts.append(line)
+    return prompts
+
+
+def _steer_build(args) -> int:
+    import time
+
+    import requests
+
+    good = _steer_read_prompts(args.good_file)
+    bad = _steer_read_prompts(args.bad_file)
+    if len(good) < 2 or len(bad) < 2:
+        print("Capture needs at least 2 good and 2 bad prompts", file=sys.stderr)
+        return 1
+    base_url, headers = _steer_server(args)
+    resp = requests.post(
+        f"{_steer_model_url(base_url, args.model)}/steering/build",
+        json={
+            "name": args.name,
+            "good": good,
+            "bad": bad,
+            "component": args.component,
+            "system": args.system,
+            "thinking": bool(args.think),
+            "pair_normalize": bool(args.pair_normalize),
+            "orthogonalize": not args.no_orthogonalize,
+        },
+        headers=headers,
+        timeout=60,
+    )
+    if resp.status_code != 200:
+        return _steer_fail("build", resp)
+    job = resp.json()
+    job_id = job["job_id"]
+    total = job.get("total", 0)
+    print(f"Capturing {total} prompts on {args.model} (job {job_id})")
+    last_done = -1
+    while True:
+        time.sleep(1.0)
+        poll = requests.get(
+            f"{base_url}/admin/api/steering/jobs/{job_id}",
+            headers=headers,
+            timeout=10,
+        )
+        if poll.status_code != 200:
+            return _steer_fail("build", poll)
+        job = poll.json()
+        if job.get("done") != last_done:
+            last_done = job.get("done", 0)
+            print(f"  {last_done}/{total}")
+        if job.get("status") == "error":
+            print(f"Build failed: {job.get('error')}", file=sys.stderr)
+            return 1
+        if job.get("status") == "done":
+            break
+    print(f"Pack written to {job.get('pack')}")
+    manifest = job.get("manifest") or {}
+    model_info = manifest.get("model") or {}
+    hook = manifest.get("hook") or {}
+    build = manifest.get("build") or {}
+    print(
+        f"component={hook.get('component')}/{hook.get('mode')} "
+        f"shape={model_info.get('n_layers')}x{model_info.get('hidden_size')} "
+        f"method={build.get('direction_method')}"
+    )
+    cos = sorted(c for c in (build.get("split_half_cos") or []) if c is not None)
+    if cos:
+        print(f"split-half cosine: min={cos[0]:.3f} median={cos[len(cos) // 2]:.3f}")
+    mask = build.get("layer_mask")
+    if mask:
+        print(f"layer mask: {len(mask)}/{model_info.get('n_layers')} layers kept")
+    return 0
+
+
+def _steer_sweep(args) -> int:
+    import time
+
+    import requests
+
+    scales = []
+    for token in args.scales.split(","):
+        token = token.strip()
+        if token:
+            scales.append(float(token))
+    if not scales:
+        print("No scales parsed from --scales", file=sys.stderr)
+        return 1
+    prompts = _steer_read_prompts(args.prompts)
+    if not prompts:
+        print(f"No prompts found in {args.prompts}", file=sys.stderr)
+        return 1
+    base_url, headers = _steer_server(args)
+    model_url = _steer_model_url(base_url, args.model)
+    settings_url = f"{model_url}/settings"
+
+    state = requests.get(f"{model_url}/steering", headers=headers, timeout=10)
+    if state.status_code != 200:
+        return _steer_fail("sweep", state)
+    orig = state.json()
+    orig_pack = orig.get("pack")
+    orig_scales = {"ffn": orig.get("ffn_scale"), "attn": orig.get("attn_scale")}
+
+    print(
+        "WARNING: sweep changes the engine-wide steering scale; "
+        "run it on an idle server."
+    )
+    resp = requests.put(
+        settings_url,
+        json={"steering_pack": args.pack},
+        headers=headers,
+        timeout=60,
+    )
+    if resp.status_code != 200:
+        return _steer_fail("sweep", resp)
+    if resp.json().get("requires_reload"):
+        print("Pack change reloads the engine; the first request may be slow.")
+
+    # The pack's own manifest decides which component gets swept; fall back
+    # to the live state, then ffn (plan §16: FFN first, attention at 0).
+    component = None
+    try:
+        from .steering.pack import resolve_pack_ref
+
+        component = resolve_pack_ref(args.pack).component
+    except Exception:
+        pass
+    if component not in ("ffn", "attn"):
+        components = orig.get("components") or []
+        component = (
+            "ffn" if "ffn" in components else (components[0] if components else "ffn")
+        )
+    scale_field = f"steering_{component}_scale"
+    print(
+        f"Sweeping {component} scale over {scales} with {len(prompts)} "
+        f"prompt(s), {args.tokens} tokens each"
+    )
+
+    try:
+        for scale in scales:
+            resp = requests.put(
+                settings_url,
+                json={scale_field: scale},
+                headers=headers,
+                timeout=60,
+            )
+            if resp.status_code != 200:
+                return _steer_fail("sweep", resp)
+            for idx, prompt in enumerate(prompts, 1):
+                body = {
+                    "model": args.model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0,
+                    "max_tokens": args.tokens,
+                }
+                if args.nothink:
+                    body["enable_thinking"] = False
+                started = time.time()
+                completion = requests.post(
+                    f"{base_url}/v1/chat/completions",
+                    json=body,
+                    headers=headers,
+                    timeout=max(300, args.tokens * 2),
+                )
+                if completion.status_code != 200:
+                    return _steer_fail("sweep", completion)
+                text = completion.json()["choices"][0]["message"].get("content") or ""
+                print(
+                    f"\n=== scale {scale} | prompt {idx}/{len(prompts)} "
+                    f"| words {len(text.split())} "
+                    f"| {time.time() - started:.1f}s"
+                )
+                print(text)
+    finally:
+        restore: dict = {}
+        note = ""
+        if orig_pack is None:
+            # Neutralise instead of removing the pack (plan §16: scale 0
+            # re-enables instantly and shares the cache with unsteered runs).
+            restore[scale_field] = 0.0
+            note = (
+                f"pack {args.pack!r} left set at scale 0 — remove it with: "
+                f"omlx steer set {args.model} --off"
+            )
+        else:
+            restore["steering_pack"] = orig_pack
+            for name, value in orig_scales.items():
+                restore[f"steering_{name}_scale"] = value
+        resp = requests.put(settings_url, json=restore, headers=headers, timeout=60)
+        if resp.status_code != 200:
+            print(
+                f"WARNING: failed to restore steering settings: "
+                f"HTTP {resp.status_code}",
+                file=sys.stderr,
+            )
+        elif note:
+            print(f"\n{note}")
+        else:
+            print("\nOriginal steering settings restored")
+    return 0
+
+
+def _steer_verify(args) -> int:
+    import time
+
+    import requests
+
+    scales = []
+    for token in args.scales.split(","):
+        token = token.strip()
+        if token:
+            scales.append(float(token))
+    if not scales:
+        print("No scales parsed from --scales", file=sys.stderr)
+        return 1
+    base_url, headers = _steer_server(args)
+    model_url = _steer_model_url(base_url, args.model)
+    if args.pack:
+        resp = requests.put(
+            f"{model_url}/settings",
+            json={"steering_pack": args.pack},
+            headers=headers,
+            timeout=60,
+        )
+        if resp.status_code != 200:
+            return _steer_fail("verify", resp)
+        if resp.json().get("requires_reload"):
+            print("Pack change reloads the engine; the first request may be slow.")
+    payload = {
+        "scopes": [s.strip() for s in args.scopes.split(",") if s.strip()],
+        "scales": scales,
+        "quick": bool(args.quick),
+        "thinking": bool(args.thinking),
+    }
+    if args.samples:
+        payload["samples"] = args.samples
+    resp = requests.post(
+        f"{model_url}/steering/verify", json=payload, headers=headers, timeout=60
+    )
+    if resp.status_code != 200:
+        return _steer_fail("verify", resp)
+    job = resp.json()
+    job_id, total = job["job_id"], job.get("total", 0)
+    print(f"Verifying {total} point(s) on {args.model} (job {job_id})")
+    last_done = -1
+    while True:
+        time.sleep(2.0)
+        poll = requests.get(
+            f"{base_url}/admin/api/steering/jobs/{job_id}",
+            headers=headers,
+            timeout=10,
+        )
+        if poll.status_code != 200:
+            return _steer_fail("verify", poll)
+        job = poll.json()
+        if job.get("done") != last_done:
+            last_done = job.get("done", 0)
+            print(f"  {last_done}/{total}")
+        if job.get("status") == "error":
+            print(f"Verify failed: {job.get('error')}", file=sys.stderr)
+            return 1
+        if job.get("status") == "done":
+            break
+    entries = job.get("quality") or []
+    header = (
+        f"\n{'scope':10s} {'scale':>6s} {'kl':>7s} {'nll d%':>7s} "
+        f"{'rep dpt':>8s} {'struct dpt':>10s} {'effect%':>8s}  verdict"
+    )
+    print(header)
+    for e in entries:
+        if e.get("role") == "reference":
+            print(
+                f"{e['scope']:10s} {e['scale']:>6.2f} {e['kl']:>7.4f} "
+                f"{'-':>7s} {'-':>8s} {'-':>10s} {'-':>8s}  reference"
+            )
+            continue
+        verdict = (
+            "PASS" if e.get("passed") else "FAIL: " + "; ".join(e.get("failed", []))
+        )
+        print(
+            f"{e['scope']:10s} {e['scale']:>6.2f} {e['kl']:>7.4f} "
+            f"{e.get('nll_delta_pct', 0.0):>7.1f} "
+            f"{e.get('repeat_delta_pt', 0.0):>8.1f} "
+            f"{e.get('structure_delta_pt', 0.0):>10.1f} "
+            f"{e.get('effect_pct', 0.0):>8.1f}  {verdict}"
+        )
+    rec = job.get("recommended")
+    if rec:
+        print(f"\nRecommended: scale {rec['scale']} at scope {rec['scope']}")
+    elif entries:
+        print("\nNo passing point — no scale marked recommended")
+    return 0
+
+
+def _steer_set(args) -> int:
+    import requests
+
+    body: dict = {}
+    if args.off:
+        body["steering_pack"] = None
+    elif args.pack:
+        body["steering_pack"] = args.pack
+    if args.ffn is not None:
+        body["steering_ffn_scale"] = args.ffn
+    if args.attn is not None:
+        body["steering_attn_scale"] = args.attn
+    if not body:
+        print(
+            "Nothing to set: pass --ffn/--attn and/or --pack/--off",
+            file=sys.stderr,
+        )
+        return 1
+    base_url, headers = _steer_server(args)
+    resp = requests.put(
+        f"{_steer_model_url(base_url, args.model)}/settings",
+        json=body,
+        headers=headers,
+        timeout=60,
+    )
+    if resp.status_code != 200:
+        return _steer_fail("set", resp)
+    info = resp.json()
+    print(f"Steering settings updated for {args.model}")
+    if info.get("requires_reload"):
+        if info.get("auto_reloaded"):
+            print("Pack change: engine reloaded")
+        else:
+            print(
+                "Pack change: engine unloaded; it reloads with the pack "
+                "on the next request"
+            )
+    elif info.get("steering_applied_live"):
+        print("Scales applied live")
+    return 0
+
+
+def _steer_show(args) -> int:
+    import requests
+
+    base_url, headers = _steer_server(args)
+    resp = requests.get(
+        f"{_steer_model_url(base_url, args.model)}/steering",
+        headers=headers,
+        timeout=10,
+    )
+    if resp.status_code != 200:
+        return _steer_fail("show", resp)
+    state = resp.json()
+    print(f"model:      {state.get('model_id')}")
+    print(f"pack:       {state.get('pack')}")
+    if not state.get("installed"):
+        if not state.get("loaded"):
+            print("steering:   model not loaded")
+        else:
+            print("steering:   not installed on the loaded engine")
+        return 0
+    print(f"active:     {state.get('active')}")
+    print(f"ffn scale:  {state.get('ffn_scale')}")
+    print(f"attn scale: {state.get('attn_scale')}")
+    print(
+        f"scope:      {state.get('scope')} "
+        f"(decode_tokens={state.get('decode_tokens')})"
+    )
+    print(
+        f"method:     {state.get('method')} "
+        f"(norm_preserve={state.get('norm_preserve')})"
+    )
+    print(f"components: {', '.join(state.get('components') or [])}")
+    print(f"salt:       {state.get('salt')}  epoch: {state.get('epoch')}")
+    if not state.get("debug"):
+        print("hits:       (debug off)")
+        return 0
+    hits = state.get("hits") or {}
+    shown = ", ".join(f"{k}={v}" for k, v in list(hits.items())[:10])
+    suffix = f" … ({len(hits)} total)" if len(hits) > 10 else ""
+    print(f"hits:       {shown or 'none'}{suffix}")
+    return 0
+
+
+def _steer_model_info(model_ref: str) -> dict | None:
+    """Read model_type/hidden_size from a model directory's config.json."""
+    import json
+    from pathlib import Path
+
+    config = Path(model_ref).expanduser() / "config.json"
+    if not config.is_file():
+        print(
+            f"warning: {model_ref} has no config.json; " "skipping compatibility marks"
+        )
+        return None
+    try:
+        data = json.loads(config.read_text())
+    except (OSError, ValueError) as exc:
+        print(f"warning: cannot read {config}: {exc}")
+        return None
+    return {
+        "model_type": data.get("model_type"),
+        "hidden_size": data.get("hidden_size"),
+    }
+
+
+def _steer_list(args) -> int:
+    from .steering.pack import SteeringPackError, get_steering_dir, load_pack
+
+    sdir = get_steering_dir()
+    if not sdir.is_dir():
+        print(f"No steering directory at {sdir} — build or import a pack first")
+        return 0
+    model_info = _steer_model_info(args.model) if args.model else None
+    for entry in sorted(sdir.iterdir()):
+        if not entry.is_dir():
+            continue
+        try:
+            pack = load_pack(entry)
+        except (SteeringPackError, OSError, ValueError) as exc:
+            print(f"{entry.name:24s} INVALID: {exc}")
+            continue
+        model = pack.manifest.get("model") or {}
+        desc = str(pack.manifest.get("description") or "").splitlines()[0][:40]
+        mark = ""
+        if model_info is not None:
+            same_type = model.get("model_type") == model_info.get("model_type")
+            same_size = not model.get("hidden_size") or (
+                model.get("hidden_size") == model_info.get("hidden_size")
+            )
+            mark = "  [compatible]" if same_type and same_size else "  [incompatible]"
+        print(
+            f"{pack.name:24s} {pack.component}/{pack.mode} "
+            f"{pack.n_layers}x{pack.hidden_size} "
+            f"model={model.get('model_type') or '?'}{mark}  {desc}"
+        )
+    return 0
+
+
+def _steer_export(args) -> int:
+    import zipfile
+    from pathlib import Path
+
+    from .steering.pack import get_steering_dir
+
+    src = get_steering_dir() / args.name
+    if not (src / "manifest.json").is_file():
+        print(f"Not a steering pack: {src}", file=sys.stderr)
+        return 1
+    out = Path(args.output).expanduser()
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as archive:
+        for path in sorted(src.rglob("*")):
+            if path.is_file():
+                archive.write(path, path.relative_to(src))
+    print(f"Exported {src} -> {out}")
+    return 0
+
+
+def _steer_zip_extract(archive, dest) -> None:
+    """Extract zip members, refusing absolute paths and parent traversal."""
+    import shutil
+    from pathlib import Path
+
+    from .steering.pack import SteeringPackError
+
+    dest = Path(dest).resolve()
+    for info in archive.infolist():
+        if info.is_dir():
+            continue
+        member = Path(info.filename)
+        if member.is_absolute() or ".." in member.parts:
+            raise SteeringPackError(f"unsafe zip member: {info.filename!r}")
+        target = dest / member
+        if not target.resolve().is_relative_to(dest):
+            raise SteeringPackError(f"unsafe zip member: {info.filename!r}")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with archive.open(info) as fsrc, open(target, "wb") as fdst:
+            shutil.copyfileobj(fsrc, fdst)
+
+
+def _steer_wrap_f32(args, path):
+    """Wrap a bare DS4 .f32 file into a pack (plan §4.4/§4.5)."""
+    import json
+    from pathlib import Path
+
+    from .steering.pack import (
+        SteeringPack,
+        SteeringPackError,
+        _normalize_rows,
+        _read_f32,
+    )
+
+    if not args.json_manifest:
+        raise SteeringPackError("a bare .f32 import needs --json FILE (base manifest)")
+    if not args.model:
+        raise SteeringPackError(
+            "a bare .f32 import needs --model DIR (model directory that "
+            "provides the vector shape)"
+        )
+    config_path = Path(args.model).expanduser() / "config.json"
+    try:
+        config = json.loads(config_path.read_text())
+    except (OSError, ValueError) as exc:
+        raise SteeringPackError(f"cannot read {config_path}: {exc}") from exc
+    n_layers = config.get("num_hidden_layers")
+    hidden = config.get("hidden_size")
+    if not isinstance(n_layers, int) or not isinstance(hidden, int):
+        raise SteeringPackError(f"{config_path} lacks num_hidden_layers/hidden_size")
+    vectors, _ = _normalize_rows(_read_f32(path, (n_layers, hidden)))
+    try:
+        manifest = json.loads(Path(args.json_manifest).expanduser().read_text())
+    except (OSError, ValueError) as exc:
+        raise SteeringPackError(f"cannot read {args.json_manifest}: {exc}") from exc
+    name = args.name or path.stem
+    manifest["name"] = name
+    model_block = dict(manifest.get("model") or {})
+    model_block.update(
+        {
+            "model_type": config.get("model_type"),
+            "hidden_size": hidden,
+            "n_layers": n_layers,
+        }
+    )
+    manifest["model"] = model_block
+    # Bare DS4 vectors are ffn/block by definition (plan §4.4).
+    manifest.setdefault("hook", {"component": "ffn", "mode": "block"})
+    return SteeringPack(name, vectors, manifest)
+
+
+def _steer_import(args) -> int:
+    import shutil
+    import tempfile
+    import zipfile
+    from pathlib import Path
+
+    from .steering.pack import (
+        SteeringPackError,
+        get_steering_dir,
+        load_pack,
+        save_pack,
+    )
+
+    source = str(args.source)
+    ref = Path(source).expanduser()
+    is_f32 = ref.is_file() and ref.suffix == ".f32"
+    origin = None
+    tmp = None
+    try:
+        if ref.is_file() and ref.suffix == ".zip":
+            tmp = Path(tempfile.mkdtemp(prefix="omlx-steer-import-"))
+            with zipfile.ZipFile(ref) as archive:
+                _steer_zip_extract(archive, tmp)
+            if (tmp / "manifest.json").is_file():
+                origin = tmp
+            else:
+                packs = [d for d in tmp.iterdir() if (d / "manifest.json").is_file()]
+                if len(packs) != 1:
+                    raise SteeringPackError(
+                        "the zip must contain exactly one steering pack "
+                        "(a manifest.json at the root or in one subdirectory)"
+                    )
+                origin = packs[0]
+        elif ref.is_dir():
+            origin = ref
+        elif is_f32:
+            pass
+        elif "/" in source:
+            try:
+                from huggingface_hub import snapshot_download
+            except ImportError:
+                print(
+                    "huggingface_hub is not installed; "
+                    "cannot import from the HF Hub",
+                    file=sys.stderr,
+                )
+                return 1
+            print(f"Downloading {source} from the HF Hub")
+            tmp = Path(
+                snapshot_download(
+                    source,
+                    allow_patterns=[
+                        "*.f32",
+                        "*.json",
+                        "*.txt",
+                        "*.md",
+                        "LICENSE*",
+                    ],
+                )
+            )
+            origin = tmp
+        else:
+            raise SteeringPackError(f"not found: {source}")
+
+        pack = _steer_wrap_f32(args, ref) if is_f32 else load_pack(origin)
+    except (SteeringPackError, OSError, ValueError) as exc:
+        print(f"Import failed: {exc}", file=sys.stderr)
+        if tmp is not None:
+            shutil.rmtree(tmp, ignore_errors=True)
+        return 1
+
+    name = args.name or pack.name
+    dest = get_steering_dir() / name
+    if dest.exists():
+        print(f"Overwriting existing pack {dest}")
+    if is_f32:
+        save_pack(pack, dest)
+    else:
+        shutil.copytree(origin, dest, dirs_exist_ok=True)
+    if tmp is not None:
+        shutil.rmtree(tmp, ignore_errors=True)
+    try:
+        load_pack(dest)
+    except (SteeringPackError, OSError, ValueError) as exc:
+        print(f"Imported pack failed validation at {dest}: {exc}", file=sys.stderr)
+        return 1
+    print(f"Imported pack {name!r} -> {dest}")
+    return 0
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="omlx: Production-ready LLM server for Apple Silicon",
@@ -1609,6 +2303,287 @@ Example directory structure:
         help="Emit machine-readable JSON",
     )
 
+    steer_parser = subparsers.add_parser(
+        "steer",
+        help="Build, apply, and inspect directional steering packs",
+        description=(
+            "Directional steering control (plan §14: "
+            "docs/experimental/directional-steering-plan.md). build/sweep/"
+            "set/show talk to a running oMLX server; list/import/export "
+            "work on local pack files."
+        ),
+    )
+    steer_subparsers = steer_parser.add_subparsers(
+        dest="steer_action",
+        required=True,
+        help="Steering command",
+    )
+
+    def _add_steer_server_args(parser):
+        parser.add_argument(
+            "--host",
+            type=str,
+            default=None,
+            help="oMLX server host (default: from settings or 127.0.0.1)",
+        )
+        parser.add_argument(
+            "--port",
+            type=int,
+            default=None,
+            help="oMLX server port (default: from settings or 8000)",
+        )
+        parser.add_argument(
+            "--api-key",
+            type=str,
+            default=None,
+            help="API key for oMLX server authentication",
+        )
+
+    steer_build_parser = steer_subparsers.add_parser(
+        "build",
+        help="Capture paired prompts on a loaded model and build a pack",
+    )
+    steer_build_parser.add_argument(
+        "model",
+        metavar="MODEL",
+        help="Model id on the server (must be loaded)",
+    )
+    steer_build_parser.add_argument(
+        "--good-file",
+        required=True,
+        metavar="G",
+        help="Prompt file with the desired behaviour, one per line (# comments allowed)",
+    )
+    steer_build_parser.add_argument(
+        "--bad-file",
+        required=True,
+        metavar="B",
+        help="Prompt file with the undesired behaviour, one per line",
+    )
+    steer_build_parser.add_argument(
+        "--name",
+        required=True,
+        metavar="N",
+        help="Name for the built pack",
+    )
+    steer_build_parser.add_argument(
+        "--component",
+        choices=("ffn", "attn"),
+        default="ffn",
+        help="Hook component to capture (default: ffn)",
+    )
+    steer_build_parser.add_argument(
+        "--system",
+        default=None,
+        metavar="S",
+        help="System prompt used during capture",
+    )
+    steer_build_parser.add_argument(
+        "--think",
+        action="store_true",
+        help="Capture with thinking enabled",
+    )
+    steer_build_parser.add_argument(
+        "--pair-normalize",
+        action="store_true",
+        help="Average per-pair normalized diffs instead of the diff of means",
+    )
+    steer_build_parser.add_argument(
+        "--no-orthogonalize",
+        action="store_true",
+        help="Keep the bad-behaviour component in the direction",
+    )
+    _add_steer_server_args(steer_build_parser)
+
+    steer_sweep_parser = steer_subparsers.add_parser(
+        "sweep",
+        help=(
+            "Generate at several steering scales on a loaded model "
+            "(changes the engine-wide scale; run on an idle server)"
+        ),
+    )
+    steer_sweep_parser.add_argument(
+        "model",
+        metavar="MODEL",
+        help="Model id on the server",
+    )
+    steer_sweep_parser.add_argument(
+        "--pack",
+        required=True,
+        metavar="N",
+        help="Pack to apply for the sweep",
+    )
+    steer_sweep_parser.add_argument(
+        "--prompts",
+        required=True,
+        metavar="P",
+        help="Held-out prompts, one per line (# comments allowed)",
+    )
+    steer_sweep_parser.add_argument(
+        "--scales",
+        default="-1,-0.5,0,0.5,1,2",
+        help="Comma-separated scales (default: -1,-0.5,0,0.5,1,2)",
+    )
+    steer_sweep_parser.add_argument(
+        "--tokens",
+        type=_positive_int,
+        default=180,
+        help="Max new tokens per generation (default: 180)",
+    )
+    steer_sweep_parser.add_argument(
+        "--nothink",
+        action="store_true",
+        help="Send enable_thinking=false with each request",
+    )
+    _add_steer_server_args(steer_sweep_parser)
+
+    steer_verify_parser = steer_subparsers.add_parser(
+        "verify",
+        help="Run the Q7 quality gate for a pack at several scales (plan §2e)",
+    )
+    steer_verify_parser.add_argument(
+        "model",
+        metavar="MODEL",
+        help="Model id on the server (must be loaded with steering installed)",
+    )
+    steer_verify_parser.add_argument(
+        "--pack",
+        metavar="N",
+        default=None,
+        help="Pack to set on the model before verifying",
+    )
+    steer_verify_parser.add_argument(
+        "--scopes",
+        default="prefill+k",
+        help="Comma-separated scopes (default: prefill+k)",
+    )
+    steer_verify_parser.add_argument(
+        "--scales",
+        default="-0.5,-1",
+        help="Comma-separated scales (default: -0.5,-1)",
+    )
+    steer_verify_parser.add_argument(
+        "--quick",
+        action="store_true",
+        help="KL, repetition and structure only, in minutes",
+    )
+    steer_verify_parser.add_argument(
+        "--thinking",
+        action="store_true",
+        help="Run the benchmarks with thinking enabled",
+    )
+    steer_verify_parser.add_argument(
+        "--samples",
+        type=_positive_int,
+        default=None,
+        help="Benchmark sample size (default: server default of 300)",
+    )
+    _add_steer_server_args(steer_verify_parser)
+
+    steer_set_parser = steer_subparsers.add_parser(
+        "set",
+        help="Set the steering pack and/or scales for a model",
+    )
+    steer_set_parser.add_argument(
+        "model",
+        metavar="MODEL",
+        help="Model id on the server",
+    )
+    steer_set_parser.add_argument(
+        "--ffn",
+        type=float,
+        default=None,
+        metavar="F",
+        help="FFN steering scale",
+    )
+    steer_set_parser.add_argument(
+        "--attn",
+        type=float,
+        default=None,
+        metavar="A",
+        help="Attention steering scale",
+    )
+    steer_set_source = steer_set_parser.add_mutually_exclusive_group()
+    steer_set_source.add_argument(
+        "--pack",
+        metavar="N",
+        help="Pack name (or path) to set",
+    )
+    steer_set_source.add_argument(
+        "--off",
+        action="store_true",
+        help="Remove the pack (drops the scales with it)",
+    )
+    _add_steer_server_args(steer_set_parser)
+
+    steer_show_parser = steer_subparsers.add_parser(
+        "show",
+        help="Show the live steering state of a model",
+    )
+    steer_show_parser.add_argument(
+        "model",
+        metavar="MODEL",
+        help="Model id on the server",
+    )
+    _add_steer_server_args(steer_show_parser)
+
+    steer_list_parser = steer_subparsers.add_parser(
+        "list",
+        help="List local steering packs",
+    )
+    steer_list_parser.add_argument(
+        "--model",
+        metavar="M",
+        default=None,
+        help="Path to a model directory used to mark pack compatibility",
+    )
+
+    steer_export_parser = steer_subparsers.add_parser(
+        "export",
+        help="Zip a local steering pack for sharing",
+    )
+    steer_export_parser.add_argument(
+        "name",
+        metavar="NAME",
+        help="Pack name under the steering directory",
+    )
+    steer_export_parser.add_argument(
+        "-o",
+        "--output",
+        required=True,
+        metavar="FILE",
+        help="Output .zip path",
+    )
+
+    steer_import_parser = steer_subparsers.add_parser(
+        "import",
+        help="Import a pack from a .zip, directory, HF repo, or bare .f32",
+    )
+    steer_import_parser.add_argument(
+        "source",
+        metavar="SRC",
+        help="Path to a .zip or pack directory, an HF repo id, or a bare .f32 file",
+    )
+    steer_import_parser.add_argument(
+        "--name",
+        metavar="N",
+        default=None,
+        help="Name for the imported pack (default: from the manifest)",
+    )
+    steer_import_parser.add_argument(
+        "--json",
+        dest="json_manifest",
+        default=None,
+        metavar="FILE",
+        help="Base manifest for a bare .f32 import",
+    )
+    steer_import_parser.add_argument(
+        "--model",
+        default=None,
+        metavar="M",
+        help="Model directory providing the vector shape for a bare .f32 import",
+    )
+
     # Split launch's forwarding separator before argparse. parse_known_args()
     # inconsistently retains it when known options precede it, and stripping it
     # afterward cannot distinguish it from a separator intended for the tool.
@@ -1641,6 +2616,8 @@ Example directory structure:
             sys.exit(diagnose_command(args))
         elif args.command == "cluster":
             sys.exit(cluster_command(args))
+        elif args.command == "steer":
+            sys.exit(steer_command(args))
         else:
             parser.print_help()
             sys.exit(1)

@@ -2796,6 +2796,19 @@ class VLMBatchedEngine(BaseEngine):
             apply_qwen35_padded_row_attention_patch()
         except Exception:
             logger.debug("qwen3_5 padded-row attention patch not applied", exc_info=True)
+
+        # Directional steering: after every class-level patch above (plan §8).
+        # The qwen35 router / routed-decode patches replace the MoE block's
+        # __call__ and their fused one-token decode path never calls the
+        # previous one, so our hook must wrap the final call to stay outermost.
+        if getattr(self._model_settings, "steering_pack", None):
+            from ..steering import install_steering
+
+            await loop.run_in_executor(
+                get_mlx_executor(),
+                lambda: install_steering(self._vlm_model, self._model_settings),
+            )
+
         scheduler.refresh_ssd_layer_signature()
 
         # SpecPrefill: load draft model and pass to scheduler

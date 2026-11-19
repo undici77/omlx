@@ -1,0 +1,87 @@
+# oMLX neutral quality corpus, part 4/4 — original text written for oMLX, Apache-2.0 (see README.md)
+
+The espresso machine exists because of a complaint about slowness. Early twentieth-century Italian patents promised coffee in seconds by forcing boiling water through grounds under pressure; later machines tamed the steam with spring levers and pumps, and the crema — an emulsion of oils and gas — became the sign of a proper pull. The word espresso refers to the cup being made to order, expressly for you.
+
+Sourdough is a partnership between flour and wild yeasts and bacteria that no baker fully controls. The bacteria produce the lactic and acetic acids of sour flavour; the yeasts raise the loaf. Each starter carries a microbial signature shaped by its kitchen's history, which is why bakers guard theirs and why the same recipe tastes different in two cities.
+
+The pencil is a sandwich of graphite and clay baked into a core, glued between cedar slats. More clay makes a harder, lighter line — the H scale; more graphite makes softer, darker marks — the B scale. The number system dates to nineteenth-century England, and a single pencil can draw a line thirty-five miles long before it runs out.
+
+Chess reached Europe through Persia and the Arab world, where the pieces acquired their modern moves. The queen's dramatic rise to the most powerful piece happened in fifteenth-century Spain and Italy, probably mirroring powerful female rulers of the era. A chess library now exceeds nine million recorded games, and the number of legal positions outnumbers the atoms in a hundred billion galaxies.
+
+The shipping container, a steel box of standard dimensions, cut port labour costs so sharply that it redrew the world economy. Before its standardisation in the 1960s, longshoremen loaded sacks and barrels by hand; after, a crane moves twenty tonnes in a minute. Ports moved downstream, cities turned to their waterfronts, and the price of shipping a shirt across an ocean fell below the price of the shirt's buttons.
+
+The bicycle began as a wooden running machine without pedals, pushed along like a scooter. Pedals arrived on the front wheel, which grew to absurd diameters for speed until the chain drive moved gearing to the rear wheel in the 1880s. The safety bicycle it produced is often credited with widening women's independence — and with teaching early aviators and automakers how to build light frames and ball bearings.
+
+Coffee houses were called penny universities in seventeenth-century London: for the price of a cup, one could join conversations of merchants, scientists, and poets. Lloyd's of London began in one such house, as did the stock exchange's auction tradition. Authorities periodically tried to ban them, complaining that people argued about matters above their station.
+
+The lighthouse of Alexandria guided ships for fifteen hundred years using fire, mirrors, and the world's tallest masonry. Modern lighthouses still serve, but their great innovation was the Fresnel lens: concentric rings of glass that focus light into a beam as strong as one from a lens metres thick, at a fraction of the weight. Ships still read the character of each flash — two seconds on, four off — as a signature.
+
+Money began as debt records on clay tablets in Mesopotamia before coins existed. Coins appeared in Lydia around 600 BC, stamped with a lion to certify weight and purity. Paper money emerged in Tang China as merchant receipts and became state currency under the Song. Each form carried the same problem: making strangers trust a claim.
+
+The dishwasher was invented by a society hostess tired of chipped china. Josephine Cochrane's 1886 machine used water pressure rather than brushes, and hotels, not households, became her first customers. The machine's real contribution to households arrived with hot water plumbing and detergents engineered for grease, turning a luxury into a standard appliance.
+
+Tea began as medicine and became the world's second most consumed drink after water. All tea is one species; green, black, oolong, and white differ in how long leaves oxidise after picking. British tea culture was seeded by a Portuguese queen, Catherine of Braganza, whose court habit was copied by aristocracy and then by everyone who could afford a pot.
+
+The compass reached Europe from China through Arab traders, and its needle's northward habit was recorded in Chinese texts a thousand years before it steered a European ship. Combined with the mariner's card and dead reckoning, it made open-sea navigation thinkable. A compass on a rocking deck, gimbal-mounted in a brass bowl, changed the map of the world.
+
+Glass mirrors before the Renaissance were polished metal, dim and expensive. Venetian glassmakers on Murano learned to coat flat glass with tin and mercury, producing reflections clear enough to become state secrets; the Republic forbade craftsmen to leave on pain of death. The Hall of Mirrors at Versailles, built with French-stolen expertise, announced that the secret had escaped.
+
+The refrigerator changed food more than any recipe. Ice harvesting from frozen ponds had shipped globally in the nineteenth century; mechanical refrigeration freed diets from geography and season, enabled cities to store meat centrally, and made the fresh produce aisle possible. Its refrigerants also punched the first hole in the ozone layer, a reminder that every technology has a ledger.
+
+Paper was born from rags and mulberry bark in Han dynasty China, and for a thousand years Europe made it the same way, from linen and cotton clothing recycled into pulp. Wood pulp arrived in the nineteenth century when rags ran short. A sheet of paper is therefore often older clothing, and books are, chemically, shirts.
+
+The thermometer's history is a fight against scale drift. Early glass tubes marked arbitrary points; Fahrenheit fixed freezing and body temperature, Celsius chose water's transitions, and Kelvin anchored zero at the absence of thermal motion. Standardisation let a measurement made in one laboratory mean the same thing in another, which is most of what science is.
+
+Public parks are a nineteenth-century invention born of cholera and industry. Reformers argued that green space was not decoration but public health, and Central Park's designers carved a landscape where ten thousand people could breathe at once. The idea spread worldwide: a city without parks was diagnosed as a city with a fever.
+
+The zip fastener took decades to work. Patented as a hook-and-eye chain for shoes in 1893, it was unreliable until a Swedish-American engineer redesigned the scoop-shaped teeth in 1913. The name zipper came from a boot model, and the fashion industry adopted it only after a Prince of Wales wore one publicly. Reliability, not invention, was the hard part.
+
+The calendar is a treaty between incompatible cycles: the day, the lunar month, and the solar year do not divide evenly. Julius Caesar's reform added leap days; the Gregorian reform in 1582 dropped ten days that October and refined the leap rule. Orthodox churches and astronomers still keep slightly different years, and software engineers keep finding the exceptions.
+
+The restaurant menu, courses chosen individually by the diner, is a French invention from the eighteenth century. Before it, tables served whatever the kitchen prepared, family-style. The menu, the printed bill of fare, and the chef's reputation grew together, and the word restaurant itself comes from a restorative broth sold in Paris shops.
+
+The umbrella was a sunshade in much of Asia and the Mediterranean for millennia; Europeans used it against rain so rarely that a traveller carrying one in 1750s London was mocked in the street. Within decades it was universal. Its collapsible steel frame is a small masterpiece of rivets and springs, and its etiquette — when to open, where to dry — remains unwritten.
+
+The clock tower made time public. Before mechanical clocks, hours were read from sundials and church bells, and their length varied with the season. Once town clocks struck the hour for everyone, work, markets, and prayers synchronised, and being late became possible for the first time. Wristwatches went to the trenches in 1914 and never left the wrist.
+
+The washing machine's drum is a descendant of the washboard and the mangle, machines that mechanised rubbing and wringing separately. Automatic machines that washed, rinsed, and spun in one cycle arrived in the 1940s. Their social effect was measured in hours: a week of household labour per family, redistributed — mostly, historians note, into paid work outside the home.
+
+The toothbrush predates toothpaste by centuries. Bristle brushes came from China's Tang court, boar hair set in bone; nylon bristles arrived in 1938 and made the brush hygienic and cheap. Fluoride toothpaste, added after 1945, cut cavities dramatically. The habit of brushing twice a day is younger than the aeroplane.
+
+The supermarket is an American invention of 1930: a garage converted into a self-service hall where customers gathered their own goods. Prewrapped portions, shopping carts, and checkout lanes followed. The format spread because it cut labour and price at once, and it quietly retrained the world's shoppers to read labels instead of asking clerks.
+
+The violin's shape is the survivor of centuries of trial, its arch, thickness, and varnish tuned by makers who could not explain why their choices worked. Stradivari's instruments were analysed with everything from microscopy to CT scans; the wood's density and the varnish's minerals matter, but the honest summary is that good violins are the result of accumulated small corrections, not a single secret.
+
+The postage stamp turned mail into a system anyone could price. Before the 1840 Penny Black, recipients paid by distance and sheet, and many refused letters. Prepayment by stamp, charged at a flat rate, doubled British mail volume in years and exported the idea worldwide. The perforated edge, the gum, and the cancellation are small inventions that made the big one work.
+
+The traffic light began as a gas-lit signal outside the Houses of Parliament in 1868, exploded, and was reinvented with electricity in Cleveland in 1914. Its three-colour logic was borrowed from railways, where red meant stop long before it meant danger universally. The yellow interval is calibrated to driver reaction and stopping distance, a small piece of human-factors engineering in every intersection.
+
+The pencil eraser was an afterthought that became half the product. Rubber arrived in Europe from the Americas, named for its ability to rub out pencil marks; Hymen Lipman glued one to a pencil in 1858, a patent later voided on a technicality. Every pencil with a pink end carries that unresolved legal history.
+
+The vending machine is older than electricity: a first-century Greek text describes a device dispensing holy water for a coin. Modern machines sell stamps in Paris, noodles in Tokyo, and farm eggs in Dutch villages. Their engineering problems — coin recognition, jam prevention, refrigeration — made them a proving ground for automation that later moved into banks and kiosks.
+
+The umbrella's ribs, the bicycle's spokes, and the violin's arch all solve the same problem: stiffness from shape rather than mass. A curved sheet resists bending far better than a flat one of equal weight. Engineers call it form stiffness, and it is why an eggshell survives a squeezing hand and a paper cup holds hot coffee.
+
+The wristwatch was a woman's ornament until the trenches proved a pocket watch impractical under fire. Officers strapped pocket watches to their wrists with leather pads; manufacturers followed. After the war the wristwatch was standard for men, and by the 1930s aviators added rotating bezels and luminous dials, turning timekeeping into an instrument.
+
+The shopping cart was invented by a supermarket owner in Oklahoma in 1937, adapted from folding chairs on wheels. Shoppers initially ignored it; women said it resembled a pram, men found it effeminate. The owner hired fake shoppers to push them around until the habit caught. The cart's wire basket design has barely changed since.
+
+The ballpoint pen solved ink's oldest problem: fountain pens leaked at altitude and blotted at rest. László Bíró, a Hungarian journalist, noticed that newspaper ink dried instantly and designed a rolling ball to carry thick ink. The Royal Air Force adopted his pen because it wrote at fifteen thousand feet. A socket, a ball, and viscous ink now outsell every other pen.
+
+The escalator was first an amusement at Coney Island, advertised as a ride. Its inventor sold it to Otis, and the first working units went into department stores, where staff rode them to demonstrate safety. Escalators reshaped city retail by moving shoppers between floors without lifts' waits, and their inclined steps remain a standard unit of urban rhythm.
+
+The paperclip's common double-loop shape was never patented by its supposed inventor and became, during the Second World War, a quiet symbol of resistance worn on lapels in Norway — a binding together. Its design predates the machine that made it; the Gem clip needed a wire-bending machine, and the two arrived together in the 1890s.
+
+The safety pin was invented in a single afternoon by an American mechanic twisting a wire while worrying about a patent quota. Walter Hunt sold the rights for a few hundred dollars; the device earns its current owners millions. Its spring clasp guards the point, a principle since copied in surgical needles and diaper fasteners.
+
+The refrigerator magnet began as advertising. Flexible magnetic sheeting, invented in the 1960s, let printers laminate paper to magnets, and florists, plumbers, and pizzerias discovered that a kitchen door was the most-read billboard in the house. Collectors now trade vintage pieces, and the souvenir industry supplies the fridge doors of the world.
+
+The elevator brake, not the elevator, was the invention that made skyscrapers possible. Elisha Otis's 1852 safety catch stopped a platform whose hoist rope had been cut, demonstrated at the Crystal Palace with theatrical flair. Cities grew upward once passengers trusted the shaft, and the penthouse was invented by the elevator, not the architect.
+
+The buttonhole is a small engineering feat: a slit in woven fabric that refuses to fray, finished by hand or machine in a ring of dense stitching. Buttons predate buttonholes by millennia — they were ornaments, sewn-on discs. The functional pairing of button and slit appears in thirteenth-century Europe and changed tailoring from draped to fitted.
+
+The match was born of chemistry and accident: John Walker scraped a stick coated with antimony sulfide and potassium chlorate and found it ignited. His sales were local and his patent refusal famous — he thought the idea too dangerous to own. Safety matches later split the chemicals between box and stick so that neither alone would light.
+
+The bathtub's history is mostly plumbing, not porcelain. Roman baths were engineering showcases of heated floors and double walls; the medieval bathhouse declined with plague fears; the private bathroom arrived with piped water in the nineteenth century. The clawfoot tub of the 1880s was cast iron because that is what foundries could enamel.
+
+The alarm clock's earliest mechanical version belonged to Levi Hutchins, a New Hampshire clockmaker who built one for himself in 1787 and refused to sell — he alone wanted to rise at four. The mass-market wind-up alarm arrived in 1847 in France. The snooze button, added in the 1950s, quietly conceded the machine's central argument.

@@ -1315,7 +1315,7 @@ class BlockAwarePrefixCache(CacheManager):
                             parent_hash,
                             block_tokens,
                             extra_keys=block_extra_keys,
-                            model_name=self.paged_cache.model_name,
+                            model_name=self.paged_cache.hash_namespace,
                         ),
                     )
                 if existing_block:
@@ -1416,7 +1416,7 @@ class BlockAwarePrefixCache(CacheManager):
                 parent_hash,
                 block_tokens,
                 extra_keys=block_extra_keys,
-                model_name=self.paged_cache.model_name,
+                model_name=self.paged_cache.hash_namespace,
             )
 
             # Split-GDN exact-prefix blocks use a separate hash domain and are
@@ -1867,7 +1867,7 @@ class BlockAwarePrefixCache(CacheManager):
                 parent_hash,
                 block_tokens,
                 extra_keys=extra_keys,
-                model_name=self.paged_cache.model_name,
+                model_name=self.paged_cache.hash_namespace,
             )
             block_hashes_and_token_counts.append((block_hash, len(block_tokens)))
             parent_hash = block_hash
@@ -5399,7 +5399,7 @@ class BlockAwarePrefixCache(CacheManager):
                 parent_hash,
                 block_tokens,
                 extra_keys=extra_keys,
-                model_name=self.paged_cache.model_name,
+                model_name=self.paged_cache.hash_namespace,
             )
             prefix_len += len(block_tokens)
             num_blocks += 1
@@ -5444,7 +5444,7 @@ class BlockAwarePrefixCache(CacheManager):
                     parent_hash,
                     block_tokens,
                     extra_keys=extra_keys,
-                    model_name=self.paged_cache.model_name,
+                    model_name=self.paged_cache.hash_namespace,
                 )
                 block.block_hash = block_hash
 
@@ -5505,7 +5505,7 @@ class BlockAwarePrefixCache(CacheManager):
                 parent_hash,
                 tokens[start : min(start + self.block_size, boundary_tokens)],
                 extra_keys=extra_keys,
-                model_name=self.paged_cache.model_name,
+                model_name=self.paged_cache.hash_namespace,
             )
         return parent_hash
 

@@ -1,0 +1,93 @@
+# oMLX neutral quality corpus, part 2/4 — original text written for oMLX, Apache-2.0 (see README.md)
+
+Human DNA stretched end to end would span about two metres per cell, yet it coils into a nucleus roughly six micrometres wide. Proteins called histones act as spools, and the packing is so efficient that copying the whole library before cell division takes only hours. Unpacked and laid side by side, the DNA in one human body would stretch beyond the orbit of Pluto.
+
+Photosynthesis is the quiet miracle feeding nearly all life. Chloroplasts use sunlight to split water, release oxygen, and fix carbon dioxide into sugar. The oxygen you breathe was exhaled by leaves and plankton; the coal and oil that power cities are fossilised sunlight from forests and algae hundreds of millions of years old.
+
+The human heart beats about one hundred thousand times a day, pushing roughly seven thousand litres of blood through vessels that, laid end to end, would circle the Earth twice. It has its own pacemaker cells and blood supply, and it will tolerate no interruption for more than a few minutes. Yet it never signs a timesheet and never rests longer than the pause between beats.
+
+Sleep is not a single state but a structured journey. The brain cycles through light sleep, deep slow-wave sleep, and rapid-eye-movement phases about every ninety minutes. Deep sleep consolidates facts and clears metabolic waste through channels that widen at night; REM sleep appears to rehearse emotions and stitch memories into stories. Cutting either phase has measurable costs the next morning.
+
+Honey never spoils when stored dry. Its low water content and acidity starve microbes, and bees add an enzyme that produces small amounts of hydrogen peroxide. Archaeologists have opened Egyptian jars three thousand years old and found the honey inside still edible. Crystallisation is not spoilage; warmed gently, the sugar redissolves.
+
+Vaccines teach the immune system in advance. A harmless fragment or weakened form of a pathogen trains memory cells to recognise the real invader, so the response begins days earlier and at full strength. Smallpox, once killing a third of those infected, was eradicated by 1980 through exactly this principle, one of medicine's clearest victories.
+
+The octopus has nine brains: a central one and a mini-brain in each arm. Two-thirds of its neurons live in the arms, which can taste what they touch and solve problems semi-independently. An octopus can change both colour and skin texture in under a second, passing through a scene like liquid shadow.
+
+Antibiotics changed surgery from a gamble into a plan. Penicillin, noticed because mould killed bacteria on a forgotten dish, entered mass production in the 1940s. Its success carried a warning already visible in Petri dishes: bacteria that survive evolve resistance, which is why courses must be finished and why new drugs remain necessary.
+
+Bees communicate through dance. A forager returning to the hive performs a figure-eight waggle whose angle encodes the direction of flowers relative to the Sun and whose duration encodes distance. Hive-mates follow, and the colony votes with its feet on where to forage. The discovery earned Karl von Frisch a Nobel Prize.
+
+Your stomach lining replaces itself every few days because the acid that digests food would otherwise digest you. Stomach acid is strong enough to dissolve metal; a mucus layer one millimetre thick, constantly renewed, is all that stands between tissue and pH 2. When that barrier fails, an ulcer results.
+
+Trees talk through fungi. Fine fungal threads wrap around roots and trade minerals for sugars, and they connect tree to tree in what forest ecologists call a wood wide web. Carbon has been traced flowing from tall paper birches to shaded fir seedlings, a subsidy from the canopy to the understorey.
+
+Migratory birds navigate by a toolkit of cues: the Sun's position corrected for time, star patterns, landmarks, Earth's magnetic field, and even smell in seabirds. Young birds inherit the route; experienced ones correct for drift. A bar-tailed godwit flies eleven thousand kilometres from Alaska to New Zealand nonstop, burning half its body weight.
+
+The human eye's retina contains about 126 million light sensors but a blind spot where the optic nerve exits, with no sensors at all. You never notice because the brain fills the gap with plausible content from the surrounding scene. The fill is so seamless that it took a controlled experiment to prove it exists.
+
+Coral reefs are animals, not rocks, and their brilliance is a partnership. Coral polyps host algae that photosynthesise inside their tissues, trading shelter for sugar; the algae give reefs their colour. When water stays too warm, the partnership breaks, the algae leave, and bleached white skeletons signal a reef in famine.
+
+Blood types come from sugars on the surface of red cells. Type A carries one sugar, type B another, AB both, and O neither. The labels matter in transfusion because immune systems attack unfamiliar sugars. Type O, lacking the markers, can be given to anyone in an emergency, which is why hospitals guard it.
+
+Why do we dream? Leading hypotheses say the sleeping brain replays and recombines the day's experience, strengthening useful links and damping emotional charge. Dreams run in real time, mostly in images, with the logic centres idled. Nobody has settled the question, but sleep deprivation's hallucinations suggest dreaming is the brain's maintenance mode.
+
+Tardigrades, half-millimetre animals of moss and soil, survive boiling, freezing, radiation, and the vacuum of space by drying into a tun, a barrel-shaped state in which metabolism nearly stops. Rehydrated years later, they walk away. Their survival chemistry is being studied for preserving vaccines without refrigeration.
+
+The immune system remembers. After an infection, memory B cells patrol for decades, sometimes for life, which is why measles and chickenpox usually strike once. This biological archive is why vaccination schedules work and why antibody tests on old blood can reveal diseases a person fought and forgot.
+
+Whale bones on the seafloor feed ecosystems for decades. When a great whale dies and sinks, its carcass hosts hagfish, crabs, worms that specialise in bone fat, and finally chemosynthetic bacteria, a succession of communities that can last a century. A whale fall is a rain of energy onto a starved desert floor.
+
+Human taste distinguishes five basics: sweet, salt, sour, bitter, and umami, the savoury taste of glutamate. Much of what we call flavour is actually smell; pinch your nose while eating and an onion becomes a crisp, tasteless wafer. The burn of chilli is not taste at all but pain receptors responding to capsaicin.
+
+Fingerprints form in the womb and are unique even between identical twins, set by tiny pressures and growth rates in developing skin. Their ridges improve grip and amplify texture, helping fingertips sense vibrations. Forensic use came later; their biological job is touch, not identification.
+
+Bone is a composite material: collagen fibres for flexibility, mineral crystals for stiffness, arranged in spiralled layers like plywood. It repairs itself, sensing cracks and rebuilding, which steel and concrete cannot do. With age the balance shifts, mineral rises, collagen falls, and breaks that a child shrugs off become serious.
+
+The platypus broke the categories. It has a duck's bill, lays eggs, sweats milk from skin patches, and the male carries venomous spurs. When the first specimen reached London in 1799, scientists checked the pelt for stitches, suspecting a hoax stitched by Chinese taxidermists. It remains one of the few venomous mammals.
+
+Why do wounds itch as they heal? Histamine widens vessels and alerts immune cells during repair, and it irritates nerve endings as a side effect. New nerve fibres sprouting into scar tissue misfire easily. Scratching relieves the itch briefly by masking the signal with mild pain, then slows healing by disturbing the delicate new tissue.
+
+Cats cannot taste sweetness; their taste receptor for sugar is broken, a mutation shared with other strict carnivores. They walk in the prints of their ancestors' prey-driven diet, getting glucose from meat. Offer a cat sugar and it sniffs and leaves; offer the same cat a piece of cheese and the umami receptors fire.
+
+Hibernation is not sleep. A hibernating ground squirrel drops its body temperature near freezing, its heartbeat from two hundred beats a minute to a handful, and its oxygen use to a twentieth. It wakes briefly every week or two to warm, sleep properly, clear waste, and eat stashed food before cooling again.
+
+The lymphatic system is the body's drainage, a one-way network that returns leaked fluid to the bloodstream and screens it through lymph nodes packed with immune cells. That is why doctors palpate the neck during a throat infection: swollen nodes mean the filters are working overtime. It has no pump; muscles squeeze the vessels along.
+
+Why are flamingos pink? They eat it. Their diet of algae and brine shrimp is rich in carotenoid pigments, which their livers process and deposit in feathers. Flamingos raised on a plain diet grow white, and zoos supplement feed to keep the colour. The pink is borrowed, not built.
+
+The human brain runs on about twenty watts, less than a household light bulb, yet it outperforms supercomputers at vision, language, and planning. Its efficiency comes from event-driven computation: neurons fire only when needed, and a trillion synapses tune themselves continuously. Engineers borrow the trick in neuromorphic chips.
+
+Blood clotting is a cascade of amplification: one injured vessel activates a few platelets, which recruit dozens, which recruit thousands, while soluble fibrinogen is cut into strands that mesh the plug. The same cascade, misfiring in the wrong place, causes strokes and heart attacks, which is why the system is balanced by equally elaborate brakes.
+
+Why do onions make us cry? Cutting ruptures cells and releases enzymes that build a volatile sulfur compound; it drifts to the eyes, meets moisture, and forms mild sulfuric acid. Nerve endings protest with tears. Chilling the onion slows the enzymes, and cutting under water dissolves the culprit before it can travel.
+
+The appendix, long dismissed as a vestigial leftover, appears to be a safe house for gut bacteria. Its narrow, sheltered pouch stores a reserve population of the microbes that digest our food and train our immunity. After severe diarrhoea flushes the intestine, the appendix can restock the system.
+
+Twins begin identically in the womb but diverge from the first cell divisions. Identical twins differ in birthmarks, fingerprints, and even in which hand they prefer, and their genomes accumulate small differences over a lifetime. Studies of twins raised apart power much of what is known about heredity, by separating shared genes from shared homes.
+
+Why does time seem faster with age? A year is a smaller fraction of a ten-year-old's life than of a fifty-year-old's, and novelty lays down dense memories while routine compresses. A summer full of firsts feels long in retrospect; a year of identical commutes vanishes. The trick to slowing time, psychologists suggest, is to keep learning.
+
+Human skin hosts a rainforest of microbes: bacteria, fungi, and mites, most harmless, many helpful, crowding out pathogens and training immune sentinels. The palm and the forearm host different communities, as different as jungle and desert. Washing changes the balance for hours, and the ecosystem always grows back.
+
+Why do we hiccup? A spasmodic contraction of the diaphragm snaps the vocal cords shut, and the reflex may be a leftover from tadpole ancestors who used it to pump water over gills. Folk remedies work by stimulating the vagus nerve: a spoonful of sugar, a held breath, a sudden fright.
+
+Milk production is a supply chain tuned by demand. Milk contains antibodies, hormones, and living cells, and its composition shifts as an infant grows, from first milk dense with immune factors to mature milk balanced for growth. The let-down reflex runs on oxytocin, the same hormone that bonds parents to infants.
+
+Why do leaves change colour in autumn? The green fades as chlorophyll is dismantled and its nitrogen is salvaged for next spring; yellow pigments present all along are finally revealed, and some trees manufacture new red anthocyanins as a sunscreen while they withdraw. A warm, sunny autumn sweetens the reds; a hard frost ends the show overnight.
+
+The sense of smell is the only sense wired almost directly into memory and emotion centres, bypassing the usual relay. A single whiff of a childhood kitchen can resurrect a decade. Humans can distinguish perhaps a trillion odour mixtures, and each olfactory neuron carries one receptor type, rewiring its target as it replaces itself.
+
+Why do we get goosebumps? Tiny muscles at the base of each hair contract, fluffing fur to trap insulating air in furred ancestors and making them look larger to rivals. In humans the fur is gone but the wiring remains, firing with cold and with strong emotion, the shiver of a concert or a funeral.
+
+The record for human survival without food is over a year, under medical supervision, on water and vitamins; without water, the record is about a week. The difference is scale: fat stores energy lavishly, but water leaves constantly through breath and skin. Dehydration kills long before hunger does.
+
+Why do wounds scar? When injury is deep, the body opts for speed over perfection, laying down collagen fibres in straight, parallel lines instead of the skin's woven basket pattern. Scar tissue is strong but lacks sweat glands, hair follicles, and elasticity. Some animals, like axolotls, skip the shortcut and regrow perfect skin.
+
+Human hearing tops out near twenty kilohertz in youth and slides downward with age; dogs hear to forty-five, bats to one hundred and sixty. Elephants call below human hearing with infrasound that travels kilometres through forest. Every species lives in its own acoustic world, and ours is a narrow window.
+
+Why does spicy food feel hot? Capsaicin binds TRPV1 receptors, the same channels that report scalding heat, so nerves report fire although nothing burns. Milk relieves it because casein surrounds capsaicin molecules and washes them away; water merely spreads the oil. Regular eaters desensitise, which is why chilli tolerance is trainable.
+
+The tongue map in school textbooks is a myth. All taste qualities are sensed across the whole tongue, with slight regional sensitivities, and plenty of taste buds sit on the palate and throat. The map traces to a mistranslated 1901 German diagram that no one bothered to test for a century.
+
+Why do we yawn, and why is it contagious? The classic explanation — brain cooling — holds that yawning brings a flush of cooler blood and air when the brain warms. Contagion is real and linked to empathy: we yawn more readily at the yawns of family and friends. Even reading about yawning can trigger one.

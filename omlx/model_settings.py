@@ -45,6 +45,35 @@ MAX_LIGHTNING_MTP_DRAFT_TOKENS = 8
 MOE_OFFLOAD_MTP_MODEL_TYPES = ("deepseek_v41", "glm5_next", "qwen4_exp")
 
 
+def validate_steering(settings: dict) -> None:
+    """Reject malformed steering settings (plan §9.1)."""
+    import math
+
+    for key in ("steering_ffn_scale", "steering_attn_scale"):
+        v = settings.get(key)
+        if v is None:
+            continue
+        if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) or abs(v) > 100:
+            raise ValueError(f"{key} must be a finite number in [-100, 100]")
+    scope = settings.get("steering_scope")
+    if scope is not None and scope not in ("all", "prefill", "prefill+k"):
+        raise ValueError("steering_scope must be 'all', 'prefill' or 'prefill+k'")
+    k = settings.get("steering_decode_tokens")
+    if k is not None and (isinstance(k, bool) or not isinstance(k, int) or not 1 <= k <= 4096):
+        raise ValueError("steering_decode_tokens must be an integer in [1, 4096]")
+    method = settings.get("steering_method")
+    if method is not None and method not in ("project", "retarget"):
+        raise ValueError("steering_method must be 'project' or 'retarget'")
+    if not settings.get("steering_pack"):
+        for key in (
+            "steering_ffn_scale", "steering_attn_scale", "steering_scope",
+            "steering_decode_tokens", "steering_method",
+            "steering_norm_preserve", "steering_skip_thinking",
+        ):
+            if settings.get(key) is not None:
+                raise ValueError(f"{key} requires steering_pack")
+
+
 def validate_moe_expert_offload(settings: dict, model_type: str | None = None) -> None:
     fraction = settings.get("moe_expert_offload_resident_fraction", 0.25)
     if (
@@ -569,6 +598,19 @@ class ModelSettings:
     is_hidden: bool = False  # Hidden from /v1/models (still shown, badged, in admin)
     is_favorite: bool = False  # Listed first in /v1/models and admin lists
 
+    # Directional steering (docs/experimental/directional-steering-plan.md).
+    # steering_pack: pack name under <base>/steering/, a pack dir or a DS4 .f32
+    # (changing it reloads the engine). The remaining fields are live-pushed
+    # between scheduler steps; None = pack manifest value, else the default.
+    steering_pack: Optional[str] = None
+    steering_ffn_scale: Optional[float] = None
+    steering_attn_scale: Optional[float] = None
+    steering_scope: Optional[str] = None  # "all" | "prefill" | "prefill+k"
+    steering_decode_tokens: Optional[int] = None  # K for prefill+k (1-4096)
+    steering_method: Optional[str] = None  # "project" | "retarget"
+    steering_norm_preserve: Optional[bool] = None
+    steering_skip_thinking: Optional[bool] = None
+
     # External engine serving this model instead of oMLX's MLX engines
     # (omlx/engine/splash.py). None runs the model in-process.
     external_engine: Optional[str] = None
@@ -594,6 +636,7 @@ class ModelSettings:
     active_profile_name: Optional[str] = None  # Name of the currently-applied profile
 
     def __post_init__(self) -> None:
+        validate_steering(self.__dict__)
         # Profiles retain raw JSON types; engine signatures use repr().
         self.turboquant_kv_bits = normalize_turboquant_kv_bits(self.turboquant_kv_bits)
         # The ddtree verify mode was removed; stored settings run as adaptive.

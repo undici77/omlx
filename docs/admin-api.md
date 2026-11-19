@@ -98,11 +98,22 @@ The same endpoints accept an `X-oMLX-Cache-Store: off` request header. The reque
 | `/admin/api/bench/accuracy/...` | Accuracy benchmark queue |
 | `/admin/api/bench/ane-tune/...` | ANE prefill tuning |
 
+### Steering
+
+Directional steering packs and the quality gate; see [steering.md](steering.md). Pack and scale changes go through `PUT /admin/api/models/{model_id}/settings` (`steering_pack`, `steering_ffn_scale`, `steering_attn_scale`, `steering_scope`, ...); a pack change reloads the engine, scale changes apply live.
+
+| Endpoint | Description |
+|---|---|
+| `GET /admin/api/models/{model_id}/steering` | Live state: pack, scales, scope, method, salt, epoch, debug hits |
+| `POST /admin/api/models/{model_id}/steering/build` | Capture paired prompts on the loaded engine and build a pack: `{"name", "good": [...], "bad": [...], "component", "system", "thinking", "pair_normalize", "orthogonalize"}`; returns `{job_id, total}` |
+| `POST /admin/api/models/{model_id}/steering/verify` | Run the quality gate: `{"scopes": [...], "scales": [...], "quick", "thinking", "samples"}`; returns `{job_id, total}` |
+| `GET /admin/api/steering/jobs/{job_id}` | Build/verify job progress and result (`status`, `done`, `total`, `quality[]`, `recommended`, `error`) |
+
 Cluster endpoints are described in [distributed-cluster.md](experimental/distributed-cluster.md), and the Prefill Accelerator endpoints in [prefill-accelerator.md](experimental/prefill-accelerator.md).
 
 ## Long-running tasks
 
-Downloads, oQ, uploads, and benchmarks run in the background. The start call returns a task or benchmark ID right away; poll the matching `tasks` or `results` endpoint (benchmarks also offer an SSE `stream`), and use `cancel` to stop. The web UI polls downloads every 500 ms and stats every 500 ms while the dashboard is open; scripts rarely need anything that fast.
+Downloads, oQ, uploads, benchmarks, and steering build/verify jobs run in the background. The start call returns a task or benchmark ID right away; poll the matching `tasks` or `results` endpoint (benchmarks also offer an SSE `stream`), and use `cancel` to stop. The web UI polls downloads every 500 ms and stats every 500 ms while the dashboard is open; scripts rarely need anything that fast.
 
 ## Examples
 

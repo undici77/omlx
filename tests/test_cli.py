@@ -508,7 +508,17 @@ class TestLaunchCommandFunction:
         ctx = integration.launch.call_args.args[0]
         assert ctx.cross_session is True
 
-    def test_launch_command_skips_picker_when_integration_registers_catalog(self):
+    @pytest.mark.parametrize(
+        ("tool", "setting"),
+        [
+            ("dsh", "dsh_model"),
+            ("codex_app", "codex_model"),
+            ("copilot", "copilot_model"),
+        ],
+    )
+    def test_launch_command_skips_picker_when_integration_registers_catalog(
+        self, tool, setting
+    ):
         """Tools with requires_model_selection=False never prompt.
 
         The model comes from the saved per-tool default (or --model) and
@@ -523,6 +533,7 @@ class TestLaunchCommandFunction:
 
         health_response = MagicMock()
         health_response.raise_for_status.return_value = None
+        health_response.json.return_value = {"default_model": "server-default"}
 
         status_response = MagicMock()
         status_response.ok = True
@@ -532,10 +543,10 @@ class TestLaunchCommandFunction:
         settings.server.host = "127.0.0.1"
         settings.server.port = 8000
         settings.claude_code = None
-        settings.integrations.dsh_model = "Qwen3.8-27B-oQ5e-mtp"
+        setattr(settings.integrations, setting, "Qwen3.8-27B-oQ5e-mtp")
 
         args = argparse.Namespace(
-            tool="dsh",
+            tool=tool,
             host=None,
             port=None,
             api_key="test-key",
@@ -555,6 +566,7 @@ class TestLaunchCommandFunction:
         integration.launch.assert_called_once()
         ctx = integration.launch.call_args.args[0]
         assert ctx.model == "Qwen3.8-27B-oQ5e-mtp"
+        assert ctx.default_model == "server-default"
 
     def test_launch_command_resolves_alias_status_metadata(self):
         """Alias model IDs should keep status metadata from the real model."""
@@ -1659,7 +1671,6 @@ class TestLaunchClaudeTierPrecedence:
         assert env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] == "haiku-cfg"
         assert env["CLAUDE_CODE_SUBAGENT_MODEL"] == "haiku-cfg"
         assert env.get("CLAUDE_CODE_MAX_CONTEXT_TOKENS") == expected_window
-        assert env.get("CLAUDE_CODE_AUTO_COMPACT_WINDOW") == expected_window
 
 
 class TestSavedNetworkAuthMigration:

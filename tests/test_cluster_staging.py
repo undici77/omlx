@@ -2,6 +2,7 @@
 """Staging must send each Mac its layers' shards and nothing else."""
 
 import json
+import os
 import struct
 import subprocess
 import sys
@@ -251,6 +252,21 @@ def test_copies_take_a_verified_fabric_address_with_the_paired_host_key(
     assert "HostKeyAlias=studio.local" in scp_command
     # Commands around the copy keep the paired name.
     assert all(c[-2] == "me@studio.local" for c in commands if c[0] == "ssh")
+
+    # A scoped link-local address is bracketed and resolved as IPv6.
+    commands.clear()
+    scp_push(
+        destination_host="me@studio.local",
+        source_dir=str(source),
+        destination_dir="/models/example",
+        filename="weights.safetensors",
+        transfer_address="fe80::2%bridge0",
+    )
+    scp_command = next(command for command in commands if command[0] == "scp")
+    assert scp_command[-1].startswith("me@[fe80::2%bridge0]:")
+    assert scp_command.index("AddressFamily=inet6") < scp_command.index(
+        "AddressFamily=inet"
+    )
 
 
 def test_remote_install_refuses_a_wrong_sized_partial_without_replacing_final(
@@ -854,6 +870,26 @@ def test_free_space_is_readable_for_a_path_that_does_not_exist_yet(tmp_path):
     from omlx.cluster.staging import free_disk_bytes
 
     assert free_disk_bytes(tmp_path / "not" / "created" / "yet") > 0
+
+
+def test_remote_free_space_reads_a_destination_that_does_not_exist_yet(
+    tmp_path, monkeypatch
+):
+    from omlx.cluster.staging import free_disk_bytes
+
+    real_run = subprocess.run
+
+    def run_on_this_mac(argv, **kwargs):
+        # The peer's shell, with tmp_path as its home directory.
+        return real_run(
+            ["/bin/sh", "-c", argv[-1]],
+            env={**os.environ, "HOME": str(tmp_path)},
+            **kwargs,
+        )
+
+    monkeypatch.setattr(subprocess, "run", run_on_this_mac)
+
+    assert free_disk_bytes("~/Models/not staged yet", ssh_target="studio") > 0
 
 
 def test_remote_default_uses_published_worker_shim(monkeypatch):

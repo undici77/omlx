@@ -468,7 +468,7 @@ async def test_oq_a8_is_refused_outside_validated_families(config_type):
 
     assert excinfo.value.status_code == 400
     assert "Flash-Next" in excinfo.value.detail
-    assert settings.a8_prefill_enabled is False
+    assert settings.a8_prefill_enabled is None
 
 
 @pytest.mark.asyncio
@@ -511,6 +511,9 @@ async def test_oq_a8_for_qwen4_exp_still_conflicts_with_ane_prefill(tmp_path):
         ("qwen4_exp_x", False),
         ("deepseek_v41", True),
         ("deepseek_v4", False),
+        ("minimax_m3_vl", True),
+        ("MiniMax-M3", True),
+        ("minimax_m2", False),
         ("llama", False),
         (None, False),
     ],
@@ -530,24 +533,68 @@ def test_model_options_report_oq_a8_support(config_type, kernels, expected):
 
 
 @pytest.mark.asyncio
-async def test_oq_a8_needs_native_int8_kernels():
-    """Nothing on this hardware would run faster, so the setting is refused
-    rather than accepted and silently ignored at load."""
+@pytest.mark.parametrize("field", ["a8_prefill_enabled", "qwen35_ane_prefill_enabled"])
+async def test_oqh_checkpoint_refuses_a8_and_ane_prefill(tmp_path, field):
+    (tmp_path / "config.json").write_text(
+        json.dumps({"model_type": "qwen3_5", "omlx_oqh": {"version": 1}})
+    )
     pool, entry = _failed_pool()
     entry.config_model_type = "qwen3_5"
+    entry.model_path = str(tmp_path)
+    settings = ModelSettings()
+
+    with patch.object(admin_routes, "_oq_a8_kernels_available", return_value=True):
+        options = admin_routes._model_options(
+            {"config_model_type": "qwen3_5", "model_path": str(tmp_path)}, None
+        )
+        with pytest.raises(admin_routes.HTTPException) as excinfo:
+            await _update_settings(
+                pool, settings, admin_routes.ModelSettingsRequest(**{field: True})
+            )
+
+    assert options["a8_prefill_supported"] is False
+    assert options["ane_prefill_backend"] is None
+    assert excinfo.value.status_code == 400
+    assert "oQh" in excinfo.value.detail
+    assert getattr(settings, field) in (None, False)
+
+
+@pytest.mark.asyncio
+async def test_oq_a8_choice_is_kept_without_native_int8_kernels():
+    """Without the kernels, A8 reaches only a Prefill Accelerator Mac's
+    layers. The saved choice is kept, and changing the helper does not write
+    one."""
+    pool, entry = _failed_pool()
+    entry.config_model_type = "qwen4_exp"
     settings = ModelSettings()
 
     with patch.object(admin_routes, "_oq_a8_kernels_available", return_value=False):
-        with pytest.raises(admin_routes.HTTPException) as excinfo:
-            await _update_settings(
-                pool,
-                settings,
-                admin_routes.ModelSettingsRequest(a8_prefill_enabled=True),
-            )
-
-    assert excinfo.value.status_code == 400
-    assert "M5-series or newer" in excinfo.value.detail
+        await _update_settings(
+            pool, settings, admin_routes.ModelSettingsRequest(a8_prefill_enabled=False)
+        )
+        assert settings.a8_prefill_enabled is False
+        await _update_settings(
+            pool, settings, admin_routes.ModelSettingsRequest(prefill_helper_node_id="m5")
+        )
+        await _update_settings(
+            pool, settings, admin_routes.ModelSettingsRequest(prefill_helper_node_id=None)
+        )
     assert settings.a8_prefill_enabled is False
+
+
+@pytest.mark.asyncio
+async def test_prefill_helper_choice_needs_a_model_that_gets_a_helper():
+    """A text-only qwen3_5 conversion runs on an engine without a helper."""
+    pool, entry = _failed_pool()
+    entry.config_model_type = "qwen3_5"
+    settings = ModelSettings()
+    request = admin_routes.ModelSettingsRequest(prefill_helper_node_id="m5")
+    with patch.object(admin_routes, "prepare_prefill_helper"):
+        await _update_settings(pool, settings, request)
+        assert settings.prefill_helper_node_id is None
+        entry.engine_type = "vlm"
+        await _update_settings(pool, settings, request)
+    assert settings.prefill_helper_node_id == "m5"
 
 
 @pytest.mark.asyncio

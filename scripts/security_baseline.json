@@ -1,6 +1,18 @@
 {
  "binaries": [
-  "tests/fixtures/deepseek_v41_expected.npz"
+  "tests/fixtures/deepseek_v41_expected.npz",
+  "tests/fixtures/prefill_contract/deepseek_v41/case.npz",
+  "tests/fixtures/prefill_contract/deepseek_v41/model/model.safetensors",
+  "tests/fixtures/prefill_contract/glm5_next/case.npz",
+  "tests/fixtures/prefill_contract/glm5_next/model/model.safetensors",
+  "tests/fixtures/prefill_contract/inkling2/case.npz",
+  "tests/fixtures/prefill_contract/inkling2/model/model.safetensors",
+  "tests/fixtures/prefill_contract/minimax_m3_vl/case.npz",
+  "tests/fixtures/prefill_contract/minimax_m3_vl/model/model.safetensors",
+  "tests/fixtures/prefill_contract/qwen3_5/case.npz",
+  "tests/fixtures/prefill_contract/qwen3_5/model/model.safetensors",
+  "tests/fixtures/prefill_contract/qwen4_exp/case.npz",
+  "tests/fixtures/prefill_contract/qwen4_exp/model/model.safetensors"
  ],
  "dist_binaries": [
   "omlx/custom_kernels/bonsai/_ext.cpython-311-darwin.so",
@@ -46,9 +58,11 @@
   "eggjs.org",
   "en.wikipedia.org",
   "evil.com",
+  "example.invalid",
   "fakebank.com",
   "framework.zend.com",
   "ftp.icqa.or.kr",
+  "get.docker.com",
   "github.com",
   "hf-mirror.com",
   "hf-mirror.example",
@@ -71,9 +85,11 @@
   "modelscope.cn",
   "mongomutter.blogspot.com",
   "mstdn.social",
+  "nvidia.github.io",
   "ohmyz.sh",
   "ohmyzsh.s3.amazonaws.com",
   "omlx.ai",
+  "omlx.example.com",
   "omlx.test",
   "opencode.ai",
   "openwebui.com",
@@ -83,6 +99,7 @@
   "pypi.org",
   "raw.githubusercontent.com",
   "restsharp.org",
+  "stub.test",
   "tailwindcss.com",
   "test.com",
   "twitter.com",
@@ -132,6 +149,7 @@
    "omlx/utils/system_sampler.py": 6
   },
   "danger:dyn-exec": {
+   "omlx/eval/sandbox.py": 2,
    "omlx/models/embedding.py": 1,
    "omlx/patches/mlx_vlm_mlx0322_compat.py": 2,
    "omlx/utils/mlx_mock.py": 1,
@@ -145,6 +163,7 @@
    "tests/test_qwen4_runtime_ple_fork_cpu.py": 2
   },
   "danger:dynamic-import": {
+   "apps/omlx-cuda-helper/omlx_cuda_helper/families/__init__.py": 2,
    "omlx/__init__.py": 1,
    "omlx/adapter/output_parser.py": 1,
    "omlx/cluster/pipeline_compat.py": 2,
@@ -200,10 +219,15 @@
    "omlx/cluster/control_plane.py": 1
   },
   "danger:pipe-to-shell": {
-   "apps/omlx-web/tests/ui/test_cluster_v2_wizard.py": 2,
-   "omlx/integrations/opencode.py": 1
+   "apps/omlx-web/omlx_web/static/js/cluster_v2.js": 1,
+   "omlx/integrations/opencode.py": 1,
+   "omlx/omlx_web/static/js/cluster_v2.js": 1
   },
   "danger:raw-socket": {
+   "apps/omlx-cuda-helper/omlx_cuda_helper/gpus.py": 1,
+   "apps/omlx-cuda-helper/omlx_cuda_helper/worker.py": 3,
+   "apps/omlx-cuda-helper/tests/test_chain.py": 6,
+   "apps/omlx-cuda-helper/tests/test_protocol.py": 1,
    "omlx/cli.py": 2,
    "omlx/cluster/collective.py": 2,
    "omlx/cluster/control_plane.py": 2,
@@ -217,6 +241,9 @@
    "omlx/cluster/transport.py": 1,
    "omlx/engine/splash.py": 1,
    "omlx/integrations/openclaw.py": 2,
+   "omlx/prefill_helper/agent.py": 2,
+   "omlx/prefill_helper/client.py": 1,
+   "omlx/prefill_helper/worker.py": 1,
    "tests/rdma_loopback.py": 1,
    "tests/test_cli.py": 1,
    "tests/test_cluster_control_plane.py": 3,
@@ -224,7 +251,9 @@
    "tests/test_cluster_rdma_links.py": 1,
    "tests/test_cluster_rdma_pipeline.py": 1,
    "tests/test_deepseek_v41.py": 2,
+   "tests/test_deepseek_v41_fused_decode.py": 1,
    "tests/test_jaccl_side_channel.py": 1,
+   "tests/test_prefill_helper.py": 2,
    "tests/test_qwen35_pipeline_forward.py": 1,
    "tests/test_server_main.py": 1,
    "tests/test_sse_keepalive.py": 1,
@@ -236,7 +265,7 @@
    "omlx/cluster/staging.py": 3,
    "omlx/cluster/transport.py": 1,
    "tests/test_cluster_seams.py": 1,
-   "tests/test_cluster_staging.py": 7
+   "tests/test_cluster_staging.py": 8
   },
   "danger:swift-process": {
    "Formula/omlx.rb": 1,
@@ -249,7 +278,7 @@
    "apps/omlx-mac/Sources/AppView/Screens/DownloadsScreen.swift": 9,
    "apps/omlx-mac/Sources/AppView/Screens/ModelCardSheet.swift": 7,
    "apps/omlx-mac/Sources/AppView/Screens/ModelSettingsScreen.swift": 2,
-   "apps/omlx-mac/Sources/AppView/Screens/ModelsScreen.swift": 5,
+   "apps/omlx-mac/Sources/AppView/Screens/ModelsScreen.swift": 7,
    "apps/omlx-mac/Sources/AppView/Screens/PerformanceScreen.swift": 1,
    "apps/omlx-mac/Sources/AppView/Screens/ProfileViews.swift": 4,
    "apps/omlx-mac/Sources/AppView/Screens/QuantizationScreen.swift": 9,
@@ -270,6 +299,7 @@
    "apps/omlx-mac/Sources/Updater/AppUpdater.swift": 1,
    "apps/omlx-mac/Sources/Updater/UpdateInstaller.swift": 1,
    "apps/omlx-mac/Sources/Welcome/WelcomeWindow.swift": 7,
+   "apps/omlx-mac/Tests/Fixtures/ServerProcessHealthHarness.swift": 1,
    "apps/omlx-mac/Tests/oMLXTests/AppUpdaterTests.swift": 1,
    "apps/omlx-mac/Tests/oMLXTests/ShellEnvWriterTests.swift": 2,
    "apps/omlx-mac/Tests/oMLXTests/UpdateInstallerTests.swift": 1,
@@ -285,25 +315,28 @@
   },
   "danger:swift-url-session": {
    "apps/omlx-mac/Sources/AppView/Screens/AskAIScreen.swift": 2,
+   "apps/omlx-mac/Sources/AskAI/AskAISettings.swift": 2,
    "apps/omlx-mac/Sources/AskAI/AskAIToolRunner.swift": 2,
    "apps/omlx-mac/Sources/AskAI/ChatCompletionStream.swift": 2,
    "apps/omlx-mac/Sources/AskAI/RealtimeVoiceClient.swift": 2,
    "apps/omlx-mac/Sources/Menubar/MenubarStatsPoller.swift": 5,
    "apps/omlx-mac/Sources/Net/OMLXClient.swift": 3,
    "apps/omlx-mac/Sources/Server/PortConflictResolver.swift": 4,
-   "apps/omlx-mac/Sources/Updater/AppUpdater.swift": 1,
+   "apps/omlx-mac/Sources/Updater/AppUpdater.swift": 2,
    "apps/omlx-mac/Sources/Updater/ReleasesChecker.swift": 1,
    "apps/omlx-mac/Tests/oMLXTests/GlobalSettingsSamplingTests.swift": 1,
-   "apps/omlx-mac/Tests/oMLXTests/ModelSettingsScreenVMTests.swift": 1
+   "apps/omlx-mac/Tests/oMLXTests/IntegrationsScreenVMTests.swift": 1,
+   "apps/omlx-mac/Tests/oMLXTests/ModelSettingsScreenVMTests.swift": 2
   },
   "deps:url-or-git-dependency": {
-   "mlx-audio @ git+https://github.com/Blaizzy/mlx-audio@8c244a1faff44cfa69e3151c195f52a4c1c90be5": 1,
-   "mlx-audio[tts,stt,sts] @ git+https://github.com/Blaizzy/mlx-audio@8c244a1faff44cfa69e3151c195f52a4c1c90be5": 1,
+   "mlx-audio @ git+https://github.com/Neywa-Labs/mlx-audio@8c244a1faff44cfa69e3151c195f52a4c1c90be5": 1,
+   "mlx-audio[tts,stt,sts] @ git+https://github.com/Neywa-Labs/mlx-audio@8c244a1faff44cfa69e3151c195f52a4c1c90be5": 1,
    "mlx-embeddings @ git+https://github.com/Blaizzy/mlx-embeddings@32981fa4e8064ed664b52071789dd18271fe4206": 1,
    "mlx-lm @ git+https://github.com/ml-explore/mlx-lm@0d4d3d04f8ab7ce4a51e7209e8615755a48ba94d": 2,
-   "mlx-vlm @ git+https://github.com/Blaizzy/mlx-vlm@138d7617d39653b39a5cbc379b1b5907a4481d67": 1
+   "mlx-vlm @ git+https://github.com/Neywa-Labs/mlx-vlm@138d7617d39653b39a5cbc379b1b5907a4481d67": 1
   },
   "exfil:browser-data": {
+   "apps/omlx-mac/Resources/Localizable.xcstrings": 1,
    "apps/omlx-mac/Sources/Menubar/MenubarStatsPoller.swift": 1,
    "apps/omlx-mac/Sources/Net/OMLXClient.swift": 1
   },

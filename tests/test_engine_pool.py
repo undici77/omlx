@@ -13,11 +13,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import mlx.core as mx
 import pytest
 
+import omlx.engine_pool as engine_pool_module
 from omlx.engine_pool import (
     EngineEntry,
     EnginePool,
     VLMBatchedEngine,
-    _is_metal_out_of_memory,
     _qwen35_cpu_share_estimated_bytes,
 )
 from omlx.exceptions import (
@@ -27,6 +27,7 @@ from omlx.exceptions import (
     ModelNotFoundError,
     ModelTooLargeError,
     ModelUnavailableError,
+    is_metal_out_of_memory,
 )
 from omlx.model_settings import ModelSettings, ModelSettingsManager
 from omlx.patches.mlx_vlm_qwen4_exp_compat.residency import (
@@ -991,13 +992,14 @@ class TestQwenCpuShareMemoryEstimate:
         )
         pool._entries[entry.model_id] = entry
         settings = ModelSettings()
-        off = pool._engine_runtime_signature("v41", settings)
-        settings.deepseek_v41_ced_prefill_enabled = True
+        # Unset means on.
         on = pool._engine_runtime_signature("v41", settings)
-        assert off != on
         assert dict(on)["deepseek_v41_ced_prefill_enabled"] == "True"
         settings.deepseek_v41_ced_prefill_enabled = False
-        assert pool._engine_runtime_signature("v41", settings) == off
+        off = pool._engine_runtime_signature("v41", settings)
+        assert off != on
+        settings.deepseek_v41_ced_prefill_enabled = True
+        assert pool._engine_runtime_signature("v41", settings) == on
 
     def test_qwen4_wide_decode_setting_changes_engine_signature(self, tmp_path):
         from omlx.model_settings import ModelSettings
@@ -2102,7 +2104,7 @@ class TestEnginePoolAsync:
         assert second is base_engine
         base_engine.stop.assert_not_awaited()
 
-    def test_oq_a8_forces_a_separate_engine(self, pool_with_mock_engines):
+    def test_oq_a8_forces_a_separate_engine(self, pool_with_mock_engines, monkeypatch):
         """The patch replaces MLP.__call__ process-wide, registers process-wide
         projection backends, and caches a plan on every module it classifies;
         none of that can be undone in place, so a change here has to land on a
@@ -2115,16 +2117,37 @@ class TestEnginePoolAsync:
         other_floor = ModelSettings(a8_prefill_enabled=True, a8_prefill_min_tokens=1024)
 
         sig = lambda s: pool._engine_runtime_signature("model-a", s)  # noqa: E731
+        monkeypatch.setattr(
+            engine_pool_module.quant_fast, "oq_a8_available", lambda: True
+        )
         assert sig(off) != sig(on)
         assert sig(on) != sig(other_floor)
+        # Without INT8 tensor units only a Prefill Accelerator Mac uses it.
+        monkeypatch.setattr(
+            engine_pool_module.quant_fast, "oq_a8_available", lambda: False
+        )
+        assert sig(off) == sig(on)
+        # DeepSeek V4.1 tensor-parallel ranks load A8 by their own hardware.
+        tensor = SimpleNamespace(tensor_parallel_size=2)
+        monkeypatch.setattr(
+            pool, "_distributed_deployment_for_entry", lambda entry: tensor
+        )
+        assert sig(off) == sig(on)
+        pool._entries["model-a"].config_model_type = "deepseek_v41"
+        assert sig(off) != sig(on)
 
-    def test_oq_a8_toggle_changes_qwen4_exp_signature(self, pool_with_mock_engines):
+    def test_oq_a8_toggle_changes_qwen4_exp_signature(
+        self, pool_with_mock_engines, monkeypatch
+    ):
         """Flash-Next reloads on the same toggle, so routed-expert tags never
         outlive an OFF request (OFF -> ON -> OFF -> ON each get a new engine)."""
         from omlx.model_settings import ModelSettings
 
         pool = pool_with_mock_engines
         pool._entries["model-a"].config_model_type = "qwen4_exp"
+        monkeypatch.setattr(
+            engine_pool_module.quant_fast, "oq_a8_available", lambda: True
+        )
         sig = lambda enabled: pool._engine_runtime_signature(  # noqa: E731
             "model-a", ModelSettings(a8_prefill_enabled=enabled)
         )
@@ -3336,7 +3359,7 @@ class TestEnginePoolPrefillEviction:
             phys[0] -= pool[0]
             pool[0] = 0
 
-        def release_slots(request_id):
+        def release_slots(request_id, need_bytes):
             threads.append(threading.current_thread())
             phys[0] = 33 * gb
             return 16 * gb
@@ -3390,11 +3413,73 @@ class TestEnginePoolPrefillEviction:
 
         assert admitted is True
         scheduler._reclaim_prefill_headroom.assert_called_once()
-        scheduler.release_moe_offload_slots.assert_called_once_with("req-1")
+        # The shortfall after the reclaim: 46GB footprint + 10GB - 40GB.
+        scheduler.release_moe_offload_slots.assert_called_once_with("req-1", 16 * gb)
         assert threads and threads[0] is not threading.current_thread()
         release_hot_cache.assert_not_awaited()
         pool_obj._unload_engine.assert_not_awaited()
         pool_obj._release_ane_prefill_for_headroom.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("steps_left", [3, 1])
+    async def test_offload_slot_release_repeats_until_the_prefill_step_fits(
+        self, steps_left
+    ):
+        """The slot rung repeats on the shortfall left, then the hot cache is next."""
+        gb = 1024**3
+        phys = [52 * gb]
+        needs = []
+
+        def release_slots(request_id, need_bytes):
+            needs.append(need_bytes)
+            if len(needs) > steps_left:
+                return 0  # at the floor
+            phys[0] -= 4 * gb
+            return 4 * gb
+
+        scheduler = self._reclaim_scheduler(lambda: None)
+        scheduler.release_moe_offload_slots = MagicMock(side_effect=release_slots)
+        scheduler.requests = {"req-1": object()}
+        scheduler._hot_cache_limit_factor = MagicMock(return_value=1.0)
+        scheduler._prefill_speed_priority = False
+        release_hot_cache = AsyncMock(return_value=8 * gb)
+        req = PrefillEvictionRequest(
+            request_id="req-1",
+            model_id="target",
+            current_bytes=52 * gb,
+            target_cap_bytes=50 * gb,
+            predicted_transient_bytes=10 * gb,
+            requested_tokens=8192,
+            reason="prefill_preflight",
+        )
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            pool_obj = _make_pool(ceiling=0)
+            pool_obj._entries = {
+                "target": self._entry(
+                    "target", 40 * gb, scheduler=scheduler, executor=executor
+                ),
+            }
+            pool_obj._current_model_memory = 40 * gb
+            pool_obj._process_memory_enforcer = SimpleNamespace(
+                release_hot_cache_for_prefill=release_hot_cache
+            )
+            pool_obj._release_ane_prefill_for_headroom = AsyncMock(return_value=0)
+            with (
+                patch("omlx.engine_pool.mx.get_active_memory", return_value=0),
+                patch("omlx.engine_pool.mx.get_cache_memory", return_value=0),
+                patch(
+                    "omlx.engine_pool.get_phys_footprint", side_effect=lambda: phys[0]
+                ),
+            ):
+                admitted = await pool_obj._evict_idle_lru_for_prefill("target", req)
+
+        assert admitted is True
+        if steps_left == 3:  # 12GB short: three 4GB steps, then it fits
+            assert needs == [12 * gb, 8 * gb, 4 * gb]
+            release_hot_cache.assert_not_awaited()
+        else:  # one step, then the floor: the hot cache covers the rest
+            assert needs == [12 * gb, 8 * gb]
+            release_hot_cache.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_recurring_headroom_pressure_escalates_to_bank_release(self):
@@ -3908,14 +3993,17 @@ class TestHasActiveRequests:
 
         engine = DummyEngine()
         assert engine.has_active_requests() is False
+        assert engine.active_request_count() == 0
 
         with engine._active_lock:
             engine._active_count += 1
         assert engine.has_active_requests() is True
+        assert engine.active_request_count() == 1
 
         with engine._active_lock:
             engine._active_count -= 1
         assert engine.has_active_requests() is False
+        assert engine.active_request_count() == 0
 
     def test_batched_engine_has_active_requests(self):
         """Test BatchedEngine.has_active_requests() via _output_collectors."""
@@ -3924,6 +4012,7 @@ class TestHasActiveRequests:
         engine = BatchedEngine.__new__(BatchedEngine)
         engine._engine = None
         assert engine.has_active_requests() is False
+        assert engine.active_request_count() == 0
 
         # Simulate engine with active collectors
         mock_engine_core = MagicMock()
@@ -3932,10 +4021,15 @@ class TestHasActiveRequests:
         mock_engine_core.engine = mock_inner
         engine._engine = mock_engine_core
         assert engine.has_active_requests() is True
+        assert engine.active_request_count() == 1
+
+        mock_inner._output_collectors = {"req1": MagicMock(), "req2": MagicMock()}
+        assert engine.active_request_count() == 2
 
         # Empty collectors
         mock_inner._output_collectors = {}
         assert engine.has_active_requests() is False
+        assert engine.active_request_count() == 0
 
     def test_vlm_engine_has_active_requests(self):
         """Test VLMBatchedEngine.has_active_requests() via _output_collectors."""
@@ -3944,6 +4038,7 @@ class TestHasActiveRequests:
         engine = VLMBatchedEngine.__new__(VLMBatchedEngine)
         engine._engine = None
         assert engine.has_active_requests() is False
+        assert engine.active_request_count() == 0
 
         mock_engine_core = MagicMock()
         mock_inner = MagicMock()
@@ -3951,6 +4046,7 @@ class TestHasActiveRequests:
         mock_engine_core.engine = mock_inner
         engine._engine = mock_engine_core
         assert engine.has_active_requests() is True
+        assert engine.active_request_count() == 1
 
 
 class TestResolveModelId:
@@ -5792,7 +5888,7 @@ async def test_local_cluster_removal_preserves_busy_guard_and_scope(busy):
 
 
 class TestIsMetalOutOfMemory:
-    """``_is_metal_out_of_memory`` walks the cause chain of a failed load."""
+    """``is_metal_out_of_memory`` walks the cause chain of a failed load."""
 
     def test_cause_cycles_terminate(self):
         exc = ImportError("VoxtralProcessor requires the PyTorch library")
@@ -5800,12 +5896,12 @@ class TestIsMetalOutOfMemory:
         a, b = RuntimeError("a"), RuntimeError("b")
         a.__cause__, b.__cause__ = b, a
 
-        assert _is_metal_out_of_memory(exc) is False
-        assert _is_metal_out_of_memory(a) is False
+        assert is_metal_out_of_memory(exc) is False
+        assert is_metal_out_of_memory(a) is False
 
     def test_out_of_memory_found_down_the_chain(self):
         oom = RuntimeError("[METAL] Command buffer execution failed: Insufficient Memory")
         outer = RuntimeError("load failed")
         outer.__cause__ = oom
 
-        assert _is_metal_out_of_memory(outer) is True
+        assert is_metal_out_of_memory(outer) is True

@@ -1,7 +1,7 @@
 # oMLX Security Audit & Compliance Guide
 
-**Version:** 1.3
-**Last Updated:** October 15, 2026
+**Version:** 1.4
+**Last Updated:** November 19, 2026
 **Project:** oMLX (Open MLX Inference Server)
 
 ---
@@ -124,6 +124,8 @@ oMLX's security model assumes it runs on a **trusted host (macOS)** accessed loc
 | **OMLX-04** | **CORS:** default is now `["http://localhost", "http://127.0.0.1"]`; a user may still set `["*"]`. | Default restrictive; documented. |
 | **OMLX-06** | **Pickle over cluster socket** (`omlx/cluster/control_plane.py`): `pickle.loads` after HMAC-SHA256 check. | Safe only while the shared token stays secret; token leak = RCE on cluster peers. Baselined. |
 | **OMLX-07** | **Import-time source patching** (`omlx/patches/mlx_vlm_mlx0322_compat.py` uses `exec`). | Local installed package only, no network input. Baselined. |
+| **OMLX-08** | **Model-generated code execution** (`omlx/eval/sandbox.py`: `exec` of benchmark code from HumanEval/MBPP/LiveCodeBench). | Runs in a child process with `RLIMIT_AS`/`RLIMIT_CPU` only; **no network or filesystem isolation**. User-initiated eval runs only; do not run evals on a host holding secrets you would not expose to the model under test. Baselined (v0.8.0 merge). |
+| **OMLX-09** | **Prefill Accelerator / CUDA helper sockets** (`omlx/prefill_helper/`, `apps/omlx-cuda-helper/`): TCP listener on a paired cluster peer, helper started and model files copied over SSH. | Opt-in per model (`prefill_helper_node_id` defaults to `None`); explicit `--bind` required; mutual HMAC-SHA256 challenge with a session token passed on stdin; JSON + raw-array frames (no pickle, header capped at 16 MiB). Treat the pairing token as a secret and keep peers on a trusted link. Baselined (v0.8.0 merge). |
 | **OMLX-05** | **Benchmark Telemetry:** Benchmark module can upload hardware fingerprint + performance data. | **Mitigated (May 2026):** `allow_upload` defaults to `false`; upload is gated behind user opt-in both in backend (`BenchmarkRequest.allow_upload: bool = False`) and UI checkbox. `compliance_check.py` verifies the default. |
 
 ---

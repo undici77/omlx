@@ -1,16 +1,17 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Capture-time direction building on the live engine (plan §13).
+"""Capture-time direction building on the live engine.
 
 The vector must come from the same hook, same patches and same chat template
 as inference (C3), so the running engine captures activations through its own
 steering tags instead of a re-implemented load path. Capture arms
 ``state.capture``; the hooks then record the last prompt token's branch
-output per layer instead of projecting (unsteered activations, §13.2).
+output per layer instead of projecting (unsteered activations).
 """
 
 from __future__ import annotations
 
-from typing import Any, Callable, Optional
+from collections.abc import Callable
+from typing import Any
 
 import mlx.core as mx
 import numpy as np
@@ -44,7 +45,7 @@ def capture_one(
     """One full-prompt forward with capture armed; ``{layer: (E,) float64}``.
 
     Runs on the engine's MLX executor (stream-bound arrays), one prompt per
-    task so serving traffic interleaves (§13.1). Capture mode makes the hooks
+    task so serving traffic interleaves. Capture mode makes the hooks
     record instead of project, so the activations are the unsteered ones even
     when the scales are non-zero.
     """
@@ -76,7 +77,7 @@ def _unit(v: np.ndarray) -> np.ndarray:
 def _layer_direction(
     good: np.ndarray, bad: np.ndarray, *, pair_normalize: bool, orthogonalize: bool
 ) -> np.ndarray:
-    """One layer's direction from (n, E) capture stacks (§13.3)."""
+    """One layer's direction from (n, E) capture stacks."""
     if pair_normalize:
         diffs = good - bad
         d = _unit(diffs.sum(axis=0) / max(len(diffs), 1))
@@ -96,12 +97,12 @@ def build_direction(
     orthogonalize: bool = True,
     seed: int = 0,
 ) -> dict[str, Any]:
-    """DS4's build_direction maths (plan §13.3), float64 throughout.
+    """DS4's build_direction maths, float64 throughout.
 
     Pairs ``good[i]`` with ``bad[i]`` over ``n = min(len(good), len(bad))``
     prompts. Returns unit-norm ``vectors`` (L, E) f32, the projection means
-    ``mu_good`` / ``mu_bad`` (L,) f32 for retarget mode (§2e Q3), and the
-    split-half stability cosine per layer (§2e Q2; ``None`` entries when the
+    ``mu_good`` / ``mu_bad`` (L,) f32 for retarget mode, and the
+    split-half stability cosine per layer (``None`` entries when the
     pairs are too few to split).
     """
     if not good or not bad:
@@ -122,7 +123,7 @@ def build_direction(
     vectors = np.zeros((len(layers), good[0][layers[0]].shape[0]), np.float64)
     mu_good = np.zeros(len(layers), np.float64)
     mu_bad = np.zeros(len(layers), np.float64)
-    split_half_cos: list[Optional[float]] = []
+    split_half_cos: list[float | None] = []
     for row, layer in enumerate(layers):
         g = np.stack([c[layer] for c in good])
         b = np.stack([c[layer] for c in bad])

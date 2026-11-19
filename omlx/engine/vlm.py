@@ -2797,7 +2797,7 @@ class VLMBatchedEngine(BaseEngine):
         except Exception:
             logger.debug("qwen3_5 padded-row attention patch not applied", exc_info=True)
 
-        # Directional steering: after every class-level patch above (plan §8).
+        # Directional steering: after every class-level patch above.
         # The qwen35 router / routed-decode patches replace the MoE block's
         # __call__ and their fused one-token decode path never calls the
         # previous one, so our hook must wrap the final call to stay outermost.

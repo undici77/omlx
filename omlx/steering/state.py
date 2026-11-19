@@ -1,10 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Live steering state attached to a loaded model (plan §5.2, §2c, §10)."""
+"""Live steering state attached to a loaded model."""
 
 from __future__ import annotations
 
 import hashlib
-from typing import Any, Optional, Sequence
+from collections.abc import Sequence
+from typing import Any
 
 import mlx.core as mx
 import numpy as np
@@ -34,9 +35,9 @@ class SteeringState:
         decode_tokens: int = DEFAULT_K,
         method: str = "project",
         norm_preserve: bool = False,
-        mu_good: Optional[np.ndarray] = None,
-        mu_bad: Optional[np.ndarray] = None,
-        layer_mask: Optional[frozenset[int]] = None,
+        mu_good: np.ndarray | None = None,
+        mu_bad: np.ndarray | None = None,
+        layer_mask: frozenset[int] | None = None,
         retarget_to: str = "bad",
     ):
         self.pack_sha = pack_sha
@@ -71,12 +72,12 @@ class SteeringState:
     def set(
         self,
         *,
-        attn: Optional[float] = None,
-        ffn: Optional[float] = None,
-        scope: Optional[str] = None,
-        decode_tokens: Optional[int] = None,
-        method: Optional[str] = None,
-        norm_preserve: Optional[bool] = None,
+        attn: float | None = None,
+        ffn: float | None = None,
+        scope: str | None = None,
+        decode_tokens: int | None = None,
+        method: str | None = None,
+        norm_preserve: bool | None = None,
         bump: bool = True,
     ) -> None:
         if attn is not None:
@@ -110,7 +111,7 @@ class SteeringState:
         )
 
     def salt(self) -> str:
-        """Cache namespace salt (plan §11); '' when steering is off."""
+        """Cache namespace salt; '' when steering is off."""
         if not self.active():
             return ""
         k = self.decode_tokens if self.scope == "prefill+k" else ""
@@ -124,7 +125,7 @@ class SteeringState:
         return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
     # -- scope / phase ------------------------------------------------------
-    def decode_row_limit(self) -> Optional[int]:
+    def decode_row_limit(self) -> int | None:
         """Rows with ``n_generated < limit`` are steered in a decode step.
 
         The first decode step still processes the last *prompt* token (n=0),

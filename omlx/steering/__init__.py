@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Directional steering (DS4-style rank-1 projection on branch outputs).
 
-See docs/experimental/directional-steering-plan.md. Nothing in this package
+See docs/steering.md (experimental). Nothing in this package
 touches a model unless ``install_steering`` is called with a pack configured
 (plan rule R1).
 """

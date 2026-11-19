@@ -13,10 +13,20 @@ pytestmark = [
 
 import mlx.core as mx  # noqa: E402
 
-from omlx.steering import install_steering  # noqa: E402
-from omlx.steering import project  # noqa: E402
+from omlx.steering import install_steering, project  # noqa: E402
 from omlx.steering.install import get_state  # noqa: E402
 from omlx.steering.pack import SteeringPack, save_pack  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _all_adapters_validated(monkeypatch):
+    """Exercise every registered adapter; production enables only validated ones."""
+    from omlx.steering import adapters
+
+    monkeypatch.setattr(
+        adapters, "VALIDATED_MODEL_TYPES", frozenset(adapters.ADAPTERS)
+    )
+
 
 
 def _y(dtype=mx.float32):

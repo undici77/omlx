@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Fast tests for the steering quality gate Q7 (plan §2e)."""
+"""Fast tests for the steering quality gate."""
 
 import json
 

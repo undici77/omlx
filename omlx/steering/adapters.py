@@ -1,13 +1,14 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Per-architecture hook targets (plan §6). Main layer list only, never MTP."""
+"""Per-architecture hook targets. Main layer list only, never MTP."""
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable, Optional
+from typing import Any
 
 
-class SteeringUnsupported(RuntimeError):
+class SteeringUnsupportedError(RuntimeError):
     """Architecture has no adapter; never fall back silently."""
 
 
@@ -16,7 +17,7 @@ class Target:
     kind: str  # "attn" | "ffn"
     layer_idx: int
     module: Any
-    output_index: Optional[int] = None
+    output_index: int | None = None
     residual_included: bool = False
 
 
@@ -59,7 +60,7 @@ def find_main_layers(model: Any) -> list:
                 break
         else:
             return list(obj)
-    raise SteeringUnsupported("cannot locate decoder layers")
+    raise SteeringUnsupportedError("cannot locate decoder layers")
 
 
 def _attr(layer: Any, *names: str) -> Any:
@@ -76,7 +77,7 @@ def _generic_targets(model: Any, attn_names, ffn_names) -> list:
         a = _attr(layer, *attn_names)
         f = _attr(layer, *ffn_names)
         if a is None or f is None:
-            raise SteeringUnsupported(f"layer {i}: missing attention or ffn module")
+            raise SteeringUnsupportedError(f"layer {i}: missing attention or ffn module")
         out.append(Target("attn", i, a))
         out.append(Target("ffn", i, f))
     return out
@@ -123,9 +124,20 @@ _register(
 )
 
 
+# Experimental scope: only architectures measured end to end (effect,
+# quality gate, decode cost, MTP acceptance) are enabled. The other adapters
+# stay registered so they can be validated and switched on one at a time;
+# tests widen ``VALIDATED_MODEL_TYPES``.
+VALIDATED_MODEL_TYPES: frozenset = frozenset({"qwen4_exp"})
+
+
 def get_adapter(model: Any) -> SteeringAdapter:
     mt = model_type_of(model)
     ad = ADAPTERS.get(mt)
-    if ad is None:
-        raise SteeringUnsupported(f"steering: unsupported model_type {mt!r}")
+    if ad is None or mt not in VALIDATED_MODEL_TYPES:
+        supported = ", ".join(sorted(VALIDATED_MODEL_TYPES))
+        raise SteeringUnsupportedError(
+            f"steering: model_type {mt!r} is not supported yet "
+            f"(experimental; validated: {supported})"
+        )
     return ad

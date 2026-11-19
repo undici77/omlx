@@ -1,16 +1,16 @@
 # SPDX-License-Identifier: Apache-2.0
-"""install_steering: tag instances, hook classes, attach state (plan §8)."""
+"""install_steering: tag instances, hook classes, attach state."""
 
 from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import mlx.core as mx
 import numpy as np
 
-from .adapters import SteeringUnsupported, find_main_layers, get_adapter
+from .adapters import SteeringUnsupportedError, find_main_layers, get_adapter
 from .hooks import SteerTag, hook_class, hook_function, set_tag
 from .pack import SteeringPackError, resolve_pack_ref
 from .state import DEFAULT_K, DEFAULT_SCOPE, SteeringState
@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 _STATE_ATTR = "_omlx_steering"
 
 
-def get_state(model: Any) -> Optional[SteeringState]:
+def get_state(model: Any) -> SteeringState | None:
     """Find the state on a model or its VLM / language-model wrappers."""
     for obj in (
         model,
@@ -50,10 +50,10 @@ def install_steering(
     model: Any,
     settings: Any,
     *,
-    model_path: Optional[str] = None,
-    base_path: Optional[Path] = None,
-) -> Optional[SteeringState]:
-    """Install steering on a loaded model. Returns None when no pack is set (R1).
+    model_path: str | None = None,
+    base_path: Path | None = None,
+) -> SteeringState | None:
+    """Install steering on a loaded model. Returns None when no pack is set.
 
     Must run after every other class patch so our ``__call__`` is outermost.
     """
@@ -84,7 +84,7 @@ def install_steering(
     # R2: hook only the components the pack was built for.
     components = frozenset({comp}) & adapter.components
     if not components:
-        raise SteeringUnsupported(f"adapter {adapter.name} lacks component {comp!r}")
+        raise SteeringUnsupportedError(f"adapter {adapter.name} lacks component {comp!r}")
 
     g = lambda n: getattr(settings, n, None)  # noqa: E731
     ffn = _pick(g("steering_ffn_scale"), rec.get("ffn"), 1.0 if comp == "ffn" else 0.0)
@@ -141,7 +141,7 @@ def install_steering(
             hook_class(cls)
             hooked.add(cls)
 
-    # §7 handlers: fused paths that bypass the module call entirely.
+    # Verifier handlers: fused paths that bypass the module call entirely.
     _install_verify_injections(components)
 
     object.__setattr__(model, _STATE_ATTR, state)
@@ -153,13 +153,13 @@ def install_steering(
 
 
 def _install_verify_injections(components: frozenset) -> None:
-    """Plan §7: mlx-vlm's exact verifier computes attention, GDN and FFN
+    """mlx-vlm's exact verifier computes attention, GDN and FFN
     without calling the submodules, so spec-verify decode would silently
     bypass the hooks. Wrap the verifier methods — after oMLX's own overrides,
     which replace these same methods — so each returned branch output is
     steered through the submodule's tag; untagged modules pass through.
     oMLX's patched ``_layer`` consumes the returned values, so this injects
-    at the explicit intermediate tensor (R4) instead of gating verify off.
+    at the explicit intermediate tensor instead of gating verify off.
     """
     try:
         from mlx_vlm.models.qwen3_5.speculative_verifier import (
@@ -184,7 +184,7 @@ def _install_verify_injections(components: frozenset) -> None:
 
 
 def mark_prefill(model: Any) -> None:
-    """Scheduler entrypoint signal: the next forward is prefill (plan §2c)."""
+    """Scheduler entrypoint signal: the next forward is prefill."""
     st = get_state(model)
     if st is not None:
         st.begin_prefill()

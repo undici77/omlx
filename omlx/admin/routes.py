@@ -2957,14 +2957,14 @@ class SteeringBuildRequest(BaseModel):
     good: list[str]
     bad: list[str]
     component: str = "ffn"
-    system: Optional[str] = None
+    system: str | None = None
     thinking: bool = False
     pair_normalize: bool = False
     orthogonalize: bool = True
     description: str = ""
-    # Plan §2e Q2: layers whose split-half stability falls below this are
+    # Layers whose split-half stability falls below this are
     # excluded via the steer.layers mask (None disables the mask).
-    min_split_half: Optional[float] = Field(default=0.8, ge=0.0, le=1.0)
+    min_split_half: float | None = Field(default=0.8, ge=0.0, le=1.0)
 
 
 _STEERING_JOBS: dict[str, dict[str, Any]] = {}
@@ -2976,7 +2976,7 @@ async def build_steering_pack(
     request: SteeringBuildRequest,
     is_admin: bool = Depends(require_admin),
 ):
-    """Capture paired prompts on the live engine and build a pack (plan §13)."""
+    """Capture paired prompts on the live engine and build a pack."""
     import uuid
 
     entry = _require_model(model_id)
@@ -2989,7 +2989,6 @@ async def build_steering_pack(
         raise HTTPException(400, "component must be 'ffn' or 'attn'")
     model = getattr(engine, "_model", None) or getattr(engine, "_vlm_model", None)
     from ..steering import get_state
-    from ..steering.adapters import get_adapter
 
     st = get_state(model) if model is not None else None
     if st is None:
@@ -3055,7 +3054,7 @@ async def _run_steering_build(
             caps.append(
                 await loop.run_in_executor(
                     executor,
-                    lambda: capture_one(
+                    lambda ids=ids: capture_one(
                         fwd,
                         ids,
                         st,
@@ -3076,7 +3075,7 @@ async def _run_steering_build(
             pair_normalize=request.pair_normalize,
             orthogonalize=request.orthogonalize,
         )
-        # Q2: drop unstable layers from the mask; the vectors keep all rows
+        # Drop unstable layers from the mask; the vectors keep all rows
         # (shape validation needs the model's layer count), the installer
         # simply does not tag the masked-out layers.
         layer_mask = None
@@ -3154,7 +3153,7 @@ async def verify_steering_pack(
     request: SteeringVerifyRequest,
     is_admin: bool = Depends(require_admin),
 ):
-    """Run the Q7 quality gate on the loaded engine (plan §2e)."""
+    """Run the steering quality gate on the loaded engine."""
     import uuid
 
     entry = _require_model(model_id)
@@ -3556,7 +3555,20 @@ async def update_model_settings(
         try:
             validate_steering(current_settings.__dict__)
         except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e))
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        if current_settings.steering_pack:
+            from ..steering.adapters import VALIDATED_MODEL_TYPES
+
+            model_type = (entry.config_model_type or "").replace("-", "_").lower()
+            if model_type not in VALIDATED_MODEL_TYPES:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "Directional steering is experimental and not "
+                        f"supported on {model_type or 'this model'} yet "
+                        f"(supported: {', '.join(sorted(VALIDATED_MODEL_TYPES))})."
+                    ),
+                )
     if "index_cache_freq" in sent:
         # 0 means disable (reset to None)
         current_settings.index_cache_freq = (

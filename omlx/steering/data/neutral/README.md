@@ -1,4 +1,4 @@
-# Neutral quality corpus (plan §2e Q7)
+# Neutral quality corpus
 
 Fixed corpus for the steering quality gate: per-token KL(unsteered ‖ steered)
 and NLL change are measured on these paragraphs, two forwards per text.

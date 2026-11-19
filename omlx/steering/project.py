@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Projection ops (plan §5.1). Compiled MLX ops, no custom kernel in v1.
+"""Projection ops. Compiled MLX ops, no custom kernel in v1.
 
 Every scale is an *input array*, never captured, so changing it never
 recompiles. All math runs in fp32 and is cast back to the input dtype.

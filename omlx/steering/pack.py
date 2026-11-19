@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Steering pack: one unit vector per layer plus a manifest (plan §4)."""
+"""Steering pack: one unit vector per layer plus a manifest."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import json
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import numpy as np
 
@@ -29,7 +29,7 @@ class SteeringPack:
     name: str
     vectors: np.ndarray  # (L, E) float32, unit-norm rows
     manifest: dict[str, Any] = field(default_factory=dict)
-    path: Optional[Path] = None
+    path: Path | None = None
 
     @property
     def n_layers(self) -> int:
@@ -62,7 +62,7 @@ class SteeringPack:
         return self.manifest.get("steer") or {}
 
 
-def get_steering_dir(base_path: Optional[Path] = None) -> Path:
+def get_steering_dir(base_path: Path | None = None) -> Path:
     if base_path is None:
         from ..settings import GlobalSettings
 
@@ -89,7 +89,7 @@ def _read_f32(path: Path, shape: tuple[int, int]) -> np.ndarray:
 
 
 def load_pack(path: Path | str) -> SteeringPack:
-    """Load and validate a pack directory (plan §4.3 checks that need no model)."""
+    """Load and validate a pack directory (the checks that need no model)."""
     root = Path(path)
     mpath = root / MANIFEST_FILE
     if not mpath.is_file():
@@ -145,9 +145,9 @@ def save_pack(pack: SteeringPack, dest: Path | str) -> Path:
 
 
 def resolve_pack_ref(
-    ref: str, *, base_path: Optional[Path] = None, shape: Optional[tuple[int, int]] = None
+    ref: str, *, base_path: Path | None = None, shape: tuple[int, int] | None = None
 ) -> SteeringPack:
-    """Resolve a ``steering_pack`` setting (plan §4.4): name, dir, or bare .f32."""
+    """Resolve a ``steering_pack`` setting: name, dir, or bare .f32."""
     named = get_steering_dir(base_path) / ref
     if named.is_dir():
         return load_pack(named)

@@ -3511,7 +3511,7 @@ class EnginePool:
             return None
 
     def apply_steering_scales(self, model_id: str, **fields) -> bool:
-        """Queue a live steering change on a loaded engine (plan §10).
+        """Queue a live steering change on a loaded engine.
 
         Returns False when the model is not loaded or has no scheduler (the
         persisted settings apply at the next load). The scheduler drains the

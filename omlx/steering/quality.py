@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Steering quality gate Q7 (plan §2e): KL/NLL, degeneration, structure, effect.
+"""Steering quality gate: KL/NLL, degeneration, structure, effect.
 
 The job runs on a loaded engine with the pack installed, one (scope, scale)
 at a time on an idle server, the same way `steer sweep` drives the live
@@ -25,7 +25,7 @@ DATA_DIR = Path(__file__).parent / "data"
 NEUTRAL_DIR = DATA_DIR / "neutral"
 QUALITY_DIR = DATA_DIR / "quality"
 
-# Provisional gates (plan §2e table); recalibrate after the first runs.
+# Provisional gates; recalibrate after the first runs.
 GATES = {
     "kl": 0.05,  # nats/token
     "nll_rel": 0.02,  # relative NLL increase
@@ -86,7 +86,7 @@ def load_prompt_file(name: str, limit: int | None = None) -> list[str]:
 
 
 def repetition_rate(text: str, n: int = 4) -> float:
-    """Fraction of word n-grams that occur more than once (plan §2e)."""
+    """Fraction of word n-grams that occur more than once."""
     words = re.findall(r"\w+", text.lower())
     if len(words) <= n:
         return 0.0
@@ -137,7 +137,7 @@ def structure_valid(text: str) -> bool:
 
 
 def evaluate_gates(entry: dict[str, Any], full: bool) -> tuple[bool, list[str]]:
-    """Apply the §2e gates to one quality entry; returns (passed, reasons)."""
+    """Apply the gates to one quality entry; returns (passed, reasons)."""
     failed: list[str] = []
     if entry["kl"] > GATES["kl"]:
         failed.append(f"kl {entry['kl']:.3f} > {GATES['kl']}")
@@ -442,7 +442,7 @@ async def run_verify_job(
             job["done"] = i + 1
             job["quality"] = entries
 
-        # Recommended: the passing point with the largest |effect| (§2f).
+        # Recommended: the passing point with the largest |effect|.
         passing = [e for e in entries if e.get("passed")]
         recommended = None
         if passing:

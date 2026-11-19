@@ -1,4 +1,4 @@
-# Structure prompts for steering quality checks (Q7 structure metric).
+# Structure prompts for steering quality checks (structure metric).
 # Each answer must contain parseable JSON; the verifier extracts the first
 # JSON object/array from the reply and json.loads()es it.
 # One prompt per line; '#' lines are comments (DS4 rule).

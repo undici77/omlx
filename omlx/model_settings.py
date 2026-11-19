@@ -46,7 +46,7 @@ MOE_OFFLOAD_MTP_MODEL_TYPES = ("deepseek_v41", "glm5_next", "qwen4_exp")
 
 
 def validate_steering(settings: dict) -> None:
-    """Reject malformed steering settings (plan §9.1)."""
+    """Reject malformed steering settings."""
     import math
 
     for key in ("steering_ffn_scale", "steering_attn_scale"):
@@ -598,7 +598,7 @@ class ModelSettings:
     is_hidden: bool = False  # Hidden from /v1/models (still shown, badged, in admin)
     is_favorite: bool = False  # Listed first in /v1/models and admin lists
 
-    # Directional steering (docs/experimental/directional-steering-plan.md).
+    # Directional steering (experimental, see docs/steering.md).
     # steering_pack: pack name under <base>/steering/, a pack dir or a DS4 .f32
     # (changing it reloads the engine). The remaining fields are live-pushed
     # between scheduler steps; None = pack manifest value, else the default.

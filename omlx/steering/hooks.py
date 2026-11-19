@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Class-level output hook + per-instance tag (plan §2, option C)."""
+"""Class-level output hook + per-instance tag."""
 
 from __future__ import annotations
 
-from typing import Any, Callable, Optional
+from collections.abc import Callable
+from typing import Any
 
 from . import project
 
@@ -27,7 +28,7 @@ class SteerTag:
         v,
         target=None,
         *,
-        output_index: Optional[int] = None,
+        output_index: int | None = None,
         residual_included: bool = False,
     ):
         self.state = state
@@ -79,11 +80,11 @@ class SteerTag:
         return out
 
 
-def get_tag(module: Any) -> Optional[SteerTag]:
+def get_tag(module: Any) -> SteerTag | None:
     return getattr(module, "__dict__", {}).get(_TAG_ATTR)
 
 
-def set_tag(module: Any, tag: Optional[SteerTag]) -> None:
+def set_tag(module: Any, tag: SteerTag | None) -> None:
     # nn.Module.__setattr__ would register arrays/dicts as tree children.
     object.__setattr__(module, _TAG_ATTR, tag)
 
@@ -94,7 +95,7 @@ def hook_class(cls: type) -> bool:
     if getattr(orig, _MARK, False):
         return False
 
-    def __call__(self, *args, **kwargs):
+    def __call__(self, *args, **kwargs):  # noqa: N807 - installed as a class method
         out = orig(self, *args, **kwargs)
         tag = self.__dict__.get(_TAG_ATTR)
         return out if tag is None else tag.apply(out, kwargs)
@@ -106,13 +107,13 @@ def hook_class(cls: type) -> bool:
 
 
 def steer_tensor(module: Any, y: Any, residual: Any = None) -> Any:
-    """For fused paths that bypass the module call (plan §7 inject)."""
+    """For fused paths that bypass the module call."""
     tag = get_tag(module)
     if tag is None:
         return y
     st = tag.state
     if st.capture is not None:
-        # Capture runs unsteered (plan §13.2): record instead of project.
+        # Capture runs unsteered: record instead of project.
         if st.capture.kind == tag.kind:
             cap_y = y
             if tag.residual_included and residual is not None:
@@ -128,7 +129,7 @@ def steer_tensor(module: Any, y: Any, residual: Any = None) -> Any:
 
 
 def hook_function(
-    owner: Any, name: str, *, module_arg: int = 0, resolve: Optional[Callable] = None
+    owner: Any, name: str, *, module_arg: int = 0, resolve: Callable | None = None
 ) -> bool:
     """Wrap a module-level function / method that takes the submodule as an arg.
 

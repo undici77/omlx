@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Fast tests for the `omlx steer` CLI (plan §14; §17 test table)."""
+"""Fast tests for the `omlx steer` CLI."""
 
 import json
 import shutil

@@ -1,4 +1,4 @@
-# Generation prompts for steering quality checks (Q7 degeneration + effect metrics).
+# Generation prompts for steering quality checks (degeneration + effect metrics).
 # One prompt per line; '#' lines are comments (DS4 rule).
 # The same set is generated at scale 0 (reference) and at each tested scale.
 

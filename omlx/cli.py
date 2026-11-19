@@ -1123,7 +1123,7 @@ def cluster_command(args) -> int:
 
 
 def steer_command(args) -> int:
-    """Dispatch 'omlx steer <action>' (directional steering plan §14)."""
+    """Dispatch 'omlx steer <action>'."""
     action = getattr(args, "steer_action", None)
     if action == "build":
         return _steer_build(args)
@@ -1150,7 +1150,7 @@ def steer_command(args) -> int:
 
 
 def _steer_server(args) -> tuple[str, dict[str, str]]:
-    """Resolve the server base URL and admin auth headers (plan §14)."""
+    """Resolve the server base URL and admin auth headers."""
     import requests
 
     from .integrations.base import bracket_host
@@ -1321,7 +1321,7 @@ def _steer_sweep(args) -> int:
         print("Pack change reloads the engine; the first request may be slow.")
 
     # The pack's own manifest decides which component gets swept; fall back
-    # to the live state, then ffn (plan §16: FFN first, attention at 0).
+    # to the live state, then ffn (FFN first, attention at 0).
     component = None
     try:
         from .steering.pack import resolve_pack_ref
@@ -1379,7 +1379,7 @@ def _steer_sweep(args) -> int:
         restore: dict = {}
         note = ""
         if orig_pack is None:
-            # Neutralise instead of removing the pack (plan §16: scale 0
+            # Neutralise instead of removing the pack (scale 0
             # re-enables instantly and shares the cache with unsteered runs).
             restore[scale_field] = 0.0
             note = (
@@ -1678,7 +1678,7 @@ def _steer_zip_extract(archive, dest) -> None:
 
 
 def _steer_wrap_f32(args, path):
-    """Wrap a bare DS4 .f32 file into a pack (plan §4.4/§4.5)."""
+    """Wrap a bare DS4 .f32 file into a pack."""
     import json
     from pathlib import Path
 
@@ -1721,7 +1721,7 @@ def _steer_wrap_f32(args, path):
         }
     )
     manifest["model"] = model_block
-    # Bare DS4 vectors are ffn/block by definition (plan §4.4).
+    # Bare DS4 vectors are ffn/block by definition.
     manifest.setdefault("hook", {"component": "ffn", "mode": "block"})
     return SteeringPack(name, vectors, manifest)
 
@@ -2307,8 +2307,8 @@ Example directory structure:
         "steer",
         help="Build, apply, and inspect directional steering packs",
         description=(
-            "Directional steering control (plan §14: "
-            "docs/experimental/directional-steering-plan.md). build/sweep/"
+            "Directional steering control (experimental, see "
+            "docs/steering.md). build/sweep/"
             "set/show talk to a running oMLX server; list/import/export "
             "work on local pack files."
         ),
@@ -2439,7 +2439,7 @@ Example directory structure:
 
     steer_verify_parser = steer_subparsers.add_parser(
         "verify",
-        help="Run the Q7 quality gate for a pack at several scales (plan §2e)",
+        help="Run the steering quality gate for a pack at several scales",
     )
     steer_verify_parser.add_argument(
         "model",

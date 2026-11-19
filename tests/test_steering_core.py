@@ -3,10 +3,9 @@
 
 import json
 
+import mlx.core as mx
 import numpy as np
 import pytest
-
-import mlx.core as mx
 
 from omlx.cache.paged_cache import PagedCacheManager, compute_block_hash
 from omlx.model_settings import ModelSettings, validate_steering
@@ -23,8 +22,19 @@ from omlx.steering.install import get_state, mark_decode, mark_prefill
 from omlx.steering.pack import SteeringPack, SteeringPackError, resolve_pack_ref
 
 
-def _vecs(L=2, E=4):
-    v = np.zeros((L, E), np.float32)
+@pytest.fixture(autouse=True)
+def _all_adapters_validated(monkeypatch):
+    """Exercise every registered adapter; production enables only validated ones."""
+    from omlx.steering import adapters
+
+    monkeypatch.setattr(
+        adapters, "VALIDATED_MODEL_TYPES", frozenset(adapters.ADAPTERS)
+    )
+
+
+
+def _vecs(n_layers=2, hidden=4):
+    v = np.zeros((n_layers, hidden), np.float32)
     v[:, 0] = 1.0
     return v
 
@@ -142,7 +152,7 @@ def test_scope_all_and_inactive_component():
     st = _state(scope="all")
     st.begin_decode_step([100])
     assert st.scale_for("ffn") is not None
-    assert st.scale_for("attn") is None  # attn not installed (R2)
+    assert st.scale_for("attn") is None  # attn not installed
 
 
 def test_uid_counter_realigns_after_filter():
@@ -172,7 +182,7 @@ def test_install_without_pack_touches_nothing():
     assert get_state(m) is None
 
 
-# ---- §7 verify-path injections ---------------------------------------------
+# ---- verify-path injections ---------------------------------------------
 class _FakeAttn:
     def __call__(self, x, **kw):
         return x
@@ -357,7 +367,7 @@ def test_install_accepts_modeless_pack_on_branch_adapter(monkeypatch, tmp_path):
     assert st is not None and st.n_layers == 2
 
 
-# ---- capture / build_direction (plan §13) ----------------------------------
+# ---- capture / build_direction ----------------------------------
 def test_capture_buffer_records_last_token():
     from omlx.steering.capture import CaptureBuffer
 
@@ -488,3 +498,54 @@ def test_pool_live_push_and_scheduler_drain():
     assert st.ffn_scale == -0.5 and st.scope == "all"
     assert salts == [st.salt()] and salts[0] != ""
     assert req.skip_cache_store is True and s._pending_steering is None
+
+
+def test_unvalidated_model_type_is_refused(monkeypatch):
+    from types import SimpleNamespace
+
+    from omlx.steering import adapters
+
+    monkeypatch.setattr(adapters, "VALIDATED_MODEL_TYPES", frozenset({"qwen4_exp"}))
+    model = SimpleNamespace(args=SimpleNamespace(model_type="qwen3_next"))
+    with pytest.raises(adapters.SteeringUnsupportedError, match="not supported yet"):
+        adapters.get_adapter(model)
+
+
+@pytest.mark.asyncio
+async def test_settings_refuse_pack_on_unvalidated_model():
+    from unittest.mock import MagicMock, patch
+
+    from fastapi import HTTPException
+
+    import omlx.server  # noqa: F401 - server module first, as the admin tests do
+    from omlx.admin import routes as admin_routes
+    from omlx.engine_pool import EngineEntry, EnginePool
+    from omlx.model_settings import ModelSettings
+
+    pool = EnginePool()
+    entry = EngineEntry(
+        model_id="m",
+        model_path="/tmp/m",
+        model_type="llm",
+        engine_type="batched",
+        estimated_size=1,
+    )
+    entry.config_model_type = "llama"
+    pool._entries["m"] = entry
+    manager = MagicMock()
+    manager.get_settings.return_value = ModelSettings()
+    with (
+        patch("omlx.admin.routes._get_engine_pool", return_value=pool),
+        patch("omlx.admin.routes._get_settings_manager", return_value=manager),
+        patch("omlx.admin.routes._get_server_state", return_value=MagicMock()),
+        patch("omlx.steering.adapters.VALIDATED_MODEL_TYPES", frozenset({"qwen4_exp"})),
+        pytest.raises(HTTPException) as err,
+    ):
+        await admin_routes.update_model_settings(
+            "m",
+            admin_routes.ModelSettingsRequest(steering_pack="terse"),
+            is_admin=True,
+        )
+    assert err.value.status_code == 400
+    assert "not supported" in err.value.detail
+    manager.set_settings.assert_not_called()

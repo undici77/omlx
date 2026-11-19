@@ -2446,13 +2446,11 @@ def _prepare_chat_prompt_for_request(
 
 
 async def _prepare_prompt_off_loop(engine: BaseEngine, prepare, *args, **kwargs):
-    """Call ``prepare(engine, ...)`` in a worker thread for VLM engines.
+    """Call ``prepare(engine, ...)`` in a worker thread for batched engines.
 
-    Encoding a long prompt on the event loop stalls every other stream. The text
-    engine stays on the loop: its ``_apply_chat_template`` lazily builds the
-    k2_horizon grammar compiler, and a second request would see it half built.
+    Encoding a long prompt on the event loop stalls every other stream.
     """
-    if isinstance(engine, VLMBatchedEngine):
+    if type(engine) in (BatchedEngine, VLMBatchedEngine):
         return await asyncio.to_thread(prepare, engine, *args, **kwargs)
     return prepare(engine, *args, **kwargs)
 
@@ -2634,7 +2632,12 @@ def init_server(
         scheduler_config=scheduler_config,
     )
     _server_state.engine_pool.configure_gpu_keep_warm(
-        global_settings.server.gpu_keep_warm_interval if global_settings else 0.5
+        global_settings.server.gpu_keep_warm_interval if global_settings else 0.5,
+        (
+            global_settings.server.gpu_keep_warm_idle_window
+            if global_settings
+            else 300.0
+        ),
     )
     from .cluster.enrollment import configure_cluster_enrollment, get_cluster_enrollment
     from .cluster.incidents import configure_cluster_incidents
@@ -3467,13 +3470,13 @@ async def server_status(_: bool = Depends(verify_api_key)):
             engine = entry.engine
             if engine is None:
                 continue
+            active_requests += engine.active_request_count()
             async_core = getattr(engine, "_engine", None)
             if async_core is None:
                 continue
             core = getattr(async_core, "engine", None)
             if core is None:
                 continue
-            active_requests += len(getattr(core, "_output_collectors", {}))
             sched = getattr(core, "scheduler", None)
             if sched is not None:
                 waiting_requests += len(getattr(sched, "waiting", []))
@@ -5457,7 +5460,7 @@ async def create_chat_completion(
             # Process response_format if specified
             if response_format and not tool_calls:
                 cleaned_text, _, is_valid, error = parse_json_output(
-                    cleaned_text or regular_content, response_format
+                    cleaned_text, response_format
                 )
                 if not is_valid:
                     logger.warning(f"JSON validation failed: {error}")
@@ -7018,7 +7021,7 @@ async def stream_chat_completion(
         # Protocol parser already extracted structured tool calls.
         tool_calls = _convert_parser_tool_calls(last_output.tool_calls)
         cleaned_text = ""
-    elif has_tools and accumulated_text:
+    elif has_tools:
         # Separate thinking from content, then parse tool calls from content
         # (falls back to thinking content for small models)
         thinking_content, regular_content = extract_thinking(
@@ -9037,7 +9040,7 @@ async def create_response(
             # Process response_format if specified
             if response_format and not tool_calls:
                 cleaned_text, _, is_valid, error = parse_json_output(
-                    cleaned_text or regular_content, response_format
+                    cleaned_text, response_format
                 )
                 if not is_valid:
                     logger.warning(f"JSON validation failed: {error}")
@@ -9553,7 +9556,7 @@ async def stream_responses_api(
     if last_output and last_output.tool_calls:
         tool_calls = _convert_parser_tool_calls(last_output.tool_calls)
         cleaned_text = ""
-    elif has_tools and accumulated_text:
+    elif has_tools:
         thinking_content, regular_content = extract_thinking(
             accumulated_text,
             leading_only=leading_only,

@@ -253,3 +253,16 @@ def test_build_preset_uses_bundled_prompts(monkeypatch):
     good, bad = cli._STEER_PRESETS["verbosity"]
     assert len(cli._steer_read_prompts(str(cli._steer_data_dir() / good))) == 100
     assert len(cli._steer_read_prompts(str(cli._steer_data_dir() / bad))) == 100
+
+
+def test_negative_scales_parse_with_equals(monkeypatch, capsys):
+    """'--scales -1,-0.5' is read as an option by argparse; the documented
+    '--scales=-1,-0.5' form must reach sweep and verify intact."""
+    from omlx import cli
+
+    seen = {}
+    monkeypatch.setattr(cli, "_steer_sweep", lambda a: seen.setdefault("sweep", a.scales) and 0)
+    monkeypatch.setattr(cli, "_steer_verify", lambda a: seen.setdefault("verify", a.scales) and 0)
+    _run_main(["steer", "sweep", "m", "--pack", "p", "--scales=-1,-0.5,0"], monkeypatch, capsys)
+    _run_main(["steer", "verify", "m", "--pack", "p", "--scales=-0.5,-1"], monkeypatch, capsys)
+    assert seen == {"sweep": "-1,-0.5,0", "verify": "-0.5,-1"}

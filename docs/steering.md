@@ -25,7 +25,7 @@ The model must be loaded on a running server. The bundled preset uses the 100 su
 M=Qwen3.8-Flash-Next-oQ4e-mtp                  # model id on the server
 
 omlx steer build  $M --preset verbosity --name terse   # ~1 min
-omlx steer sweep  $M --pack terse --scales "-1,-0.5,0" # word counts per strength
+omlx steer sweep  $M --pack terse --scales=-1,-0.5,0    # word counts per strength
 omlx steer verify $M --pack terse --quick              # KL / NLL / repetition / JSON at -0.5 and -1
 omlx steer set    $M --pack terse                      # uses the verified strength
 ```
@@ -67,7 +67,7 @@ Negative strength pushes toward the pack's "good" side: with the `verbosity` pre
 | `omlx steer list [--model DIR]` | Local packs, marked compatible with a model directory |
 | `omlx steer export N -o pack.zip` / `omlx steer import SRC [--name N]` | Share packs (zip, directory, Hugging Face repo, DS4 `.f32`) |
 
-Prompt files hold one prompt per line; lines starting with `#` are comments.
+Prompt files hold one prompt per line; lines starting with `#` are comments. Pass negative scales with `=` (`--scales=-1,-0.5`): a value starting with `-` is otherwise read as an option.
 
 ## Quality gate
 

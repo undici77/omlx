@@ -2476,7 +2476,10 @@ Example directory structure:
     steer_sweep_parser.add_argument(
         "--scales",
         default="-1,-0.5,0,0.5,1,2",
-        help="Comma-separated scales (default: -1,-0.5,0,0.5,1,2)",
+        help=(
+            "Comma-separated scales; use --scales=-1,-0.5 when the list starts "
+            "with a negative value (default: -1,-0.5,0,0.5,1,2)"
+        ),
     )
     steer_sweep_parser.add_argument(
         "--tokens",
@@ -2514,7 +2517,10 @@ Example directory structure:
     steer_verify_parser.add_argument(
         "--scales",
         default="-0.5,-1",
-        help="Comma-separated scales (default: -0.5,-1)",
+        help=(
+            "Comma-separated scales; use --scales=-0.5,-1 when the list starts "
+            "with a negative value (default: -0.5,-1)"
+        ),
     )
     steer_verify_parser.add_argument(
         "--quick",

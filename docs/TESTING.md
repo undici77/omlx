@@ -282,23 +282,6 @@ Run `python -m pytest -q apps/omlx-cuda-helper/tests` for the Linux helper. `tes
 
 # Directional steering tests
 
-Fast logic tests run in any container (the NumPy MLX mock covers structure, not numerics):
+Run `python -m pytest -q tests/test_steering_core.py tests/test_steering_cli.py tests/test_steering_quality.py` for the logic: pack load/save and refusal of corrupt or mismatched packs, settings validation and the refusal on models other than Qwen3.8 Flash Next, hook idempotence, scope and per-row phase tracking, the scale-0 capture carrier, the cache-key salt, the packs route, the `omlx steer` commands, the quality-gate metrics, and the bundled data being declared as package data. Run `python -m pytest -q tests/test_steering_numerics.py tests/test_steering_quality.py -m slow` for the projection maths, bit-identical output at strength 0, and the KL pair on a tiny model. `apps/omlx-web/tests/steering_ui.test.cjs` checks that the settings modal saves the strength to the pack's component.
 
-```bash
-PYTHONPATH=. python -m pytest -q tests/test_steering_core.py tests/test_steering_cli.py \
-    tests/test_steering_quality.py
-```
-
-`test_steering_core.py` covers pack load/save (sha and size mismatch refusal, DS4 `.f32` import, name resolution), settings validation, hook idempotence and tag placement outside the parameter tree, scheduler pending-update drain, and the cache-salt namespace. `test_steering_cli.py` covers the `omlx steer` command surface and the local pack list/export/import round trips, including zip-traversal refusal and corrupt-pack rejection. `test_steering_quality.py` covers the Q7 metrics (repetition rate, JSON extraction, gate rows, manifest `quality[]` write) and the corpus contract (200+ paragraphs shipped). `test_steering_bench.py` covers the §2b gate rows and prompt builders of the bench harness.
-
-Mac-only (real MLX, run them there and paste failures back):
-
-```bash
-# Numerics: projection maths, s=0 bit-identity, tiny-model logits
-.venv-macos/bin/python -m pytest -q tests/test_steering_numerics.py
-
-# Slow-marked KL pair invariants also live in tests/test_steering_quality.py
-.venv-macos/bin/python -m pytest -q tests/test_steering_quality.py -m slow
-```
-
-Real-model checks need a loaded server: capture returns finite non-zero `L×E` rows, greedy output with MTP matches without MTP, and a verbosity pack shrinks word counts at `ffn=-1` (`omlx steer build` → `sweep` → `verify --quick`, commands in [steering.md](steering.md)). Performance gates come from `benchmarks/steering_bench.py` against the §2b table.
+On a loaded Qwen3.8 Flash Next, `omlx steer build MODEL --preset verbosity --name terse`, then `sweep` and `verify --quick` (see [steering.md](steering.md)) check the real-model path: capture on every layer, shorter answers at negative strength, and the quality gate.

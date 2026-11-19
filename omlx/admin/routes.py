@@ -407,7 +407,6 @@ _STEERING_LIVE_FIELDS = (
     "steering_decode_tokens",
     "steering_method",
     "steering_norm_preserve",
-    "steering_skip_thinking",
 )
 _STEERING_FIELDS = ("steering_pack",) + _STEERING_LIVE_FIELDS
 
@@ -426,7 +425,6 @@ class ModelSettingsRequest(BaseModel):
     steering_decode_tokens: int | None = Field(default=None, ge=1, le=4096)
     steering_method: str | None = None
     steering_norm_preserve: bool | None = None
-    steering_skip_thinking: bool | None = None
     max_context_window: int | None = None
     max_tokens: int | None = Field(default=None, ge=1)
     temperature: float | None = None

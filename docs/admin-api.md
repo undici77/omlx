@@ -100,12 +100,13 @@ The same endpoints accept an `X-oMLX-Cache-Store: off` request header. The reque
 
 ### Steering
 
-Directional steering packs and the quality gate; see [steering.md](steering.md). Pack and scale changes go through `PUT /admin/api/models/{model_id}/settings` (`steering_pack`, `steering_ffn_scale`, `steering_attn_scale`, `steering_scope`, ...); a pack change reloads the engine, scale changes apply live.
+Directional steering packs and the quality gate (experimental, Qwen3.8 Flash Next only); see [steering.md](steering.md). Pack and scale changes go through `PUT /admin/api/models/{model_id}/settings` (`steering_pack`, `steering_ffn_scale`, `steering_attn_scale`, `steering_scope`, ...); a pack change reloads the engine, scale changes apply live.
 
 | Endpoint | Description |
 |---|---|
+| `GET /admin/api/models/{model_id}/steering/packs` | Local packs, each with `fits` (built for this model's type and shape), `component`, `recommended`; plus `supported` for the model |
 | `GET /admin/api/models/{model_id}/steering` | Live state: pack, scales, scope, method, salt, epoch, debug hits |
-| `POST /admin/api/models/{model_id}/steering/build` | Capture paired prompts on the loaded engine and build a pack: `{"name", "good": [...], "bad": [...], "component", "system", "thinking", "pair_normalize", "orthogonalize"}`; returns `{job_id, total}` |
+| `POST /admin/api/models/{model_id}/steering/build` | Capture paired prompts on the loaded engine and build a pack: `{"name", "good": [...], "bad": [...], "component", "system", "thinking", "pair_normalize", "orthogonalize"}` (`component` defaults to the model's, `attn` on Qwen3.8); works with no pack installed; returns `{job_id, total}` |
 | `POST /admin/api/models/{model_id}/steering/verify` | Run the quality gate: `{"scopes": [...], "scales": [...], "quick", "thinking", "samples"}`; returns `{job_id, total}` |
 | `GET /admin/api/steering/jobs/{job_id}` | Build/verify job progress and result (`status`, `done`, `total`, `quality[]`, `recommended`, `error`) |
 

@@ -1,87 +1,102 @@
-# Directional steering
+# Directional steering (experimental)
 
-Steering shifts a model's behaviour at inference time by editing activations along a direction learned from paired prompts — no fine-tuning, reversible per request. A **pack** holds one unit vector per layer plus a manifest; you set a pack and a scale on a loaded model, and the effect applies to new generations. The implementation follows `docs/experimental/directional-steering-plan.md`.
+## TL;DR
 
-## Workflow
+Steering pushes a model's hidden states along a direction learned from paired prompts (for example terse vs verbose answers), with no fine-tuning and a strength you can change live. Experimental, **Qwen3.8 Flash Next (`qwen4_exp`) only**; measurements are in [experimental/directional-steering.md](experimental/directional-steering.md).
+
+## How it works
+
+A **pack** holds one unit vector per decoder layer plus a manifest. `omlx steer build` runs your "good" and "bad" prompts through the loaded model, records each layer's branch output, and stores the normalized difference of the means. At inference the hook removes (or adds) that component from the branch output, scaled by the strength you set.
 
 ```mermaid
 flowchart LR
-    A[Define one behaviour] --> B[Write ~100 paired prompts]
-    B --> C[omlx steer build]
-    C --> D[omlx steer sweep on held-out prompts]
-    D --> E[Pick scale]
-    E --> F[Set pack + scale in settings / profile]
-    F --> G[Tune live, share pack]
+    A[Paired prompts<br/>good / bad] --> B[omlx steer build]
+    B --> C[Pack<br/>48 vectors + manifest]
+    C --> D[omlx steer verify<br/>quality gate]
+    D --> E[Model settings<br/>pack + strength + scope]
+    E --> F[Steered generations]
 ```
 
-## Commands
+## Quick start
 
-`build`, `sweep`, `verify`, `set` and `show` talk to a running oMLX server; `list`, `import` and `export` work on local pack files under `<base_path>/steering/`.
+The model must be loaded on a running server. The bundled preset uses the 100 succinct/verbose prompt pairs from [antirez/ds4](https://github.com/antirez/ds4) (MIT).
+
+```bash
+M=Qwen3.8-Flash-Next-oQ4e-mtp                  # model id on the server
+
+omlx steer build  $M --preset verbosity --name terse   # ~1 min
+omlx steer sweep  $M --pack terse --scales "-1,-0.5,0" # word counts per strength
+omlx steer verify $M --pack terse --quick              # KL / NLL / repetition / JSON at -0.5 and -1
+omlx steer set    $M --pack terse                      # uses the verified strength
+```
+
+Or pick the pack in the web UI: **Model settings → Experimental → Directional steering**.
+
+## Settings
+
+| Setting | Values | Default | Applies |
+|---|---|---|---|
+| `steering_pack` | pack name under `~/.omlx/steering/`, a pack directory or a DS4 `.f32` | none (off) | reloads the model |
+| `steering_attn_scale` / `steering_ffn_scale` | -100 … 100 (useful range about -2 … 2) | the pack's recommended value, else 1 | live |
+| `steering_scope` | `prefill+k`, `prefill`, `all` | `prefill+k` | live |
+| `steering_decode_tokens` | 1 … 4096 (the K of `prefill+k`) | 32 | live |
+| `steering_method` | `project`, `retarget` | `project` | live |
+| `steering_norm_preserve` | true / false | false | live |
+
+Negative strength pushes toward the pack's "good" side: with the `verbosity` preset, `-1` gives shorter answers. On Qwen3.8 only the attention branch (`attn`) steers measurably, so `build` uses it by default.
+
+## Scopes
+
+| Scope | Steered tokens | Decode cost on Qwen3.8 | Use when |
+|---|---|---|---|
+| `prefill+k` | the prompt and the first K generated tokens | none measurable | default; the effect carries through the rest of the answer |
+| `prefill` | the prompt only | none expected | weakest effect |
+| `all` | every token | about 5% slower decode | strongest effect |
+
+## CLI
+
+`build`, `sweep`, `verify`, `set` and `show` talk to a running server; `list`, `import` and `export` work on local pack files.
 
 | Command | Does |
 |---|---|
-| `omlx steer build MODEL --good-file G --bad-file B --name N [--component ffn\|attn] [--system S] [--think] [--pair-normalize] [--no-orthogonalize]` | Uploads paired prompts, the server captures activations on the live engine and writes the pack |
-| `omlx steer sweep MODEL --pack N --prompts P [--scales "-1,-0.5,0,0.5,1,2"] [--tokens 180] [--nothink]` | Generates at each scale and prints text + word counts; restores the original settings afterwards. Changes the engine-wide scale — run on an idle server |
-| `omlx steer verify MODEL --pack N [--scopes prefill+k] [--scales "-0.5,-1"] [--quick]` | Quality gate: neutral-text KL, NLL, repetition, JSON validity and (full mode) MMLU/GSM8K/HumanEval/TruthfulQA; writes results and the recommended scale into the pack manifest |
-| `omlx steer set MODEL [--ffn F] [--attn A] [--pack N\|--off]` | Sets pack and scales (live push when only scales change) |
-| `omlx steer show MODEL` | Live state: pack, scales, scope, method, salt, debug hits |
-| `omlx steer list [--model M]` | Local packs, marked compatible with a model directory |
-| `omlx steer export NAME -o x.zip` / `omlx steer import SRC [--name N]` | Share packs (zip, directory, HF repo, bare DS4 `.f32`) |
+| `omlx steer build MODEL (--preset verbosity \| --good-file G --bad-file B) --name N` | Captures the prompts on the loaded model and writes the pack. Options: `--component attn\|ffn`, `--system S`, `--think`, `--pair-normalize`, `--no-orthogonalize` |
+| `omlx steer sweep MODEL --pack N [--scales …] [--prompts P]` | Generates at each strength and prints the text and word counts, then restores the previous settings. It changes the engine-wide strength, so run it on an idle server |
+| `omlx steer verify MODEL --pack N [--scales …] [--quick]` | Quality gate; writes the results and the recommended strength into the pack manifest |
+| `omlx steer set MODEL [--pack N \| --off] [--attn A] [--ffn F]` | Sets the pack and strengths |
+| `omlx steer show MODEL` | Live state: pack, strengths, scope, cache salt |
+| `omlx steer list [--model DIR]` | Local packs, marked compatible with a model directory |
+| `omlx steer export N -o pack.zip` / `omlx steer import SRC [--name N]` | Share packs (zip, directory, Hugging Face repo, DS4 `.f32`) |
 
-Prompt files take one prompt per line; `#` lines are comments.
+Prompt files hold one prompt per line; lines starting with `#` are comments.
 
-## Best practices
+## Quality gate
+
+`verify` compares each strength against the unsteered model. A strength is recommended only if every row passes.
+
+| Check | Measures | Passes if |
+|---|---|---|
+| KL | next-token distribution shift on ~200 neutral paragraphs | ≤ 0.05 nats/token |
+| NLL | perplexity change on the same paragraphs | ≤ +2% |
+| Repetition | share of repeated 4-grams in generations | rise ≤ 1 point |
+| Structure | valid-JSON rate on structured prompts | no drop |
+| Benchmarks (full mode only) | MMLU, GSM8K, HumanEval, TruthfulQA | drop within 1–2 points |
+
+## Writing your own pairs
 
 | Practice | Why |
 |---|---|
-| Pairs ask for the same content and differ only in the target attribute | otherwise the vector learns topic |
-| 50–150 pairs with varied topics | averaging cancels noise |
-| Build with the same system prompt and thinking mode as production | activations at the last token depend on the template |
-| FFN first, attention at 0 | attention vectors are fragile |
-| Sweep `-1 … 2` at `temperature=0` on held-out prompts | `≤ -2` tends to repeat; greedy isolates the effect |
-| Repetition, ignored prompts, lost facts → reduce `\|s\|` by ~30% | the scale is too strong |
-| Rebuild per model and per quant | vectors are tied to the weights |
-| Use profiles ("Terse", "Verbose") to switch setups | profile = named steering setup |
-| Scale 0 instead of removing the pack | instant re-enable; shares cache with unsteered runs |
+| Each pair asks for the same content and differs only in the target trait | otherwise the vector learns the topic |
+| 50–150 pairs on varied topics | averaging cancels noise |
+| Build with the system prompt and thinking mode you serve with | the activations depend on the template |
+| Sweep on held-out prompts before keeping a strength | the build prompts overstate the effect |
+| Repetition or ignored instructions → reduce the strength by about a third | the push is too strong |
+| Set strength 0 instead of removing the pack | no reload; the prompt cache is shared with unsteered runs |
 
-## Quality and performance gates
+## Limits
 
-`omlx steer verify` applies the plan's §2e gates (KL ≤ 0.05 nats/token, NLL ≤ +2%, no structure drop, repetition within +1 pt, benchmark drops within their budgets) and records `quality[]` plus `usage.recommended` in the pack manifest. `benchmarks/steering_bench.py` records decode/prefill tok/s and the MTP speedup for no-pack, pack-at-0 and each scope, and applies the §2b regression gates.
-
-## Running it on your Mac
-
-The Linux CI container runs the logic tests only; capture, sweep, verify and the bench need a real model on Apple Silicon. The `steering_*.sh` wrappers boot an isolated server just in time, run one stage end to end, and clean up after themselves — one command each:
-
-```bash
-# Decided target: Qwen3.8-Flash-Next (qwen4_exp). Pin the model — the
-# auto-detector scans ~/.omlx first and these models live in ~/.models.
-# On qwen4_exp the FFN branch hook is inert at ±2; the attention branch
-# hook works, so the pack is built with --component attn.
-M=/Users/undici77/.models/Jundot/Qwen3.8-Flash-Next-oQ4e-mtp
-
-# 1. Build the pack — DS4 verbosity prompts (good = succinct, bad = verbose),
-#    20 pairs to start; drop --max-pairs to use all 100
-./steering_build.sh --component attn --max-pairs 20 --name terse-q38-attn \
-  --model-dir "$M"
-
-#    ...or your own paired prompts (full paths; one prompt per line, # comments)
-./steering_build.sh --component attn --name terse-q38-attn --model-dir "$M" \
-    --good-file /path/to/succinct.txt --bad-file /path/to/verbose.txt
-
-# 2. Effect sweep on held-out prompts (word counts per scale; the wrapper
-#    reads the pack's component from its manifest)
-./steering_effect.sh --pack terse-q38-attn --model-dir "$M" --scales -1,0
-
-# 3. Quality gate (quick = KL + repetition + structure, in minutes)
-./steering_verify.sh --pack terse-q38-attn --model-dir "$M" --quick
-
-# 4. Performance gates (decode/prefill tok/s, MTP speedup; report JSON gitignored)
-./steering_bench.sh --pack terse-q38-attn --model-dir "$M" --component attn --scale -1 --mtp-check
-
-# 5. Keep it: set the pack + chosen scale (persisted in model settings)
-.venv-macos/bin/omlx steer set <model> --pack terse-q38-attn --attn -1
-```
-
-Each wrapper takes `--model-dir DIR` (auto-detected from your configured model dirs when omitted) and `--base-path` (default `~/.omlx`); `steering_verify.sh` copies `quality[]` and the recommended scale back into the real pack manifest. The underlying commands also work directly against a running server — see the table above.
-
-Reports (`steering_report_*.json`) are gitignored. Fast logic tests run anywhere: `PYTHONPATH=. python -m pytest tests/test_steering_core.py tests/test_steering_cli.py tests/test_steering_quality.py tests/test_steering_bench.py -q`; the numeric and real-model tests need the Mac (see [TESTING.md](TESTING.md)).
+| Limit | Detail |
+|---|---|
+| Model support | `qwen4_exp` only; setting a pack on another model is refused |
+| Engine-wide | one pack and strength per model, applied to every request |
+| Prompt cache | steered and unsteered prompts never share cache blocks (pack, strength and scope are part of the cache key) |
+| Pack per model | vectors are valid only on the model and quantization they were built on |

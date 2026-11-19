@@ -178,6 +178,15 @@ decoding stay on this one (DeepSeek V4.1, GLM-5.3, Qwen3.8 Flash-Next,
 Qwen3.8 27B, MiniMax M3 and Inkling 2). The helper can also be a Linux machine with
 NVIDIA GPUs running [omlx-cuda-helper](apps/omlx-cuda-helper/README.md).
 
+### Experimental Directional Steering
+
+Shift a model's behaviour at inference time along a direction learned from
+paired prompts, with no fine-tuning: for example `omlx steer build MODEL
+--preset verbosity` builds a pack that makes answers shorter at a strength you
+set live in the model settings. Qwen3.8 Flash Next only for now. See
+[Directional steering](docs/steering.md) and the
+[measurements](docs/experimental/directional-steering.md).
+
 ### Vision-Language Models
 
 Run VLMs with the same continuous batching and tiered KV cache stack as text LLMs. Supports multi-image chat, base64/URL/file image inputs, and tool calling with vision context. MiMo V2.6 checkpoints with bundled sidecars also accept sampled-frame video and 24 kHz audio. Qwen3.5, Qwen3.6 and Qwen3.8 checkpoints (dense and MoE) accept native video input as base64 `video_url` / `input_video` data URIs; video needs OpenCV (`opencv-python-headless`). oQ conversion of official MiMo V2.6 checkpoints preserves image and audio support. OCR models (DeepSeek-OCR, DOTS-OCR, GLM-OCR) are auto-detected with optimized prompts.

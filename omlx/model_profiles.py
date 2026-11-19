@@ -51,7 +51,6 @@ MODEL_SPECIFIC_PROFILE_FIELDS = (
     "steering_decode_tokens",
     "steering_method",
     "steering_norm_preserve",
-    "steering_skip_thinking",
     "turboquant_kv_enabled",
     "turboquant_kv_scheme",
     "turboquant_kv_bits",

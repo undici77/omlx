@@ -68,7 +68,7 @@ def validate_steering(settings: dict) -> None:
         for key in (
             "steering_ffn_scale", "steering_attn_scale", "steering_scope",
             "steering_decode_tokens", "steering_method",
-            "steering_norm_preserve", "steering_skip_thinking",
+            "steering_norm_preserve",
         ):
             if settings.get(key) is not None:
                 raise ValueError(f"{key} requires steering_pack")
@@ -609,7 +609,6 @@ class ModelSettings:
     steering_decode_tokens: Optional[int] = None  # K for prefill+k (1-4096)
     steering_method: Optional[str] = None  # "project" | "retarget"
     steering_norm_preserve: Optional[bool] = None
-    steering_skip_thinking: Optional[bool] = None
 
     # External engine serving this model instead of oMLX's MLX engines
     # (omlx/engine/splash.py). None runs the model in-process.
